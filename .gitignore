@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+coverage/
+
+.env
+.env.*.local
+!.env.example
+
+*.log
+npm-debug.log*
+
+.DS_Store
+*.pem
+
+# Prisma
+apps/api/prisma/*.db
+
+.turbo/
+.vercel/
