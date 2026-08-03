@@ -16,7 +16,7 @@ import { UpdateDeliveryLocationDto } from "./dto/update-delivery-location.dto";
 export class DeliveriesController {
   constructor(private readonly deliveriesService: DeliveriesService) {}
 
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
   @RequirePermission(PermissionKey.ENTREGAS_VISUALIZAR)
   @Get()
   list(@Query("status") status?: DeliveryStatus) {
@@ -24,26 +24,27 @@ export class DeliveriesController {
   }
 
   @Roles(Role.MOTOBOY)
+  @RequirePermission(PermissionKey.ENTREGAS_VISUALIZAR)
   @Get("me")
   myDeliveries(@CurrentUser("sub") motoboyId: string) {
     return this.deliveriesService.listForMotoboy(motoboyId);
   }
 
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
   @RequirePermission(PermissionKey.ENTREGAS_VISUALIZAR)
   @Get(":id")
   findById(@Param("id") id: string) {
     return this.deliveriesService.findById(id);
   }
 
-  @Roles(Role.ADMIN, Role.FUNCIONARIO)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
   @RequirePermission(PermissionKey.ENTREGAS_EDITAR)
   @Patch("order/:orderId/assign")
   assign(@Param("orderId") orderId: string, @Body() dto: AssignMotoboyDto) {
     return this.deliveriesService.assign(orderId, dto.motoboyId);
   }
 
-  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.MOTOBOY)
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
   @RequirePermission(PermissionKey.ENTREGAS_EDITAR)
   @Patch(":id/status")
   updateStatus(
@@ -55,6 +56,7 @@ export class DeliveriesController {
   }
 
   @Roles(Role.MOTOBOY)
+  @RequirePermission(PermissionKey.ENTREGAS_EDITAR)
   @Patch(":id/location")
   updateLocation(
     @Param("id") id: string,

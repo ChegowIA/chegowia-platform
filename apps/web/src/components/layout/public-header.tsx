@@ -13,6 +13,8 @@ import { Order } from "@/lib/types";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { OrderStatusBadge } from "@/components/ui/badge";
+import { BrandLogo } from "@/components/brand/brand-logo";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 type MenuKey = "orders" | "cart" | null;
 
@@ -37,13 +39,12 @@ export function PublicHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        <Link href="/" className="flex items-center gap-2 text-lg font-bold text-slate-950 dark:text-slate-50">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand-600 text-sm font-black text-white shadow-sm">
-            C
-          </span>
-          <span>ChegowIA</span>
+        <Link href="/" aria-label="ChegowIA — início" className="flex items-center">
+          <BrandLogo adaptive className="h-8 w-[126px] sm:h-9 sm:w-[145px]" />
         </Link>
         <nav className="relative flex items-center gap-2 text-sm">
+          {/* Fora do condicional: o tema é escolha de qualquer pessoa, logada ou não. */}
+          <ThemeToggle />
           {!hasHydrated || isSessionLoading ? (
             <div className="h-10 w-32 rounded-lg bg-slate-100 dark:bg-slate-800" />
           ) : user?.role === Role.CLIENTE ? (
@@ -79,7 +80,7 @@ export function PublicHeader() {
             <>
               <Link
                 href={homePathForRole(user.role)}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 font-medium text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 font-medium text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300"
               >
                 <AvatarIcon userName={user.name} avatarUrl={user.avatarUrl} />
                 <span>Painel</span>
@@ -96,7 +97,10 @@ export function PublicHeader() {
             </>
           ) : (
             <>
-              <Link href="/login" className="font-medium text-slate-600 hover:text-slate-950 dark:text-slate-300">
+              <Link href="/software" className="hidden font-medium text-slate-600 hover:text-brand-700 sm:block dark:text-slate-400">
+                Para empresas
+              </Link>
+              <Link href="/acesso" className="font-medium text-slate-600 hover:text-slate-950 dark:text-slate-300">
                 Entrar
               </Link>
               <Button size="sm" onClick={() => (window.location.href = "/cadastro")}>
@@ -120,7 +124,7 @@ function IconLink({ href, title, children }: { href: string; title: string; chil
       href={href}
       title={title}
       aria-label={title}
-      className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+      className="grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300"
     >
       {children}
     </Link>
@@ -146,8 +150,8 @@ function IconButton({
       onClick={onClick}
       className={`relative grid h-10 w-10 place-items-center rounded-lg border shadow-sm transition ${
         active
-          ? "border-brand-200 bg-brand-50 text-brand-700"
-          : "border-slate-200 bg-white text-slate-700 hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+          ? "border-brand-200 bg-brand-50 text-brand-700 dark:bg-brand-950/30 dark:border-brand-900/60 dark:text-brand-300"
+          : "border-slate-200 bg-white text-slate-700 hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300"
       }`}
     >
       {children}
@@ -171,16 +175,16 @@ function AvatarIcon({ userName, avatarUrl }: { userName: string; avatarUrl?: str
       <img src={src} alt={userName} className="h-8 w-8 rounded-md object-cover" />
     );
   }
-  return <span className="text-sm font-black text-brand-700">{initials(userName)}</span>;
+  return <span className="text-sm font-black text-brand-700 dark:text-brand-300">{initials(userName)}</span>;
 }
 
 function OrdersMenu({ orders, onClose }: { orders: Order[]; onClose: () => void }) {
   const recent = orders.slice(0, 4);
   return (
     <Dropdown>
-      <div className="border-b border-slate-100 px-4 py-3">
-        <p className="font-bold text-slate-950">Meus pedidos</p>
-        <p className="text-xs text-slate-500">Acompanhe os últimos pedidos.</p>
+      <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+        <p className="font-bold text-slate-950 dark:text-slate-100">Meus pedidos</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Acompanhe os últimos pedidos.</p>
       </div>
       <div className="max-h-80 overflow-y-auto p-2">
         {recent.map((order) => (
@@ -192,17 +196,17 @@ function OrdersMenu({ orders, onClose }: { orders: Order[]; onClose: () => void 
           >
             <div className="flex items-start justify-between gap-2">
               <div>
-                <p className="font-bold text-slate-950">#{order.id.slice(0, 8)}</p>
-                <p className="mt-1 text-xs text-slate-500">{formatDateTime(order.createdAt)}</p>
+                <p className="font-bold text-slate-950 dark:text-slate-100">#{order.id.slice(0, 8)}</p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatDateTime(order.createdAt)}</p>
               </div>
               <OrderStatusBadge status={order.status} />
             </div>
-            <p className="mt-2 text-sm font-black text-brand-700">{formatCurrency(Number(order.total))}</p>
+            <p className="mt-2 text-sm font-black text-brand-700 dark:text-brand-300">{formatCurrency(Number(order.total))}</p>
           </Link>
         ))}
-        {recent.length === 0 && <p className="px-3 py-6 text-center text-sm text-slate-500">Nenhum pedido recente.</p>}
+        {recent.length === 0 && <p className="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">Nenhum pedido recente.</p>}
       </div>
-      <div className="border-t border-slate-100 p-2">
+      <div className="border-t border-slate-100 p-2 dark:border-slate-800">
         <Link href="/minha-conta/pedidos" onClick={onClose}>
           <Button className="w-full" variant="outline">
             Ver histórico completo
@@ -219,32 +223,32 @@ function CartMenu({ onClose }: { onClose: () => void }) {
 
   return (
     <Dropdown>
-      <div className="border-b border-slate-100 px-4 py-3">
-        <p className="font-bold text-slate-950">Carrinho</p>
-        <p className="text-xs text-slate-500">Revise os itens antes de finalizar.</p>
+      <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+        <p className="font-bold text-slate-950 dark:text-slate-100">Carrinho</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Revise os itens antes de finalizar.</p>
       </div>
       <div className="max-h-80 overflow-y-auto p-2">
         {items.map((item) => (
           <div key={item.key} className="rounded-lg p-3">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="line-clamp-1 font-bold text-slate-950">{item.name}</p>
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="line-clamp-1 font-bold text-slate-950 dark:text-slate-100">{item.name}</p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                   {item.quantity}x {item.variationName ? `· ${item.variationName}` : ""}
                 </p>
                 {item.addonsLabel && <p className="mt-1 line-clamp-1 text-xs text-slate-400">{item.addonsLabel}</p>}
               </div>
-              <p className="shrink-0 text-sm font-black text-brand-700">{formatCurrency(item.unitPrice * item.quantity)}</p>
+              <p className="shrink-0 text-sm font-black text-brand-700 dark:text-brand-300">{formatCurrency(item.unitPrice * item.quantity)}</p>
             </div>
           </div>
         ))}
-        {items.length === 0 && <p className="px-3 py-6 text-center text-sm text-slate-500">Seu carrinho está vazio.</p>}
+        {items.length === 0 && <p className="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">Seu carrinho está vazio.</p>}
       </div>
-      <div className="space-y-2 border-t border-slate-100 p-2">
+      <div className="space-y-2 border-t border-slate-100 p-2 dark:border-slate-800">
         {items.length > 0 && (
           <div className="flex items-center justify-between px-2 py-1 text-sm">
-            <span className="font-medium text-slate-500">Subtotal</span>
-            <span className="font-black text-slate-950">{formatCurrency(subtotal)}</span>
+            <span className="font-medium text-slate-500 dark:text-slate-400">Subtotal</span>
+            <span className="font-black text-slate-950 dark:text-slate-100">{formatCurrency(subtotal)}</span>
           </div>
         )}
         <Link href="/carrinho" onClick={onClose}>
@@ -259,7 +263,7 @@ function CartMenu({ onClose }: { onClose: () => void }) {
 
 function Dropdown({ children }: { children: React.ReactNode }) {
   return (
-    <div className="absolute right-0 top-12 z-40 w-[340px] overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+    <div className="absolute right-0 top-12 z-40 w-[min(340px,calc(100vw-1rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:bg-slate-900 dark:border-slate-800">
       {children}
     </div>
   );

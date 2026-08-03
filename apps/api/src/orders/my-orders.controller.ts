@@ -5,12 +5,18 @@ import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { OrdersService } from "./orders.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
+import { DeliveryQuoteDto } from "./dto/delivery-quote.dto";
 
 @ApiTags("my-orders")
 @Roles(Role.CLIENTE)
 @Controller("me/orders")
 export class MyOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
+
+  @Post("quote")
+  quote(@CurrentUser("sub") customerId: string, @Body() dto: DeliveryQuoteDto) {
+    return this.ordersService.quoteForCustomer(customerId, dto);
+  }
 
   @Post()
   create(@CurrentUser("sub") customerId: string, @Body() dto: CreateOrderDto) {

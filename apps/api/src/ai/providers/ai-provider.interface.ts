@@ -30,6 +30,14 @@ export interface AIToolCall {
 export interface AIChatResult {
   content: string | null;
   toolCalls: AIToolCall[];
+  requestId?: string | null;
+  usage?: {
+    inputTokens?: number | null;
+    cachedInputTokens?: number | null;
+    uncachedInputTokens?: number | null;
+    outputTokens?: number | null;
+    totalTokens?: number | null;
+  } | null;
 }
 
 export const AI_PROVIDER = Symbol("AI_PROVIDER");

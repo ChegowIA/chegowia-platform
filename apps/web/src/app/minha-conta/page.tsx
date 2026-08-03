@@ -22,6 +22,7 @@ export default function MinhaContaPage() {
   const [profileName, setProfileName] = useState(authUser?.name ?? "");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [profileError, setProfileError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [profileSaved, setProfileSaved] = useState(false);
@@ -78,7 +79,7 @@ export default function MinhaContaPage() {
       setProfileError(null);
       setProfileSaved(true);
       queryClient.invalidateQueries({ queryKey: ["auth-me"] });
-      if (accessToken) setSession(accessToken, updated);
+      if (accessToken && authUser) setSession(accessToken, { ...authUser, ...updated });
       window.setTimeout(() => setProfileSaved(false), 2400);
     },
     onError: (err) => setProfileError(apiErrorMessage(err)),
@@ -86,7 +87,7 @@ export default function MinhaContaPage() {
 
   const changePassword = useMutation({
     mutationFn: async () => {
-      const { data } = await api.patch("/users/me/password", { currentPassword, newPassword });
+      const { data } = await api.patch("/users/me/password", { currentPassword, newPassword, confirmPassword });
       return data;
     },
     onSuccess: () => {
@@ -94,6 +95,7 @@ export default function MinhaContaPage() {
       setPasswordSaved(true);
       setCurrentPassword("");
       setNewPassword("");
+      setConfirmPassword("");
       window.setTimeout(() => setPasswordSaved(false), 2400);
     },
     onError: (err) => setPasswordError(apiErrorMessage(err)),
@@ -113,10 +115,21 @@ export default function MinhaContaPage() {
       setAvatarSaved(true);
       setAvatarFile(null);
       queryClient.invalidateQueries({ queryKey: ["auth-me"] });
-      if (accessToken) setSession(accessToken, updated);
+      if (accessToken && authUser) setSession(accessToken, { ...authUser, ...updated });
       window.setTimeout(() => setAvatarSaved(false), 2400);
     },
     onError: (err) => setAvatarError(apiErrorMessage(err)),
+  });
+  const exportData = useMutation({
+    mutationFn: async () => (await api.get("/users/me/export")).data,
+    onSuccess: (data) => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `meus-dados-chegowia-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    },
   });
 
   const defaultAddress = addresses?.find((address) => address.isDefault) ?? addresses?.[0];
@@ -129,9 +142,9 @@ export default function MinhaContaPage() {
       <main className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-6 flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-brand-700">Configurações do cliente</p>
-            <h1 className="mt-1 text-3xl font-black text-slate-950">Minha conta</h1>
-            <p className="mt-1 text-sm text-slate-500">Gerencie perfil, senha, endereços e histórico de compras.</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-brand-700 dark:text-brand-300">Configurações do cliente</p>
+            <h1 className="mt-1 text-3xl font-black text-slate-950 dark:text-slate-100">Minha conta</h1>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Gerencie perfil, senha, endereços e histórico de compras.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href="/minha-conta/enderecos">
@@ -156,7 +169,7 @@ export default function MinhaContaPage() {
                 <CardTitle>Foto do perfil</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                <div className="grid h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-lg border border-brand-100 bg-brand-50 text-2xl font-black text-brand-700">
+                <div className="grid h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-lg border border-brand-100 bg-brand-50 text-2xl font-black text-brand-700 dark:bg-brand-950/30 dark:border-brand-900/50 dark:text-brand-300">
                   {avatarPreview ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={avatarPreview} alt={profileName || "Foto do perfil"} className="h-full w-full object-cover" />
@@ -165,11 +178,11 @@ export default function MinhaContaPage() {
                   )}
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
                     Use uma foto quadrada ou bem centralizada. O arquivo pode ter até 4MB.
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <label className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700">
+                    <label className="inline-flex min-h-10 cursor-pointer items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300">
                       Escolher foto
                       <input
                         type="file"
@@ -182,8 +195,8 @@ export default function MinhaContaPage() {
                       Salvar foto
                     </Button>
                   </div>
-                  {avatarError && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{avatarError}</p>}
-                  {avatarSaved && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Foto atualizada.</p>}
+                  {avatarError && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/30 dark:text-red-400">{avatarError}</p>}
+                  {avatarSaved && <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Foto atualizada.</p>}
                 </div>
               </CardContent>
             </Card>
@@ -193,24 +206,24 @@ export default function MinhaContaPage() {
                 <CardTitle>Dados pessoais</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-3">
                   <FormField label="Nome">
                     <Input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
                   </FormField>
                   <FormField label="E-mail">
-                    <Input value={me?.email ?? authUser?.email ?? ""} readOnly className="bg-slate-50 text-slate-500" />
+                    <Input value={me?.email ?? authUser?.email ?? ""} readOnly className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400" />
                   </FormField>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <FormField label="Tipo de conta">
-                    <Input value={accountRoleLabel(me?.role ?? authUser?.role)} readOnly className="bg-slate-50 text-slate-500" />
+                    <Input value={accountRoleLabel(me?.role ?? authUser?.role)} readOnly className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400" />
                   </FormField>
                   <FormField label="Status">
-                    <Input value="Conta ativa" readOnly className="bg-slate-50 text-slate-500" />
+                    <Input value="Conta ativa" readOnly className="bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400" />
                   </FormField>
                 </div>
-                {profileError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{profileError}</p>}
-                {profileSaved && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Perfil atualizado.</p>}
+                {profileError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/30 dark:text-red-400">{profileError}</p>}
+                {profileSaved && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Perfil atualizado.</p>}
                 <Button disabled={!profileName.trim()} isLoading={updateProfile.isPending} onClick={() => updateProfile.mutate()}>
                   Salvar perfil
                 </Button>
@@ -227,15 +240,19 @@ export default function MinhaContaPage() {
                     <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
                   </FormField>
                   <FormField label="Nova senha">
-                    <Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+                    <Input type="password" minLength={8} pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).{8,}" title="Use ao menos 8 caracteres, uma letra maiúscula, uma minúscula e um símbolo." value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+                  </FormField>
+                  <FormField label="Confirmar nova senha">
+                    <Input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
                   </FormField>
                 </div>
-                <p className="text-xs text-slate-500">A nova senha precisa ter pelo menos 6 caracteres.</p>
-                {passwordError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{passwordError}</p>}
-                {passwordSaved && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Senha alterada.</p>}
+                <p className="text-xs text-slate-500 dark:text-slate-400">A nova senha precisa ter no mínimo 8 caracteres, uma letra maiúscula, uma minúscula e um símbolo.</p>
+                {confirmPassword && newPassword !== confirmPassword && <p className="text-xs font-bold text-rose-600 dark:text-rose-400">As senhas não coincidem.</p>}
+                {passwordError && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/30 dark:text-red-400">{passwordError}</p>}
+                {passwordSaved && <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">Senha alterada.</p>}
                 <Button
                   variant="secondary"
-                  disabled={!currentPassword || newPassword.length < 6}
+                  disabled={!currentPassword || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).{8,}$/.test(newPassword) || newPassword !== confirmPassword}
                   isLoading={changePassword.isPending}
                   onClick={() => changePassword.mutate()}
                 >
@@ -254,15 +271,15 @@ export default function MinhaContaPage() {
                 {defaultAddress ? (
                   <div className="space-y-3">
                     <div>
-                      <p className="font-bold text-slate-950">
+                      <p className="font-bold text-slate-950 dark:text-slate-100">
                         {defaultAddress.label || "Endereço"}
                         {defaultAddress.isDefault ? " padrão" : ""}
                       </p>
-                      <p className="mt-1 text-sm text-slate-500">
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                         {defaultAddress.street}, {defaultAddress.number}
                         {defaultAddress.complement ? ` · ${defaultAddress.complement}` : ""}
                       </p>
-                      <p className="text-sm text-slate-500">
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
                         {defaultAddress.neighborhood}, {defaultAddress.city} - {defaultAddress.state}
                       </p>
                     </div>
@@ -274,7 +291,7 @@ export default function MinhaContaPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-sm text-slate-500">Cadastre um endereço para agilizar o checkout e a busca regional.</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">Cadastre um endereço para agilizar o checkout e a busca regional.</p>
                     <Link href="/minha-conta/enderecos" className="mt-4 block">
                       <Button className="w-full">Cadastrar endereço</Button>
                     </Link>
@@ -292,22 +309,36 @@ export default function MinhaContaPage() {
                   <Link
                     key={order.id}
                     href={`/pedido/${order.id}`}
-                    className="block rounded-lg border border-slate-200 p-3 transition hover:border-brand-200 hover:bg-brand-50/50"
+                    className="block rounded-lg border border-slate-200 p-3 transition hover:border-brand-200 hover:bg-brand-50/50 dark:border-slate-800"
                   >
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="font-bold text-slate-950">#{order.id.slice(0, 8)}</p>
+                      <p className="font-bold text-slate-950 dark:text-slate-100">#{order.id.slice(0, 8)}</p>
                       <OrderStatusBadge status={order.status} />
                     </div>
-                    <p className="text-xs text-slate-500">{formatDateTime(order.createdAt)}</p>
-                    <p className="mt-1 text-sm font-bold text-brand-700">{formatCurrency(order.total)}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{formatDateTime(order.createdAt)}</p>
+                    <p className="mt-1 text-sm font-bold text-brand-700 dark:text-brand-300">{formatCurrency(order.total)}</p>
                   </Link>
                 ))}
-                {recentOrders.length === 0 && <p className="text-sm text-slate-500">Você ainda não fez pedidos.</p>}
+                {recentOrders.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">Você ainda não fez pedidos.</p>}
                 <Link href="/minha-conta/pedidos" className="block pt-2">
                   <Button className="w-full" variant="outline">
                     Ver histórico completo
                   </Button>
                 </Link>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Privacidade e seus dados</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">Baixe uma cópia legível dos dados pessoais e pedidos associados à sua conta. Para correção, eliminação ou revisão de decisão automatizada, fale com nosso canal de privacidade.</p>
+                <div className="mt-4 grid gap-2">
+                  <Button variant="outline" isLoading={exportData.isPending} onClick={()=>exportData.mutate()}>Baixar meus dados</Button>
+                  <a className="text-center text-xs font-bold text-brand-700 hover:underline dark:text-brand-300" href="mailto:contato@chegowia.com.br">Solicitar atendimento de privacidade</a>
+                </div>
+                {exportData.error&&<p className="mt-3 text-xs text-rose-600 dark:text-rose-400">{apiErrorMessage(exportData.error)}</p>}
               </CardContent>
             </Card>
           </aside>
@@ -327,9 +358,9 @@ function SummaryCard({
   tone: "brand" | "accent" | "slate";
 }) {
   const classes = {
-    brand: "bg-brand-50 text-brand-800",
+    brand: "bg-brand-50 text-brand-800 dark:bg-brand-950/30 dark:text-brand-300",
     accent: "bg-accent-50 text-accent-800",
-    slate: "bg-white text-slate-800",
+    slate: "bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-200",
   };
 
   return (

@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
-import { AIChannel, Role } from "@prisma/client";
+import { Throttle } from "@nestjs/throttler";
+import { Role } from "@prisma/client";
 import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AiService } from "./ai.service";
@@ -15,28 +16,28 @@ export class AiController {
 
   @Post("conversations")
   start(@CurrentUser("companyId") companyId: string, @CurrentUser("sub") userId: string, @Body() dto: StartConversationDto) {
-    return this.aiService.startConversation({
+    return this.aiService.startInternalConversation({
       companyId,
       agentRole: dto.agentRole,
-      channel: AIChannel.INTERNO,
       userId,
       title: dto.title,
     });
   }
 
   @Get("conversations")
-  list(@Query("channel") channel?: AIChannel) {
-    return this.aiService.listConversations(channel);
+  list(@CurrentUser("companyId") companyId: string) {
+    return this.aiService.listInternalConversations(companyId);
   }
 
   @Get("conversations/:id")
-  detail(@Param("id") id: string) {
-    return this.aiService.getConversation(id);
+  detail(@Param("id") id: string, @CurrentUser("companyId") companyId: string) {
+    return this.aiService.getInternalConversation(id, companyId);
   }
 
   @Post("conversations/:id/messages")
-  sendMessage(@Param("id") id: string, @Body() dto: SendMessageDto) {
-    return this.aiService.sendMessage(id, dto.content);
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  sendMessage(@Param("id") id: string, @CurrentUser("companyId") companyId: string, @Body() dto: SendMessageDto) {
+    return this.aiService.sendMessageAsInternalUser(id, companyId, dto.content);
   }
 
   @Roles(Role.ADMIN)

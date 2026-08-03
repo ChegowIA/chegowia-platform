@@ -1,11 +1,13 @@
 node_modules/
 dist/
 .next/
+.next.stale-*/
 out/
 build/
 coverage/
 
 .env
+.env.local
 .env.*.local
 !.env.example
 
@@ -17,6 +19,10 @@ npm-debug.log*
 
 # Prisma
 apps/api/prisma/*.db
+apps/api/uploads/
+apps/api/private_uploads/
+data/
+backups/
 
 .turbo/
 .vercel/

@@ -1,11 +1,19 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { Public } from "../common/decorators/public.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
+import {
+  ForgotPasswordDto,
+  ResendVerificationDto,
+  ResetPasswordDto,
+  VerifyEmailDto,
+  VerifyMfaDto,
+} from "./dto/auth-actions.dto";
 
 const REFRESH_COOKIE = "refresh_token";
 const REFRESH_COOKIE_OPTIONS = {
@@ -26,25 +34,70 @@ export class AuthController {
 
   @Public()
   @Post("login")
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const { accessToken, refreshTokenCookie, refreshTokenExpiresAt, user } = await this.authService.login(dto);
-    this.setRefreshCookie(res, refreshTokenCookie, refreshTokenExpiresAt);
-    return { accessToken, user };
+    const result = await this.authService.login(dto);
+    if (result.mfaRequired) return result;
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return { accessToken: result.accessToken, user: result.user, mfaRequired: false };
   }
 
   @Public()
   @Post("register")
+  @Throttle({ default: { limit: 3, ttl: 60 * 60_000 } })
   @HttpCode(HttpStatus.CREATED)
-  async register(@Body() dto: RegisterCustomerDto, @Res({ passthrough: true }) res: Response) {
-    const { accessToken, refreshTokenCookie, refreshTokenExpiresAt, user } =
-      await this.authService.registerCustomer(dto);
-    this.setRefreshCookie(res, refreshTokenCookie, refreshTokenExpiresAt);
-    return { accessToken, user };
+  register(@Body() dto: RegisterCustomerDto) {
+    return this.authService.registerCustomer(dto);
+  }
+
+  @Public()
+  @Post("verify-email")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async verifyEmail(@Body() dto: VerifyEmailDto, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.verifyEmail(dto.token);
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return { accessToken: result.accessToken, user: result.user };
+  }
+
+  @Public()
+  @Post("resend-verification")
+  @Throttle({ default: { limit: 3, ttl: 15 * 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  resendVerification(@Body() dto: ResendVerificationDto) {
+    return this.authService.resendVerification(dto.email);
+  }
+
+  @Public()
+  @Post("forgot-password")
+  @Throttle({ default: { limit: 3, ttl: 15 * 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Public()
+  @Post("reset-password")
+  @Throttle({ default: { limit: 5, ttl: 15 * 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.password);
+  }
+
+  @Public()
+  @Post("mfa/verify")
+  @Throttle({ default: { limit: 6, ttl: 10 * 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async verifyMfa(@Body() dto: VerifyMfaDto, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.verifyMfa(dto.challengeId, dto.code);
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return { accessToken: result.accessToken, user: result.user };
   }
 
   @Public()
   @Post("refresh")
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const cookieValue = req.cookies?.[REFRESH_COOKIE];

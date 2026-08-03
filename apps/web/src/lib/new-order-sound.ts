@@ -1,5 +1,6 @@
 let audioContext: AudioContext | null = null;
 let unlocked = false;
+let activeAlertTimers: number[] = [];
 
 function context() {
   if (typeof window === "undefined") return null;
@@ -32,6 +33,15 @@ export async function playNewOrderSound() {
   const now = ctx.currentTime + 0.02;
   playCashierCall(ctx, now);
   playCashierCall(ctx, now + 0.78);
+}
+
+export function playNewOrderAlert(repetitions = 4) {
+  activeAlertTimers.forEach((timer) => window.clearTimeout(timer));
+  activeAlertTimers = [];
+  const safeRepetitions = Math.max(1, Math.min(8, Math.floor(repetitions)));
+  for (let repetition = 0; repetition < safeRepetitions; repetition += 1) {
+    activeAlertTimers.push(window.setTimeout(() => playNewOrderSound(), repetition * 2_000));
+  }
 }
 
 function playCashierCall(ctx: AudioContext, startAt: number) {

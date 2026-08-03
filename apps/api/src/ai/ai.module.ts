@@ -6,9 +6,13 @@ import { ToolsService } from "./tools/tools.service";
 import { AiService } from "./ai.service";
 import { AiController } from "./ai.controller";
 import { AiMotoboyController } from "./ai-motoboy.controller";
+import { AiGarcomController } from "./ai-garcom.controller";
+import { AiCozinhaController } from "./ai-cozinha.controller";
 import { AiPublicController, AiPublicDiscoveryController } from "./ai-public.controller";
 import { PromotionsService } from "./promotions.service";
 import { PromotionsController, PublicPromotionsController } from "./promotions.controller";
+import { UsageModule } from "../usage/usage.module";
+import { SearchIntentService } from "./search/search-intent.service";
 
 /**
  * Troca de provedor de IA é configuração, não código: AI_PROVIDER=deepseek (padrão)
@@ -28,15 +32,18 @@ const aiProviderFactory = {
 };
 
 @Module({
+  imports: [UsageModule],
   controllers: [
     AiController,
     AiMotoboyController,
+    AiGarcomController,
+    AiCozinhaController,
     AiPublicController,
     AiPublicDiscoveryController,
     PromotionsController,
     PublicPromotionsController,
   ],
-  providers: [aiProviderFactory, PromptBuilderService, ToolsService, AiService, PromotionsService],
-  exports: [AiService],
+  providers: [aiProviderFactory, PromptBuilderService, ToolsService, AiService, PromotionsService, SearchIntentService],
+  exports: [AiService, AI_PROVIDER, SearchIntentService],
 })
 export class AiModule {}

@@ -1,7 +1,29 @@
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
+import { PUBLIC_PRODUCT_TYPES, inferPublicProductType } from "./public-product-types";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
+
+/** Teto do varrimento da home. Ver o comentário de `getMarketplace`. */
+const MARKETPLACE_SCAN_LIMIT = 600;
+const SECTION_LIMIT = 8;
+const PRODUCTS_PER_SECTION = 8;
+
+const MARKETPLACE_PRODUCT_INCLUDE = {
+  category: true,
+  company: {
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      city: true,
+      state: true,
+      logoUrl: true,
+      deliveryFeeBase: true,
+      avgDeliveryTimeMinutes: true,
+    },
+  },
+};
 
 @Injectable()
 export class CatalogPublicService {
@@ -31,18 +53,32 @@ export class CatalogPublicService {
     });
   }
 
+  /**
+   * Monta a home do marketplace: chips de tipo, destaques e seções.
+   *
+   * O tipo público é inferido em memória (`inferPublicProductType`), com
+   * precedência pela ordem da taxonomia e criação dinâmica a partir do nome da
+   * categoria da empresa. Isso não tem equivalente em SQL, então classificar
+   * aqui é inevitável. O que não podia continuar era ler **tudo**: a consulta
+   * não tinha `take` e cada visita anônima à home carregava o catálogo inteiro
+   * de todas as empresas ativas, com categoria e empresa incluídas.
+   *
+   * A janela abaixo é ordenada por destaque e recência e dá folga de sobra para
+   * as no máximo 8 seções × 8 produtos que a página exibe. Busca de verdade é
+   * `searchPublic`, paginada em SQL.
+   */
   async getMarketplace(params: { search?: string; city?: string; categoryId?: string }) {
     const search = params.search?.trim();
     const city = params.city?.trim();
     const publicTypeId = params.categoryId?.trim();
 
+    const companyFilter = city ? { isActive: true, city: { contains: city } } : { isActive: true };
     const productWhere: any = {
       isActive: true,
-      company: { is: { isActive: true } },
+      company: { is: companyFilter },
       category: { is: { isActive: true } },
     };
 
-    if (city) productWhere.company = { is: { isActive: true, city: { contains: city } } };
     if (search) {
       productWhere.OR = [
         { name: { contains: search } },
@@ -52,75 +88,75 @@ export class CatalogPublicService {
       ];
     }
 
-    const [products, featuredProducts] = await Promise.all([
-      this.db().product.findMany({
-        where: productWhere,
-        orderBy: [{ isFeatured: "desc" }, { updatedAt: "desc" }],
-        include: {
-          category: true,
-          company: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              city: true,
-              state: true,
-              logoUrl: true,
-              deliveryFeeBase: true,
-              avgDeliveryTimeMinutes: true,
-            },
-          },
-        },
-      }),
+    const scanArgs = {
+      where: productWhere,
+      orderBy: [{ isFeatured: "desc" }, { updatedAt: "desc" }],
+      take: MARKETPLACE_SCAN_LIMIT,
+      include: MARKETPLACE_PRODUCT_INCLUDE,
+    };
+
+    /**
+     * Com um tipo selecionado, a janela sem viés poderia não conter nenhum
+     * produto daquele tipo — antes o varrimento era completo e isso não
+     * acontecia. As keywords do tipo entram como filtro SQL para encher a
+     * janela do lado certo; a classificação final continua sendo a inferida,
+     * então um produto que casou por palavra mas pertence a outro tipo é
+     * descartado depois. Tipos dinâmicos não têm keywords e caem na janela
+     * comum.
+     */
+    const typeKeywords = publicTypeId
+      ? PUBLIC_PRODUCT_TYPES.find((type) => type.id === publicTypeId)?.keywords ?? []
+      : [];
+    const biasedWhere = typeKeywords.length
+      ? {
+        ...productWhere,
+        AND: [{
+          OR: typeKeywords.flatMap((keyword) => [
+            { name: { contains: keyword } },
+            { description: { contains: keyword } },
+            { category: { is: { name: { contains: keyword } } } },
+          ]),
+        }],
+      }
+      : null;
+
+    const [products, biasedProducts, featuredProducts] = await Promise.all([
+      this.db().product.findMany(scanArgs),
+      biasedWhere
+        ? this.db().product.findMany({ ...scanArgs, where: biasedWhere })
+        : Promise.resolve(null),
       this.db().product.findMany({
         where: {
           isActive: true,
           isFeatured: true,
-          company: { is: city ? { isActive: true, city: { contains: city } } : { isActive: true } },
+          company: { is: companyFilter },
           category: { is: { isActive: true } },
         },
         take: 10,
         orderBy: { updatedAt: "desc" },
-        include: {
-          category: true,
-          company: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              city: true,
-              state: true,
-              logoUrl: true,
-              deliveryFeeBase: true,
-              avgDeliveryTimeMinutes: true,
-            },
-          },
-        },
+        include: MARKETPLACE_PRODUCT_INCLUDE,
       }),
     ]);
 
     const allNormalizedProducts: any[] = products.map(normalizeMarketplaceProduct);
+    // Os chips saem sempre da janela sem viés: com o viés, escolher um tipo
+    // faria os outros sumirem da barra e não haveria como voltar.
+    const sectionSource: any[] = biasedProducts
+      ? biasedProducts.map(normalizeMarketplaceProduct)
+      : allNormalizedProducts;
     const normalizedProducts = publicTypeId
-      ? allNormalizedProducts.filter((product) => product.publicType.id === publicTypeId)
+      ? sectionSource.filter((product) => product.publicType.id === publicTypeId)
       : allNormalizedProducts;
     const normalizedFeaturedProducts = featuredProducts
       .map(normalizeMarketplaceProduct)
       .filter((product: any) => !publicTypeId || product.publicType.id === publicTypeId);
+
     const typeMap = new Map<
       string,
-      { id: string; name: string; description: string; icon: string; sortOrder: number; total: number }
+      { id: string; name: string; description: string; icon: string; sortOrder: number }
     >();
     for (const product of allNormalizedProducts) {
-      const current = typeMap.get(product.publicType.id) ?? {
-        id: product.publicType.id,
-        name: product.publicType.name,
-        description: product.publicType.description,
-        icon: product.publicType.icon,
-        sortOrder: product.publicType.sortOrder,
-        total: 0,
-      };
-      current.total += 1;
-      typeMap.set(product.publicType.id, current);
+      if (!typeMap.has(product.publicType.id)) typeMap.set(product.publicType.id, product.publicType);
     }
 
     const sectionsMap = new Map<
@@ -136,14 +172,106 @@ export class CatalogPublicService {
         icon: product.publicType.icon,
         products: [] as any[],
       };
-      if (section.products.length < 8) section.products.push(product);
+      if (section.products.length < PRODUCTS_PER_SECTION) section.products.push(product);
       sectionsMap.set(key, section);
     }
 
     return {
       productTypes: Array.from(typeMap.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
       featuredProducts: normalizedFeaturedProducts,
-      sections: Array.from(sectionsMap.values()).slice(0, 8),
+      sections: Array.from(sectionsMap.values()).slice(0, SECTION_LIMIT),
+    };
+  }
+
+  /**
+   * Busca paginada do marketplace a partir de uma intenção já interpretada.
+   *
+   * Os tipos públicos escolhidos pela IA entram como termos adicionais (as
+   * keywords que definem cada tipo) em vez de virarem um filtro pós-consulta:
+   * o tipo é inferido em memória, então filtrar por ele depois quebraria a
+   * paginação. Assim tudo continua resolvido em SQL.
+   */
+  async searchPublic(params: {
+    terms: string[];
+    productTypeIds?: string[];
+    maxPrice?: number | null;
+    city?: string;
+    page?: number;
+    pageSize?: number;
+  }) {
+    const page = Math.max(1, Math.trunc(params.page ?? 1));
+    const pageSize = Math.min(48, Math.max(1, Math.trunc(params.pageSize ?? 24)));
+    const city = params.city?.trim();
+
+    const typeKeywords = (params.productTypeIds ?? []).flatMap(
+      (id) => PUBLIC_PRODUCT_TYPES.find((type) => type.id === id)?.keywords ?? [],
+    );
+    const terms = Array.from(new Set([...params.terms, ...typeKeywords].filter((t) => t && t.length >= 3))).slice(0, 40);
+
+    const companyFilter = city ? { isActive: true, city: { contains: city } } : { isActive: true };
+    const productWhere: any = {
+      isActive: true,
+      company: { is: companyFilter },
+      category: { is: { isActive: true } },
+    };
+    if (params.maxPrice && params.maxPrice > 0) productWhere.price = { lte: params.maxPrice };
+    if (terms.length) {
+      productWhere.OR = terms.flatMap((term) => [
+        { name: { contains: term } },
+        { description: { contains: term } },
+        { category: { is: { name: { contains: term } } } },
+      ]);
+    }
+
+    const [total, products, companies] = await Promise.all([
+      this.db().product.count({ where: productWhere }),
+      this.db().product.findMany({
+        where: productWhere,
+        orderBy: [{ isFeatured: "desc" }, { updatedAt: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: MARKETPLACE_PRODUCT_INCLUDE,
+      }),
+      terms.length
+        ? this.db().company.findMany({
+          where: {
+            ...companyFilter,
+            OR: [
+              ...terms.map((term) => ({ name: { contains: term } })),
+              { products: { some: { isActive: true, OR: terms.map((term) => ({ name: { contains: term } })) } } },
+            ],
+          },
+          take: 8,
+          orderBy: { name: "asc" },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            city: true,
+            state: true,
+            logoUrl: true,
+            deliveryFeeBase: true,
+            deliveryFeePerKm: true,
+            deliveryRadiusKm: true,
+            avgDeliveryTimeMinutes: true,
+          },
+        })
+        : Promise.resolve([]),
+    ]);
+
+    return {
+      products: {
+        items: products.map(normalizeMarketplaceProduct),
+        total,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
+      companies: companies.map((company: any) => ({
+        ...company,
+        deliveryFeeBase: Number(company.deliveryFeeBase),
+        deliveryFeePerKm: Number(company.deliveryFeePerKm),
+      })),
     };
   }
 }
@@ -174,243 +302,4 @@ function normalizeMarketplaceProduct(product: any) {
       avgDeliveryTimeMinutes: product.company.avgDeliveryTimeMinutes,
     },
   };
-}
-
-interface PublicProductTypeDefinition {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  sortOrder: number;
-  keywords: string[];
-}
-
-const PUBLIC_PRODUCT_TYPES: PublicProductTypeDefinition[] = [
-  {
-    id: "hamburgueres-lanches",
-    name: "Hambúrgueres e lanches",
-    description: "Burgers, sanduíches, hot dogs, wraps e lanches rápidos.",
-    icon: "burger",
-    sortOrder: 10,
-    keywords: [
-      "hamburguer",
-      "hamburger",
-      "hamburgueres",
-      "hamburguers",
-      "burguer",
-      "burger",
-      "smash",
-      "xsalada",
-      "x salada",
-      "xbacon",
-      "x bacon",
-      "sanduiche",
-      "sanduiches",
-      "sanduba",
-      "lanche",
-      "lanches",
-      "hot dog",
-      "cachorro quente",
-      "wrap",
-      "baguete",
-      "beirute",
-    ],
-  },
-  {
-    id: "pizzas",
-    name: "Pizzas",
-    description: "Pizzas tradicionais, brotinhos, calzones e sabores especiais.",
-    icon: "pizza",
-    sortOrder: 20,
-    keywords: ["pizza", "pizzas", "pizzaria", "brotinho", "calzone", "esfiha", "esfirra"],
-  },
-  {
-    id: "marmitas-pratos",
-    name: "Marmitas e pratos",
-    description: "Marmitas, pratos executivos, comida caseira e refeições completas.",
-    icon: "meal",
-    sortOrder: 30,
-    keywords: [
-      "marmita",
-      "marmitex",
-      "quentinha",
-      "prato",
-      "pratos",
-      "executivo",
-      "refeicao",
-      "almoco",
-      "jantar",
-      "caseira",
-      "comida",
-      "parmegiana",
-      "strogonoff",
-      "feijoada",
-    ],
-  },
-  {
-    id: "japonesa-sushi",
-    name: "Japonesa e sushi",
-    description: "Sushi, temaki, yakisoba, combinados e comida oriental.",
-    icon: "sushi",
-    sortOrder: 40,
-    keywords: ["sushi", "sashimi", "temaki", "japones", "japonesa", "yakisoba", "oriental", "uramaki", "niguiri", "poke"],
-  },
-  {
-    id: "sorvetes-acai",
-    name: "Sorvetes e açaí",
-    description: "Açaí, sorvetes, gelatos, milkshakes, picolés e bowls gelados.",
-    icon: "ice-cream",
-    sortOrder: 50,
-    keywords: [
-      "acai",
-      "açai",
-      "açaí",
-      "sorvete",
-      "sorvetes",
-      "gelato",
-      "gelatos",
-      "ice cream",
-      "milkshake",
-      "milk shake",
-      "picole",
-      "picolé",
-      "picoles",
-      "picolés",
-      "frozen",
-      "bowl",
-      "copo da felicidade",
-    ],
-  },
-  {
-    id: "saudaveis",
-    name: "Saudáveis",
-    description: "Saladas, naturais, vegetarianos, veganos e opções leves.",
-    icon: "leaf",
-    sortOrder: 60,
-    keywords: ["salada", "saladas", "natural", "fit", "fitness", "saudavel", "saudaveis", "vegano", "vegetariano", "low carb", "integral"],
-  },
-  {
-    id: "sobremesas-doces",
-    name: "Sobremesas e doces",
-    description: "Doces, bolos, brownies, churros e sobremesas.",
-    icon: "cake",
-    sortOrder: 70,
-    keywords: ["sobremesa", "sobremesas", "doce", "doces", "bolo", "bolos", "brownie", "churros", "brigadeiro", "pudim", "cookie", "torta doce"],
-  },
-  {
-    id: "bebidas",
-    name: "Bebidas",
-    description: "Refrigerantes, sucos, cafés, drinks e bebidas em geral.",
-    icon: "drink",
-    sortOrder: 80,
-    keywords: ["bebida", "bebidas", "refrigerante", "refri", "suco", "sucos", "agua", "água", "cafe", "café", "drink", "drinks", "cerveja"],
-  },
-  {
-    id: "massas",
-    name: "Massas",
-    description: "Macarrão, lasanha, nhoque, risotos e massas artesanais.",
-    icon: "pasta",
-    sortOrder: 90,
-    keywords: ["massa", "massas", "macarrao", "macarrão", "lasanha", "nhoque", "gnocchi", "risoto", "ravioli", "spaghetti", "espaguete"],
-  },
-  {
-    id: "carnes-grelhados",
-    name: "Carnes e grelhados",
-    description: "Churrasco, espetinhos, carnes grelhadas e proteínas.",
-    icon: "grill",
-    sortOrder: 100,
-    keywords: ["carne", "carnes", "churrasco", "churras", "espetinho", "grelhado", "grelhados", "frango", "bife", "picanha", "costela"],
-  },
-  {
-    id: "padaria-cafeteria",
-    name: "Padaria e cafeteria",
-    description: "Pães, salgados, cafés, tortas e itens de padaria.",
-    icon: "bakery",
-    sortOrder: 110,
-    keywords: ["padaria", "paes", "pães", "pao", "pão", "salgado", "salgados", "cafeteria", "croissant", "torta", "tortas"],
-  },
-  {
-    id: "mercado-conveniencia",
-    name: "Mercado e conveniência",
-    description: "Itens de mercado, conveniência e compras rápidas.",
-    icon: "market",
-    sortOrder: 120,
-    keywords: ["mercado", "conveniencia", "conveniência", "mercearia", "empório", "emporio", "utilidades", "hortifruti"],
-  },
-  {
-    id: "outros",
-    name: "Outros produtos",
-    description: "Produtos que ainda não se encaixam em um tipo público específico.",
-    icon: "spark",
-    sortOrder: 999,
-    keywords: [],
-  },
-];
-
-function inferPublicProductType(product: any) {
-  const categoryName = product.category?.name ?? "";
-  const searchable = normalizeSearchText([categoryName, product.name, product.description].filter(Boolean).join(" "));
-  const type =
-    PUBLIC_PRODUCT_TYPES.find((candidate) => candidate.keywords.some((keyword) => searchable.includes(normalizeSearchText(keyword)))) ??
-    createFallbackType(categoryName);
-
-  return {
-    id: type.id,
-    name: type.name,
-    description: type.description,
-    icon: type.icon,
-    sortOrder: type.sortOrder,
-  };
-}
-
-function createFallbackType(categoryName: string): PublicProductTypeDefinition {
-  const normalizedName = normalizeDisplayName(categoryName || "Outros produtos");
-  if (!normalizedName || normalizedName === "Outros Produtos") return PUBLIC_PRODUCT_TYPES[PUBLIC_PRODUCT_TYPES.length - 1];
-  return {
-    id: `tipo-${slugifyPublicType(normalizedName)}`,
-    name: normalizedName,
-    description: "Tipo público criado dinamicamente a partir das categorias cadastradas pelas empresas.",
-    icon: "spark",
-    sortOrder: 900,
-    keywords: [],
-  };
-}
-
-function normalizeSearchText(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/ç/g, "c")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeDisplayName(value: string) {
-  const clean = value
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-
-  if (!clean) return "Outros produtos";
-
-  return clean
-    .split(" ")
-    .map((word, index) => {
-      if (index > 0 && ["de", "da", "do", "das", "dos", "e", "para"].includes(word)) return word;
-      return word.charAt(0).toUpperCase() + word.slice(1);
-    })
-    .join(" ")
-    .replace(/\bHamburguer(es)?\b/g, "Hambúrgueres")
-    .replace(/\bSanduiche(s)?\b/g, "Sanduíches")
-    .replace(/\bAcai\b/g, "Açaí")
-    .replace(/\bCafe\b/g, "Café")
-    .replace(/\bJapones(a)?\b/g, "Japonesa")
-    .replace(/\bSaudavel\b/g, "Saudável");
-}
-
-function slugifyPublicType(value: string) {
-  return normalizeSearchText(value).replace(/\s+/g, "-") || "outros";
 }

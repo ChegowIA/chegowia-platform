@@ -59,7 +59,7 @@ export default function GlobalReportsPage() {
         </CardHeader>
         <CardContent className="p-0">
           {loadingTop ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+            <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
           ) : (
             <Table
               columns={[
@@ -79,7 +79,7 @@ export default function GlobalReportsPage() {
                 { header: "Faturamento", render: (row: TopCompany) => formatCurrency(row.revenue) },
               ]}
               rows={topCompanies ?? []}
-              rowKey={(row) => row.company?.id ?? Math.random().toString()}
+              rowKey={(row) => row.company?.id ?? `sem-empresa-${row.ordersCount}-${row.revenue}`}
             />
           )}
         </CardContent>
@@ -110,7 +110,7 @@ export default function GlobalReportsPage() {
           </div>
 
           {loadingGrowth ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+            <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
           ) : (
             <Table
               columns={[

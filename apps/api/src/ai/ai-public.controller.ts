@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
 import { Role } from "@prisma/client";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Public } from "../common/decorators/public.decorator";
@@ -26,6 +27,7 @@ export class AiPublicController {
   }
 
   @Post("conversations/:id/messages")
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   sendMessage(@Param("id") id: string, @CurrentUser("sub") userId: string, @Body() dto: SendMessageDto) {
     return this.aiService.sendMessageAsCustomer(id, userId, dto.content);
   }
@@ -39,6 +41,7 @@ export class AiPublicDiscoveryController {
   constructor(private readonly aiService: AiService) {}
 
   @Post("search")
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   search(@Body() dto: PublicDiscoveryDto) {
     return this.aiService.searchPublicCatalog(dto);
   }

@@ -3,6 +3,11 @@ import { MESSAGING_PROVIDER } from "./providers/messaging-provider.interface";
 import { LinkWhatsappProvider } from "./providers/link-whatsapp.provider";
 import { MessagingService } from "./messaging.service";
 import { MessagingController } from "./messaging.controller";
+import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
+import { MessagingSecretsService } from "./messaging-secrets.service";
+import { AiModule } from "../ai/ai.module";
+import { RealtimeModule } from "../realtime/realtime.module";
+import { UsageModule } from "../usage/usage.module";
 
 const messagingProviderFactory = {
   provide: MESSAGING_PROVIDER,
@@ -10,8 +15,9 @@ const messagingProviderFactory = {
 };
 
 @Module({
+  imports: [AiModule, RealtimeModule, UsageModule],
   controllers: [MessagingController],
-  providers: [messagingProviderFactory, MessagingService],
+  providers: [messagingProviderFactory, MetaWhatsAppProvider, MessagingSecretsService, MessagingService],
   exports: [MessagingService],
 })
 export class MessagingModule {}

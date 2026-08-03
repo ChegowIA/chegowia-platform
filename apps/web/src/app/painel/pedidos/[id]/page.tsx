@@ -106,8 +106,8 @@ export default function PedidoDetalhePage() {
     onError: (err) => setError(apiErrorMessage(err)),
   });
 
-  if (isLoading) return <p className="text-sm text-slate-500">Carregando...</p>;
-  if (!order) return <p className="text-sm text-slate-500">Pedido não encontrado.</p>;
+  if (isLoading) return <p className="text-sm text-slate-500 dark:text-slate-400">Carregando...</p>;
+  if (!order) return <p className="text-sm text-slate-500 dark:text-slate-400">Pedido não encontrado.</p>;
 
   return (
     <div className="space-y-6">
@@ -116,7 +116,7 @@ export default function PedidoDetalhePage() {
         <OrderStatusBadge status={order.status} />
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20">{error}</p>}
+      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
@@ -145,7 +145,7 @@ export default function PedidoDetalhePage() {
               {order.statusHistory.map((h, idx) => (
                 <div key={idx} className="flex items-center justify-between text-sm">
                   <OrderStatusBadge status={h.status} />
-                  <span className="text-slate-500">{formatDateTime(h.createdAt)}</span>
+                  <span className="text-slate-500 dark:text-slate-400">{formatDateTime(h.createdAt)}</span>
                 </div>
               ))}
             </CardContent>
@@ -159,7 +159,7 @@ export default function PedidoDetalhePage() {
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
               <p className="font-medium text-slate-900 dark:text-slate-100">{order.customer?.name ?? "-"}</p>
-              <p className="text-slate-500">{order.customer?.email ?? "-"}</p>
+              <p className="text-slate-500 dark:text-slate-400">{order.customer?.email ?? "-"}</p>
             </CardContent>
           </Card>
 
@@ -175,8 +175,14 @@ export default function PedidoDetalhePage() {
               <p>
                 {order.deliveryCity} - {order.deliveryState}
               </p>
+              {order.deliveryDistanceKm !== null && order.deliveryDistanceKm !== undefined && (
+                <p className="pt-2 text-slate-500 dark:text-slate-400">
+                  Rota calculada: {Number(order.deliveryDistanceKm).toFixed(2)} km
+                  {order.deliveryRouteDurationMinutes ? ` · ~${order.deliveryRouteDurationMinutes} min` : ""}
+                </p>
+              )}
               {order.delivery && (
-                <p className="pt-2 text-slate-500">
+                <p className="pt-2 text-slate-500 dark:text-slate-400">
                   Status da entrega: <strong>{order.delivery.status.replaceAll("_", " ")}</strong>
                 </p>
               )}
@@ -268,7 +274,7 @@ export default function PedidoDetalhePage() {
               >
                 Link WhatsApp
               </Button>
-              {whatsappInfo && <p className="text-xs text-slate-500">{whatsappInfo.summary}</p>}
+              {whatsappInfo && <p className="text-xs text-slate-500 dark:text-slate-400">{whatsappInfo.summary}</p>}
             </CardContent>
           </Card>
         </div>

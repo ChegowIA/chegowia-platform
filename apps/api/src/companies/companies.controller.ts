@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 import { Public } from "../common/decorators/public.decorator";
@@ -43,6 +44,13 @@ export class CompaniesController {
   }
 
   @Roles(Role.ADMIN)
+  @Post("me/logo")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
+  uploadMyLogo(@CurrentUser("companyId") companyId: string, @UploadedFile() file: any) {
+    return this.companiesService.uploadLogo(companyId, file);
+  }
+
+  @Roles(Role.ADMIN)
   @Patch("me/settings")
   updateMySettings(@CurrentUser("companyId") companyId: string, @Body() dto: UpdateCompanySettingsDto) {
     return this.companiesService.updateSettings(companyId, dto);
@@ -71,6 +79,13 @@ export class CompaniesController {
   @Patch(":id")
   update(@Param("id") id: string, @Body() dto: UpdateCompanyDto) {
     return this.companiesService.update(id, dto);
+  }
+
+  @Roles(Role.SUPER_ADMIN)
+  @Post(":id/logo")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
+  uploadLogo(@Param("id") id: string, @UploadedFile() file: any) {
+    return this.companiesService.uploadLogo(id, file);
   }
 
   @Roles(Role.SUPER_ADMIN)

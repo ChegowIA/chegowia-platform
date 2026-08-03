@@ -4,6 +4,7 @@ import { PRISMA_CLIENT } from "../../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../../common/prisma/prisma-client.factory";
 import { tenantContext } from "../../common/tenant/tenant-context";
 import { AI_PROVIDER, AIProvider } from "../providers/ai-provider.interface";
+import { UsageService } from "../../usage/usage.service";
 
 /**
  * Implementação das ferramentas listadas em tool-definitions.ts. Cada método recebe
@@ -19,6 +20,7 @@ export class ToolsService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
+    private readonly usage: UsageService,
   ) {}
 
   private db() {
@@ -66,7 +68,10 @@ export class ToolsService {
 
       const grouped = await this.db().orderItem.groupBy({
         by: ["productId", "productName"],
-        where: { order: { createdAt: { gte: since }, status: { not: "CANCELADO" } } },
+        // companyId explícito: OrderItem não está no TENANT_MODELS e a extensão
+        // do Prisma não reescreve filtro de relação — sem isto o agrupamento
+        // cruza todas as empresas da plataforma.
+        where: { order: { companyId, createdAt: { gte: since }, status: { not: "CANCELADO" } } },
         _sum: { quantity: true, totalPrice: true },
         orderBy: { _sum: { quantity: "desc" } },
         take: 10,
@@ -113,7 +118,7 @@ export class ToolsService {
     data: { title: string; description?: string; discountType: string; discountValue: number },
   ) {
     if (!["PERCENTUAL", "VALOR_FIXO"].includes(data.discountType)) {
-      throw new BadRequestException("discountType inválido.");
+      throw new BadRequestException("Tipo de desconto inválido.");
     }
     return this.scoped(companyId, () =>
       this.db().promotion.create({
@@ -129,7 +134,18 @@ export class ToolsService {
     );
   }
 
-  async generateProductDescription(data: { name: string; currentDescription?: string; ingredients?: string }) {
+  /**
+   * Gera a descrição de um produto.
+   *
+   * Recebe `companyId` porque esta ferramenta faz uma **segunda** chamada à IA,
+   * separada da conversa que a invocou. Sem registrar o consumo, quanto mais o
+   * lojista usasse o recurso, mais a plataforma pagaria sem cobrar — e o
+   * gasto não aparecia na conta dele.
+   */
+  async generateProductDescription(
+    companyId: string,
+    data: { name: string; currentDescription?: string; ingredients?: string },
+  ) {
     const result = await this.aiProvider.chat([
       {
         role: "system",
@@ -141,6 +157,16 @@ export class ToolsService {
         content: `Produto: ${data.name}\nDescrição atual: ${data.currentDescription ?? "(nenhuma)"}\nIngredientes: ${data.ingredients ?? "(não informado)"}`,
       },
     ]);
+    if (result.usage) {
+      await this.usage.recordAiUsage({
+        companyId,
+        inputTokens: result.usage.inputTokens,
+        cachedInputTokens: result.usage.cachedInputTokens,
+        uncachedInputTokens: result.usage.uncachedInputTokens,
+        outputTokens: result.usage.outputTokens,
+        requestId: result.requestId,
+      });
+    }
     return { description: result.content?.trim() ?? "" };
   }
 
@@ -154,14 +180,22 @@ export class ToolsService {
       const category = data.category?.trim();
 
       if (query) {
-        where.OR = [
-          { name: { contains: query } },
-          { description: { contains: query } },
-          { category: { is: { name: { contains: query } } } },
-        ];
+        const queryTokens = searchTokens(query);
+        if (queryTokens.length) where.OR = buildStoreProductSearch(queryTokens);
       }
       if (category) {
-        where.category = { is: { name: { contains: category } } };
+        const categoryTokens = searchTokens(category);
+        if (categoryTokens.length) {
+          where.AND = [
+            {
+              OR: categoryTokens.flatMap((token) => [
+                { category: { is: { name: { contains: token } } } },
+                { name: { contains: token } },
+                { description: { contains: token } },
+              ]),
+            },
+          ];
+        }
       }
       if (typeof data.maxPrice === "number") {
         where.price = { lte: data.maxPrice };
@@ -220,25 +254,24 @@ export class ToolsService {
       : null;
   }
 
-  async searchPublicCatalog(data: { message: string; city?: string; neighborhood?: string }) {
+  /**
+   * `terms` chega preenchido quando a busca já passou pela interpretação por IA
+   * (ver ai/search/search-intent.service.ts). Sem ele, vale a expansão por
+   * sinônimos local — é o que mantém a tool utilizável sem provedor de IA.
+   */
+  async searchPublicCatalog(data: { message: string; city?: string; neighborhood?: string; terms?: string[] }) {
     const query = data.message.trim();
     const city = data.city?.trim();
     const neighborhood = data.neighborhood?.trim();
-    const tokens = searchTokens([query, city, neighborhood].filter(Boolean).join(" "));
+    const tokens = data.terms?.length ? data.terms : searchTokens(query);
 
     const companyWhere: any = { isActive: true };
     if (city) companyWhere.city = { contains: city };
-    if (neighborhood) {
-      companyWhere.deliveryAreas = { some: { neighborhood: { contains: neighborhood }, isActive: true } };
-    }
     const companySearch = buildCompanySearch(tokens);
     if (companySearch.length) companyWhere.OR = companySearch;
 
     const productCompanyWhere: any = { isActive: true };
     if (city) productCompanyWhere.city = { contains: city };
-    if (neighborhood) {
-      productCompanyWhere.deliveryAreas = { some: { neighborhood: { contains: neighborhood }, isActive: true } };
-    }
     const productWhere: any = { isActive: true, company: { is: productCompanyWhere } };
     const productSearch = buildProductSearch(tokens);
     if (productSearch.length) productWhere.OR = productSearch;
@@ -371,16 +404,51 @@ const STOP_WORDS = new Set([
 ]);
 
 function searchTokens(raw: string): string[] {
-  return Array.from(
-    new Set(
-      raw
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, " ")
-        .split(/\s+/)
-        .map((token) => token.trim())
-        .filter((token) => token.length >= 3 && !STOP_WORDS.has(token)),
-    ),
-  ).slice(0, 8);
+  const normalized = normalizeSearchText(raw);
+  const directTokens = normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+  const expanded = [...directTokens];
+
+  for (const group of SEARCH_SYNONYM_GROUPS) {
+    if (group.some((term) => normalized.includes(term) || directTokens.includes(term))) {
+      expanded.push(...group);
+    }
+  }
+
+  return Array.from(new Set(expanded)).slice(0, 24);
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const SEARCH_SYNONYM_GROUPS = [
+  ["sanduiche", "lanche", "hamburguer", "hamburger", "burger", "burguer", "smash", "xsalada", "xbacon", "hotdog"],
+  ["pizza", "pizzaria", "esfiha", "esfirra", "calzone"],
+  ["almoco", "refeicao", "prato", "marmita", "marmitex", "caseira", "executivo"],
+  ["sobremesa", "doce", "acai", "sorvete", "milkshake", "bolo", "pudim"],
+  ["bebida", "refrigerante", "refri", "suco", "agua", "cerveja"],
+  ["japonesa", "japones", "sushi", "sashimi", "temaki", "yakisoba"],
+  ["saudavel", "fitness", "fit", "salada", "vegetariano", "vegano"],
+  ["massa", "macarrao", "lasanha", "nhoque", "italiana"],
+  ["frango", "galeto", "ave"],
+  ["carne", "bife", "churrasco", "churrascaria", "costela"],
+] as const;
+
+function buildStoreProductSearch(tokens: string[]) {
+  return tokens.flatMap((token) => [
+    { name: { contains: token } },
+    { description: { contains: token } },
+    { category: { is: { name: { contains: token } } } },
+  ]);
 }
 
 function buildProductSearch(tokens: string[]) {
@@ -388,9 +456,6 @@ function buildProductSearch(tokens: string[]) {
     { name: { contains: token } },
     { description: { contains: token } },
     { category: { is: { name: { contains: token } } } },
-    { company: { is: { name: { contains: token } } } },
-    { company: { is: { city: { contains: token } } } },
-    { company: { is: { deliveryAreas: { some: { neighborhood: { contains: token }, isActive: true } } } } },
   ]);
 }
 
@@ -406,7 +471,7 @@ function buildCompanySearch(tokens: string[]) {
 }
 
 function buildPublicSearchSummary(productCount: number, companyCount: number, city?: string, neighborhood?: string) {
-  const region = [neighborhood, city].filter(Boolean).join(", ");
+  const region = city || neighborhood;
   if (productCount || companyCount) {
     return `Encontrei ${productCount} produto${productCount === 1 ? "" : "s"} e ${companyCount} loja${
       companyCount === 1 ? "" : "s"
@@ -421,13 +486,13 @@ function buildPublicSearchSuggestions(productCount: number, companyCount: number
   if (productCount || companyCount) {
     return [
       "Abra uma loja para ver o cardápio completo.",
-      "Use cidade ou bairro para refinar a entrega.",
+      "Descreva sua vontade, ingrediente ou faixa de preço para refinar.",
       "Compare taxa, tempo médio e preço antes de adicionar ao carrinho.",
     ];
   }
   return [
-    city ? "Remova o bairro e busque só pela cidade." : "Informe uma cidade para localizar empresas próximas.",
-    "Tente uma categoria ampla, como pizza, burger, marmita, sushi ou sobremesa.",
+    city ? "Tente descrever a sua vontade, como “algo doce” ou “um lanche com carne”." : "Cadastre sua cidade para localizar empresas próximas.",
+    "Você pode buscar com linguagem natural: pizza, lanche, almoço, sushi ou sobremesa.",
     "Confira se a empresa já está ativa no painel administrativo.",
   ];
 }

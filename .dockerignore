@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+!.env.production.example
+node_modules
+**/node_modules
+**/.next
+**/dist
+**/coverage
+apps/api/uploads
+apps/api/private_uploads
+data
+backups
+*.log

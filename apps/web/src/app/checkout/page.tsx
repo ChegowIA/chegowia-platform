@@ -9,12 +9,13 @@ import { api, apiErrorMessage } from "@/lib/api-client";
 import { homePathForRole } from "@/lib/auth-routes";
 import { useAuthStore } from "@/lib/auth-store";
 import { cartSubtotal, useCartStore } from "@/lib/cart-store";
-import { Address, Order } from "@/lib/types";
+import { Address, DeliveryQuote, Order } from "@/lib/types";
 import { formatCurrency } from "@/lib/format";
 import { PublicHeader } from "@/components/layout/public-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select, Textarea } from "@/components/ui/input";
+import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   [PaymentMethod.DINHEIRO]: "Dinheiro",
@@ -50,7 +51,7 @@ function LoadingNotice() {
   return (
     <Card>
       <CardContent className="py-8 text-center">
-        <p className="text-slate-500">Validando sua sessão...</p>
+        <p className="text-slate-500 dark:text-slate-400">Validando sua sessão...</p>
       </CardContent>
     </Card>
   );
@@ -64,10 +65,10 @@ function LoginRequiredNotice() {
           Você precisa entrar ou criar uma conta para finalizar o pedido. Seu carrinho continua salvo.
         </p>
         <div className="flex justify-center gap-3">
-          <Link href="/login">
+          <Link href="/acesso">
             <Button variant="outline">Entrar</Button>
           </Link>
-          <Link href="/cadastro">
+          <Link href="/acesso?modo=cadastro">
             <Button>Criar conta</Button>
           </Link>
         </div>
@@ -83,9 +84,7 @@ function CustomerOnlyNotice({ role }: { role: Role }) {
         <p className="text-slate-600 dark:text-slate-300">
           Checkout é exclusivo para conta de cliente. Você já está logado em uma conta interna.
         </p>
-        <Link href={homePathForRole(role)}>
-          <Button variant="outline">Ir para o painel</Button>
-        </Link>
+        <div className="flex flex-col justify-center gap-3 sm:flex-row"><Link href="/acesso?trocar-conta=cliente"><Button>Entrar como cliente</Button></Link><Link href="/acesso?trocar-conta=cliente&modo=cadastro"><Button variant="outline">Criar conta cliente</Button></Link><Link href={homePathForRole(role)}><Button variant="ghost">Ir para o painel</Button></Link></div>
       </CardContent>
     </Card>
   );
@@ -119,6 +118,17 @@ function CheckoutForm() {
       setAddressId(def.id);
     }
   }, [addresses, addressId]);
+
+  const deliveryQuote = useQuery({
+    queryKey: ["delivery-quote", companySlug, addressId],
+    enabled: Boolean(companySlug && addressId),
+    retry: false,
+    staleTime: 5 * 60 * 1_000,
+    queryFn: async () => {
+      const { data } = await api.post<DeliveryQuote>("/me/orders/quote", { companySlug, addressId });
+      return data;
+    },
+  });
 
   const createOrder = useMutation({
     mutationFn: async () => {
@@ -156,7 +166,7 @@ function CheckoutForm() {
     return (
       <Card>
         <CardContent className="space-y-4 py-8 text-center">
-          <p className="text-slate-500">Seu carrinho está vazio.</p>
+          <p className="text-slate-500 dark:text-slate-400">Seu carrinho está vazio.</p>
           <Link href="/" className="font-medium text-brand-600 hover:underline">
             Voltar para a home
           </Link>
@@ -172,7 +182,7 @@ function CheckoutForm() {
           <CardTitle>Endereço de entrega</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {loadingAddresses && <p className="text-sm text-slate-500">Carregando endereços...</p>}
+          {loadingAddresses && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando endereços...</p>}
           {addresses?.map((addr) => (
             <label
               key={addr.id}
@@ -191,7 +201,7 @@ function CheckoutForm() {
                   {addr.street}, {addr.number}
                   {addr.isDefault && <span className="ml-2 text-xs font-normal text-brand-600">(padrão)</span>}
                 </span>
-                <span className="block text-slate-500">
+                <span className="block text-slate-500 dark:text-slate-400">
                   {addr.neighborhood}, {addr.city} - {addr.state}
                   {addr.complement ? ` · ${addr.complement}` : ""}
                 </span>
@@ -199,7 +209,7 @@ function CheckoutForm() {
             </label>
           ))}
           {!loadingAddresses && addresses?.length === 0 && !showAddressForm && (
-            <p className="text-sm text-slate-500">Você ainda não tem endereços cadastrados.</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Você ainda não tem endereços cadastrados.</p>
           )}
           {!showAddressForm && (
             <Button type="button" variant="outline" size="sm" onClick={() => setShowAddressForm(true)}>
@@ -260,17 +270,39 @@ function CheckoutForm() {
             <span className="text-slate-600 dark:text-slate-300">Subtotal</span>
             <span>{formatCurrency(subtotal)}</span>
           </div>
-          <div className="flex justify-between text-sm text-slate-500">
+          <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
+            <span>Rota de entrega</span>
+            <span>
+              {deliveryQuote.isLoading
+                ? "calculando..."
+                : deliveryQuote.data
+                  ? `${deliveryQuote.data.distanceKm.toFixed(2)} km · ~${deliveryQuote.data.durationMinutes} min`
+                  : "aguardando endereço"}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
             <span>Taxa de entrega</span>
-            <span>calculada no fechamento do pedido</span>
+            <span>
+              {deliveryQuote.data
+                ? formatCurrency(deliveryQuote.data.deliveryFee)
+                : "calculada pela rota"}
+            </span>
           </div>
         </CardContent>
       </Card>
 
-      {formError && <p className="text-sm text-red-600">{formError}</p>}
-      {createOrder.isError && <p className="text-sm text-red-600">{apiErrorMessage(createOrder.error)}</p>}
+      {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
+      {deliveryQuote.isError && <p className="text-sm text-red-600 dark:text-red-400">{apiErrorMessage(deliveryQuote.error)}</p>}
+      {createOrder.isError && <p className="text-sm text-red-600 dark:text-red-400">{apiErrorMessage(createOrder.error)}</p>}
 
-      <Button type="button" className="w-full" size="lg" isLoading={createOrder.isPending} onClick={handleConfirm}>
+      <Button
+        type="button"
+        className="w-full"
+        size="lg"
+        isLoading={createOrder.isPending}
+        disabled={deliveryQuote.isLoading || deliveryQuote.isError}
+        onClick={handleConfirm}
+      >
         Confirmar pedido
       </Button>
     </div>
@@ -342,18 +374,13 @@ function NewAddressForm({ onCreated, onCancel }: { onCreated: (addr: Address) =>
           <Input required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
         </FormField>
         <FormField label="Estado (UF)">
-          <Input
-            required
-            maxLength={2}
-            value={form.state}
-            onChange={(e) => setForm({ ...form, state: e.target.value.toUpperCase() })}
-          />
+          <BrazilStateSelect required value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
         </FormField>
         <FormField label="CEP">
-          <Input value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
+          <MaskedInput mask="cep" placeholder="00000-000" value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
         </FormField>
       </div>
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div className="flex gap-2">
         <Button type="button" size="sm" isLoading={createAddress.isPending} onClick={() => createAddress.mutate()}>
           Salvar endereço

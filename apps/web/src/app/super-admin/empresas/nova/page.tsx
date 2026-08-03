@@ -8,6 +8,7 @@ import { Company } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input } from "@/components/ui/input";
+import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 
 interface CreateCompanyForm {
   name: string;
@@ -91,13 +92,13 @@ export default function NewCompanyPage() {
             </FormField>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField label="CNPJ">
-                <Input value={form.cnpj} onChange={(e) => update("cnpj", e.target.value)} />
+                <MaskedInput mask="document" value={form.cnpj} onChange={(e) => update("cnpj", e.target.value)} />
               </FormField>
               <FormField label="Telefone">
-                <Input value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+                <MaskedInput mask="phone" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
               </FormField>
               <FormField label="WhatsApp">
-                <Input value={form.whatsapp} onChange={(e) => update("whatsapp", e.target.value)} />
+                <MaskedInput mask="phone" value={form.whatsapp} onChange={(e) => update("whatsapp", e.target.value)} />
               </FormField>
               <FormField label="Logo (URL)">
                 <Input value={form.logoUrl} onChange={(e) => update("logoUrl", e.target.value)} />
@@ -111,7 +112,7 @@ export default function NewCompanyPage() {
                 <Input value={form.city} onChange={(e) => update("city", e.target.value)} />
               </FormField>
               <FormField label="UF">
-                <Input maxLength={2} value={form.state} onChange={(e) => update("state", e.target.value.toUpperCase())} />
+                <BrazilStateSelect value={form.state} onChange={(e) => update("state", e.target.value)} />
               </FormField>
               <FormField label="Taxa de entrega base (R$)">
                 <Input
@@ -132,7 +133,7 @@ export default function NewCompanyPage() {
               </FormField>
             </div>
 
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
             <Button type="submit" isLoading={createCompany.isPending}>
               Criar empresa

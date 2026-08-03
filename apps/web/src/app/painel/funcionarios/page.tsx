@@ -2,8 +2,16 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DEFAULT_PERMISSIONS_BY_ROLE, PERMISSION_LABELS, ROLE_LABELS, Role } from "@chegowia/shared";
+import {
+  DEFAULT_PERMISSIONS_BY_ROLE,
+  PERMISSION_LABELS,
+  PERMISSION_SECTIONS,
+  PermissionKey,
+  ROLE_LABELS,
+  Role,
+} from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
+import { useAuthStore } from "@/lib/auth-store";
 import { Employee, PermissionCatalogItem } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
 import { Card } from "@/components/ui/card";
@@ -13,10 +21,12 @@ import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/badge";
 import { Table } from "@/components/ui/table";
 
-const INTERNAL_ROLES = [Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY];
+const INTERNAL_ROLES = [Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM];
 
 export default function FuncionariosPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const canManageEmployees = user?.role === Role.ADMIN || user?.permissionKeys?.includes(PermissionKey.FUNCIONARIOS_EDITAR);
   const [error, setError] = useState<string | null>(null);
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -24,6 +34,7 @@ export default function FuncionariosPage() {
     name: "",
     email: "",
     password: "",
+    confirmPassword: "",
     role: Role.FUNCIONARIO as string,
     position: "",
   });
@@ -54,7 +65,7 @@ export default function FuncionariosPage() {
   });
 
   function openCreateModal() {
-    setCreateForm({ name: "", email: "", password: "", role: Role.FUNCIONARIO, position: "" });
+    setCreateForm({ name: "", email: "", password: "", confirmPassword: "", role: Role.FUNCIONARIO, position: "" });
     setCreatePermissions(DEFAULT_PERMISSIONS_BY_ROLE[Role.FUNCIONARIO] ?? []);
     setCreateModalOpen(true);
   }
@@ -74,6 +85,7 @@ export default function FuncionariosPage() {
         name: createForm.name,
         email: createForm.email,
         password: createForm.password,
+        confirmPassword: createForm.confirmPassword,
         role: createForm.role,
         position: createForm.position || undefined,
         permissionKeys: createPermissions,
@@ -132,14 +144,14 @@ export default function FuncionariosPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Funcionários</h1>
-        <Button onClick={openCreateModal}>Novo funcionário</Button>
+        {canManageEmployees && <Button onClick={openCreateModal}>Novo funcionário</Button>}
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20">{error}</p>}
+      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
 
       <Card>
         {isLoading ? (
-          <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+          <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
         ) : (
           <Table
             columns={[
@@ -148,28 +160,36 @@ export default function FuncionariosPage() {
               { header: "Cargo", render: (e: Employee) => e.position ?? "-" },
               { header: "Papel", render: (e: Employee) => ROLE_LABELS[e.user.role] ?? e.user.role },
               {
+                header: "Acessos",
+                render: (e: Employee) => (
+                  <span className="text-sm text-slate-500 dark:text-slate-400">{e.rolePermissions.length} liberado{e.rolePermissions.length === 1 ? "" : "s"}</span>
+                ),
+              },
+              {
                 header: "Status",
                 render: (e: Employee) => (
                   <Badge tone={e.user.isActive ? "success" : "neutral"}>{e.user.isActive ? "Ativo" : "Inativo"}</Badge>
                 ),
               },
               { header: "Desde", render: (e: Employee) => formatDateTime(e.createdAt) },
-              {
-                header: "",
-                render: (e: Employee) => (
-                  <div className="flex gap-2">
-                    <button className="font-medium text-brand-600 hover:underline" onClick={() => openEditModal(e)}>
-                      Editar
-                    </button>
-                    <button
-                      className="font-medium text-slate-500 hover:underline"
-                      onClick={() => openPermissionsModal(e)}
-                    >
-                      Permissões
-                    </button>
-                  </div>
-                ),
-              },
+              ...(canManageEmployees
+                ? [{
+                  header: "",
+                  render: (e: Employee) => (
+                    <div className="flex gap-2">
+                      <button className="font-medium text-brand-600 hover:underline" onClick={() => openEditModal(e)}>
+                        Editar
+                      </button>
+                      <button
+                        className="font-medium text-slate-500 hover:underline dark:text-slate-400"
+                        onClick={() => openPermissionsModal(e)}
+                      >
+                        Liberar acessos
+                      </button>
+                    </div>
+                  ),
+                }]
+                : []),
             ]}
             rows={employees ?? []}
             rowKey={(e) => e.id}
@@ -192,9 +212,21 @@ export default function FuncionariosPage() {
           <FormField label="Senha">
             <Input
               type="password"
+              minLength={8}
+              pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).{8,}"
+              title="Use ao menos 8 caracteres, uma letra maiúscula, uma minúscula e um símbolo."
               value={createForm.password}
               onChange={(e) => setCreateForm((f) => ({ ...f, password: e.target.value }))}
             />
+            <p className="text-xs leading-5 text-slate-400">Mínimo de 8 caracteres, com maiúscula, minúscula e símbolo.</p>
+          </FormField>
+          <FormField label="Confirmar senha">
+            <Input
+              type="password"
+              value={createForm.confirmPassword}
+              onChange={(e) => setCreateForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+            />
+            {createForm.confirmPassword && createForm.password !== createForm.confirmPassword && <p className="text-xs font-bold text-rose-600 dark:text-rose-400">As senhas não coincidem.</p>}
           </FormField>
           <FormField label="Papel">
             <Select value={createForm.role} onChange={(e) => handleRoleChange(e.target.value)}>
@@ -211,24 +243,17 @@ export default function FuncionariosPage() {
               onChange={(e) => setCreateForm((f) => ({ ...f, position: e.target.value }))}
             />
           </FormField>
-          <div>
-            <p className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">Permissões</p>
-            <div className="space-y-1">
-              {permissionCatalog?.map((p) => (
-                <label key={p.key} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={createPermissions.includes(p.key)}
-                    onChange={() => togglePermission(createPermissions, setCreatePermissions, p.key)}
-                  />
-                  {PERMISSION_LABELS[p.key as keyof typeof PERMISSION_LABELS] ?? p.description}
-                </label>
-              ))}
-            </div>
+          <div className="rounded-2xl border border-brand-100 bg-brand-50/60 p-3 text-xs leading-5 text-slate-600 dark:border-brand-900/60 dark:bg-brand-950/30 dark:text-slate-300">
+            Selecionamos os acessos mais usados para <b>{ROLE_LABELS[createForm.role as Role] ?? "este papel"}</b>. Ajuste abaixo se quiser liberar mais ferramentas; o que não estiver marcado fica bloqueado no painel e na API.
           </div>
+          <AccessSelector
+            permissionCatalog={permissionCatalog}
+            selected={createPermissions}
+            onToggle={(key) => togglePermission(createPermissions, setCreatePermissions, key)}
+          />
           <Button
             className="w-full"
-            disabled={!createForm.name || !createForm.email || createForm.password.length < 6}
+            disabled={!createForm.name || !createForm.email || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).{8,}$/.test(createForm.password) || createForm.password !== createForm.confirmPassword}
             isLoading={createEmployee.isPending}
             onClick={() => createEmployee.mutate()}
           >
@@ -265,26 +290,69 @@ export default function FuncionariosPage() {
       <Modal
         open={!!permissionsEmployee}
         onClose={() => setPermissionsEmployee(null)}
-        title={`Permissões de ${permissionsEmployee?.user.name ?? ""}`}
+        title={`Liberar acessos · ${permissionsEmployee?.user.name ?? ""}`}
       >
         <div className="space-y-4">
-          <div className="space-y-1">
-            {permissionCatalog?.map((p) => (
-              <label key={p.key} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={permissionsDraft.includes(p.key)}
-                  onChange={() => togglePermission(permissionsDraft, setPermissionsDraft, p.key)}
-                />
-                {PERMISSION_LABELS[p.key as keyof typeof PERMISSION_LABELS] ?? p.description}
-              </label>
-            ))}
-          </div>
+          <p className="text-sm leading-6 text-slate-500 dark:text-slate-400">Marque as ações que esta pessoa pode usar. As demais ficam indisponíveis no painel e bloqueadas pela API.</p>
+          <button
+            type="button"
+            className="text-xs font-black text-brand-700 hover:underline dark:text-brand-300"
+            onClick={() => setPermissionsDraft(DEFAULT_PERMISSIONS_BY_ROLE[permissionsEmployee?.user.role ?? ""] ?? [])}
+          >
+            Restaurar acessos padrão do papel
+          </button>
+          <AccessSelector
+            permissionCatalog={permissionCatalog}
+            selected={permissionsDraft}
+            onToggle={(key) => togglePermission(permissionsDraft, setPermissionsDraft, key)}
+          />
           <Button className="w-full" isLoading={savePermissions.isPending} onClick={() => savePermissions.mutate()}>
-            Salvar permissões
+            Salvar acessos
           </Button>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+function AccessSelector({
+  permissionCatalog,
+  selected,
+  onToggle,
+}: {
+  permissionCatalog?: PermissionCatalogItem[];
+  selected: string[];
+  onToggle: (key: string) => void;
+}) {
+  const catalogByKey = new Map((permissionCatalog ?? []).map((permission) => [permission.key, permission]));
+
+  return (
+    <div className="space-y-3">
+      {PERMISSION_SECTIONS.map((section) => {
+        const permissions = section.keys
+          .map((key) => catalogByKey.get(key))
+          .filter((permission): permission is PermissionCatalogItem => Boolean(permission));
+        if (!permissions.length) return null;
+
+        return (
+          <section key={section.title} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-800/40">
+            <p className="text-sm font-black text-slate-800 dark:text-slate-100">{section.title}</p>
+            <p className="mt-0.5 text-xs leading-5 text-slate-500 dark:text-slate-400">{section.description}</p>
+            <div className="mt-2 space-y-2">
+              {permissions.map((permission) => (
+                <label key={permission.key} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(permission.key)}
+                    onChange={() => onToggle(permission.key)}
+                  />
+                  {PERMISSION_LABELS[permission.key as keyof typeof PERMISSION_LABELS] ?? permission.description}
+                </label>
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

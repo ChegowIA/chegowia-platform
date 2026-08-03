@@ -47,14 +47,21 @@ export default function SuperAdminDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Dashboard da plataforma</h1>
+      <div className="relative overflow-hidden rounded-3xl bg-slate-950 px-6 py-7 text-white shadow-2xl sm:px-8">
+        <div className="absolute -right-16 -top-24 h-56 w-56 rounded-full bg-brand-600/30 blur-3xl" />
+        <div className="relative">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-brand-300">ChegowIA Platform</p>
+          <h1 className="mt-2 text-3xl font-black tracking-tight">Pulso da plataforma</h1>
+          <p className="mt-1 text-sm text-slate-300">Empresas, pedidos e crescimento em uma visão executiva.</p>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {cards.map((card) => (
-          <Card key={card.label}>
+          <Card key={card.label} className="overflow-hidden border-brand-100 bg-gradient-to-br from-white to-brand-50/60 dark:border-brand-900/50 dark:from-brand-950/40 dark:to-slate-900">
             <CardContent>
               <p className="text-sm text-slate-500 dark:text-slate-400">{card.label}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
+              <p className="mt-2 text-3xl font-black tracking-tight text-slate-950 dark:text-slate-100">
                 {loadingOverview ? "..." : (card.value ?? "-")}
               </p>
             </CardContent>
@@ -68,7 +75,7 @@ export default function SuperAdminDashboardPage() {
         </CardHeader>
         <CardContent className="p-0">
           {loadingTop ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+            <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
           ) : (
             <Table
               columns={[
@@ -87,7 +94,7 @@ export default function SuperAdminDashboardPage() {
                 { header: "Faturamento", render: (row: TopCompany) => formatCurrency(row.revenue) },
               ]}
               rows={topCompanies ?? []}
-              rowKey={(row) => row.company?.id ?? Math.random().toString()}
+              rowKey={(row) => row.company?.id ?? `sem-empresa-${row.ordersCount}-${row.revenue}`}
             />
           )}
         </CardContent>
@@ -99,7 +106,7 @@ export default function SuperAdminDashboardPage() {
         </CardHeader>
         <CardContent className="p-0">
           {loadingGrowth ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+            <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
           ) : (
             <Table
               columns={[

@@ -1,16 +1,21 @@
 import { ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
+import { DEFAULT_PERMISSIONS_BY_ROLE } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { PermissionsService } from "../permissions/permissions.service";
 import { CreateEmployeeDto } from "./dto/create-employee.dto";
 import { UpdateEmployeeDto } from "./dto/update-employee.dto";
+import { AuthService } from "../auth/auth.service";
+import { RealtimeGateway } from "../realtime/realtime.gateway";
 
 @Injectable()
 export class EmployeesService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly permissionsService: PermissionsService,
+    private readonly auth: AuthService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   private db() {
@@ -42,14 +47,15 @@ export class EmployeesService {
   }
 
   async create(companyId: string, dto: CreateEmployeeDto) {
-    const existing = await this.db().user.findUnique({ where: { email: dto.email } });
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.db().user.findUnique({ where: { email } });
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
 
     const user = await this.db().user.create({
       data: {
         name: dto.name,
-        email: dto.email,
-        passwordHash: await bcrypt.hash(dto.password, 10),
+        email,
+        passwordHash: await bcrypt.hash(dto.password, 12),
         role: dto.role,
         companyId,
         employeeProfile: { create: { companyId, position: dto.position } },
@@ -57,9 +63,13 @@ export class EmployeesService {
       include: { employeeProfile: true },
     });
 
-    if (dto.permissionKeys?.length) {
-      await this.permissionsService.setForEmployee(user.employeeProfile.id, dto.permissionKeys);
-    }
+    // A interface já envia o preset do papel, mas o backend também o aplica
+    // quando um cliente de API não informa permissionKeys. Uma lista vazia é
+    // respeitada: o administrador pode criar um acesso totalmente bloqueado e
+    // liberar cada seção depois pela listagem de funcionários.
+    const permissionKeys = dto.permissionKeys ?? DEFAULT_PERMISSIONS_BY_ROLE[dto.role] ?? [];
+    await this.permissionsService.setForEmployee(user.employeeProfile.id, permissionKeys);
+    await this.auth.sendVerificationForUser(user.id);
     return this.findById(user.employeeProfile.id);
   }
 
@@ -75,11 +85,22 @@ export class EmployeesService {
     if (dto.position !== undefined) {
       await this.db().employeeProfile.update({ where: { id }, data: { position: dto.position } });
     }
+    // Desativar bloqueia o REST na requisição seguinte, mas o socket já
+    // conectado seguiria recebendo os eventos da sala da empresa — com dados
+    // pessoais dos clientes — até a aba ser fechada.
+    if (dto.isActive === false) {
+      this.realtime.disconnectUser(profile.user.id, "conta desativada");
+    }
     return this.findById(id);
   }
 
   async setPermissions(id: string, permissionKeys: string[]) {
-    await this.findById(id);
-    return this.permissionsService.setForEmployee(id, permissionKeys);
+    const profile = await this.findById(id);
+    const permissions = await this.permissionsService.setForEmployee(id, permissionKeys);
+    // A pessoa não precisa sair e entrar novamente: o painel dela busca a nova
+    // sessão quando recebe este evento, enquanto a API já aplica a alteração na
+    // próxima requisição pelo PermissionsGuard.
+    this.realtime.emitToUser(profile.user.id, "access.updated", { employeeProfileId: id });
+    return permissions;
   }
 }

@@ -1,14 +1,16 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { PaginationQueryDto, paginate } from "../common/dto/pagination-query.dto";
 import { CreateProductDto, ProductAddonDto, ProductVariationDto, UpdateProductDto } from "./dto/product.dto";
+import { LocalStorageService } from "../common/storage/local-storage.service";
 
 @Injectable()
 export class ProductsService {
-  constructor(@Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient) {}
+  constructor(
+    @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
+    private readonly storage: LocalStorageService,
+  ) {}
 
   private db() {
     return this.prisma as any;
@@ -59,24 +61,23 @@ export class ProductsService {
   }
 
   async uploadImage(id: string, file: any) {
-    await this.findById(id);
+    const current = await this.findById(id);
     if (!file) throw new BadRequestException("Envie uma imagem para o produto.");
-    if (!String(file.mimetype ?? "").startsWith("image/")) {
-      throw new BadRequestException("O arquivo precisa ser uma imagem.");
+    const imageUrl = await this.storage.savePublicImage(file, "products", id);
+
+    let product: any;
+    try {
+      product = await this.db().product.update({
+        where: { id },
+        data: { imageUrl },
+        include: { category: true, variations: true, addons: true },
+      });
+    } catch (error) {
+      await this.storage.removePublicUrl(imageUrl);
+      throw error;
     }
-
-    const extension = imageExtension(file.mimetype);
-    const uploadDir = join(process.cwd(), "uploads", "products");
-    await mkdir(uploadDir, { recursive: true });
-
-    const filename = `${id}-${Date.now()}.${extension}`;
-    await writeFile(join(uploadDir, filename), file.buffer);
-
-    return this.db().product.update({
-      where: { id },
-      data: { imageUrl: `/uploads/products/${filename}` },
-      include: { category: true, variations: true, addons: true },
-    });
+    await this.storage.removePublicUrl(current.imageUrl);
+    return product;
   }
 
   async remove(id: string) {
@@ -106,20 +107,5 @@ export class ProductsService {
     const addon = await this.db().productAddon.findFirst({ where: { id: addonId, productId } });
     if (!addon) throw new NotFoundException("Adicional não encontrado.");
     return this.db().productAddon.delete({ where: { id: addonId } });
-  }
-}
-
-function imageExtension(mimetype: string): string {
-  switch (mimetype) {
-    case "image/png":
-      return "png";
-    case "image/webp":
-      return "webp";
-    case "image/gif":
-      return "gif";
-    case "image/jpeg":
-    case "image/jpg":
-    default:
-      return "jpg";
   }
 }

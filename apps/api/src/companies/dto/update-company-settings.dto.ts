@@ -1,11 +1,15 @@
-import { IsBoolean, IsInt, IsOptional, IsString, Min } from "class-validator";
+import { IsArray, IsBoolean, IsEnum, IsInt, IsObject, IsOptional, IsString, Min } from "class-validator";
+import { PaymentMethod } from "@prisma/client";
 
 export class UpdateCompanySettingsDto {
   @IsOptional()
+  @IsObject()
   openingHours?: Record<string, string>;
 
   @IsOptional()
-  paymentMethodsEnabled?: string[];
+  @IsArray()
+  @IsEnum(PaymentMethod, { each: true })
+  paymentMethodsEnabled?: PaymentMethod[];
 
   @IsOptional()
   @IsBoolean()

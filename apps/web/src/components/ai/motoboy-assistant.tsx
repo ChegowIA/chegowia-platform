@@ -69,15 +69,15 @@ export function MotoboyAssistant() {
               type="button"
               onClick={() => submit(item)}
               disabled={sendMessage.isPending || !conversation?.id}
-              className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-slate-800/60 dark:border-slate-800 dark:text-slate-400"
             >
               {item}
             </button>
           ))}
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3">
-          {isLoading && <p className="text-sm text-slate-500">Carregando conversa...</p>}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3 dark:bg-slate-800/50 dark:border-slate-800">
+          {isLoading && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando conversa...</p>}
           {!isLoading && visibleMessages.length === 0 && (
             <AssistantMessage
               compact
@@ -96,7 +96,7 @@ export function MotoboyAssistant() {
           <div ref={endRef} />
         </div>
 
-        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+        {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/30 dark:text-red-400">{error}</p>}
 
         <form
           className="grid gap-2 sm:grid-cols-[1fr_auto]"

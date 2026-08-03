@@ -60,14 +60,14 @@ export default function OrderTrackingPage() {
     <>
       <PublicHeader />
       <main className="mx-auto max-w-2xl px-4 py-8">
-        {isLoading && <p className="text-slate-500">Carregando pedido...</p>}
-        {!isLoading && !order && <p className="text-slate-500">Pedido não encontrado.</p>}
+        {isLoading && <p className="text-slate-500 dark:text-slate-400">Carregando pedido...</p>}
+        {!isLoading && !order && <p className="text-slate-500 dark:text-slate-400">Pedido não encontrado.</p>}
         {order && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">Pedido #{order.id.slice(0, 8)}</h1>
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-slate-500 dark:text-slate-400">
                   {formatDateTime(order.createdAt)} · {order.company?.name}
                 </p>
               </div>
@@ -101,9 +101,9 @@ export default function OrderTrackingPage() {
                       <p className="font-medium text-slate-900 dark:text-slate-100">
                         {item.quantity}x {item.productName}
                       </p>
-                      {item.variationName && <p className="text-slate-500">{item.variationName}</p>}
+                      {item.variationName && <p className="text-slate-500 dark:text-slate-400">{item.variationName}</p>}
                       {item.addons && item.addons.length > 0 && (
-                        <p className="text-slate-500">+ {item.addons.map((a) => a.name).join(", ")}</p>
+                        <p className="text-slate-500 dark:text-slate-400">+ {item.addons.map((a) => a.name).join(", ")}</p>
                       )}
                       {item.notes && <p className="italic text-slate-400">Obs: {item.notes}</p>}
                     </div>
@@ -125,16 +125,16 @@ export default function OrderTrackingPage() {
 	                  {order.deliveryNeighborhood} - {order.deliveryCity}/{order.deliveryState}
 	                </p>
 	                {order.delivery?.motoboy ? (
-	                  <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-	                    <p className="font-semibold text-slate-900">Motoboy: {order.delivery.motoboy.name}</p>
-	                    <p className="text-xs text-slate-500">
+	                  <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 dark:bg-slate-800/60 dark:border-slate-800">
+	                    <p className="font-semibold text-slate-900 dark:text-slate-100">Motoboy: {order.delivery.motoboy.name}</p>
+	                    <p className="text-xs text-slate-500 dark:text-slate-400">
 	                      {order.delivery.motoboyLocationUpdatedAt
 	                        ? `Localização atualizada em ${formatDateTime(order.delivery.motoboyLocationUpdatedAt)}`
 	                        : "Aguardando compartilhamento de localização."}
 	                    </p>
 	                  </div>
 	                ) : (
-	                  <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500">
+	                  <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-slate-500 dark:bg-slate-800/60 dark:border-slate-800 dark:text-slate-400">
 	                    A loja ainda não atribuiu um motoboy para esta entrega.
 	                  </p>
 	                )}
@@ -168,16 +168,25 @@ export default function OrderTrackingPage() {
               </CardHeader>
               <CardContent className="space-y-1 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Subtotal</span>
+                  <span className="text-slate-500 dark:text-slate-400">Subtotal</span>
                   <span>{formatCurrency(order.subtotal)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Taxa de entrega</span>
+                  <span className="text-slate-500 dark:text-slate-400">Taxa de entrega</span>
                   <span>{formatCurrency(order.deliveryFee)}</span>
                 </div>
+                {order.deliveryDistanceKm !== null && order.deliveryDistanceKm !== undefined && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">Rota estimada</span>
+                    <span>
+                      {Number(order.deliveryDistanceKm).toFixed(2)} km
+                      {order.deliveryRouteDurationMinutes ? ` · ~${order.deliveryRouteDurationMinutes} min` : ""}
+                    </span>
+                  </div>
+                )}
                 {order.discount > 0 && (
                   <div className="flex justify-between">
-                    <span className="text-slate-500">Desconto</span>
+                    <span className="text-slate-500 dark:text-slate-400">Desconto</span>
                     <span>-{formatCurrency(order.discount)}</span>
                   </div>
                 )}

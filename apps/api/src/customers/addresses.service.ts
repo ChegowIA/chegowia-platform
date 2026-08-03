@@ -21,9 +21,17 @@ export class AddressesService {
   }
 
   async update(userId: string, id: string, dto: UpdateAddressDto) {
-    await this.ensureOwnership(userId, id);
+    const current = await this.ensureOwnership(userId, id);
     if (dto.isDefault) await this.clearDefault(userId);
-    return this.db().address.update({ where: { id }, data: dto });
+    const locationChanged = ["street", "number", "complement", "neighborhood", "city", "state", "zipCode"]
+      .some((field) => dto[field as keyof UpdateAddressDto] !== undefined && dto[field as keyof UpdateAddressDto] !== current[field as keyof typeof current]);
+    return this.db().address.update({
+      where: { id },
+      data: {
+        ...dto,
+        ...(locationChanged ? { latitude: null, longitude: null } : {}),
+      },
+    });
   }
 
   async remove(userId: string, id: string) {

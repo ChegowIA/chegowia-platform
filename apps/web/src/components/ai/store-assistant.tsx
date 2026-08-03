@@ -77,21 +77,21 @@ export function StoreAssistant({ slug, companyName }: { slug: string; companyNam
     >
       {!hasHydrated || isSessionLoading ? (
         <div className="p-3">
-          <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <p className="text-sm font-medium text-slate-500">Validando sua sessão...</p>
+          <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 dark:bg-slate-800/60 dark:border-slate-800">
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Validando sua sessão...</p>
           </div>
         </div>
       ) : !user ? (
         <div className="p-3">
-          <div className="rounded-lg border border-brand-100 bg-brand-50 p-3">
-            <p className="text-sm font-medium text-brand-900">Entre como cliente para conversar com a IA desta loja.</p>
+          <div className="rounded-lg border border-brand-100 bg-brand-50 p-3 dark:bg-brand-950/30 dark:border-brand-900/50">
+            <p className="text-sm font-medium text-brand-900 dark:text-brand-200">Entre como cliente para conversar com a IA desta loja.</p>
             <div className="mt-3 flex gap-2">
-              <Link href="/login" className="flex-1">
+              <Link href="/acesso" className="flex-1">
                 <Button variant="outline" className="w-full">
                   Entrar
                 </Button>
               </Link>
-              <Link href="/cadastro" className="flex-1">
+              <Link href="/acesso?modo=cadastro" className="flex-1">
                 <Button className="w-full">Criar conta</Button>
               </Link>
             </div>
@@ -99,8 +99,8 @@ export function StoreAssistant({ slug, companyName }: { slug: string; companyNam
         </div>
       ) : !canChat ? (
         <div className="p-3">
-          <div className="rounded-lg border border-brand-100 bg-brand-50 p-3">
-            <p className="text-sm font-medium text-brand-900">O assistente da loja é exclusivo para contas de cliente.</p>
+          <div className="rounded-lg border border-brand-100 bg-brand-50 p-3 dark:bg-brand-950/30 dark:border-brand-900/50">
+            <p className="text-sm font-medium text-brand-900 dark:text-brand-200">O assistente da loja é exclusivo para contas de cliente.</p>
             <Link href={homePathForRole(user.role)} className="mt-3 block">
               <Button variant="outline" className="w-full">
                 Ir para o painel
@@ -110,8 +110,8 @@ export function StoreAssistant({ slug, companyName }: { slug: string; companyNam
         </div>
       ) : (
         <div className="flex h-full min-h-0 flex-col gap-3 p-3">
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3">
-            {isLoading && <p className="text-sm text-slate-500">Carregando conversa...</p>}
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3 dark:bg-slate-800/50 dark:border-slate-800">
+            {isLoading && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando conversa...</p>}
             {visibleMessages.map((item) =>
               item.role === "USER" ? (
                 <UserMessage key={item.id} content={item.content} />
@@ -120,18 +120,32 @@ export function StoreAssistant({ slug, companyName }: { slug: string; companyNam
               ),
             )}
             {visibleMessages.length === 0 && !isLoading && (
-              <AssistantMessage
-                compact
-                content="Pode perguntar sobre produtos, valores, entrega, formas de pagamento ou sugestões do cardápio."
-              />
+              <>
+                <AssistantMessage
+                  compact
+                  content={`Oi! Eu sou o assistente da ${companyName}. Posso te ajudar a escolher algo gostoso ou tirar dúvidas sobre seu pedido.`}
+                />
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {["O que vocês mais vendem?", "Quero uma sugestão", "Como funciona a entrega?"].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => setMessage(suggestion)}
+                      className="rounded-full border border-brand-200 bg-white px-3 py-2 text-left text-xs font-bold text-brand-700 transition hover:border-brand-600 hover:bg-brand-600 hover:text-white"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </>
             )}
             <div ref={endRef} />
           </div>
 
-          {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+          {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600 dark:bg-red-950/30 dark:text-red-400">{error}</p>}
 
           <form
-            className="grid gap-2 sm:grid-cols-[1fr_auto]"
+            className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm focus-within:border-brand-300 focus-within:ring-4 focus-within:ring-brand-100 dark:bg-slate-900 dark:border-slate-800"
             onSubmit={(event) => {
               event.preventDefault();
               submit();
@@ -139,8 +153,8 @@ export function StoreAssistant({ slug, companyName }: { slug: string; companyNam
           >
             <Textarea
               rows={2}
-              className="min-h-[72px] resize-none"
-              placeholder="Digite sua pergunta..."
+              className="min-h-[46px] flex-1 resize-none border-0 px-2 py-2 shadow-none focus:ring-0"
+              placeholder="Escreva sua mensagem..."
               value={message}
               onChange={(event) => setMessage(event.target.value)}
             />
@@ -148,8 +162,10 @@ export function StoreAssistant({ slug, companyName }: { slug: string; companyNam
               type="submit"
               disabled={!message.trim()}
               isLoading={sendMessage.isPending || startConversation.isPending}
+              className="h-11 w-11 shrink-0 rounded-full px-0"
+              aria-label="Enviar mensagem"
             >
-              Enviar
+              <span aria-hidden="true" className="text-lg">↑</span>
             </Button>
           </form>
         </div>

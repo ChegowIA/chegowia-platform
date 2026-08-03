@@ -63,9 +63,9 @@ export default function SuperAdminCompaniesPage() {
 
       <Card>
         <CardContent className="p-0">
-          {error && <p className="px-5 py-4 text-sm text-red-600">{apiErrorMessage(error)}</p>}
+          {error && <p className="px-5 py-4 text-sm text-red-600 dark:text-red-400">{apiErrorMessage(error)}</p>}
           {isLoading ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+            <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
           ) : (
             <Table
               columns={[

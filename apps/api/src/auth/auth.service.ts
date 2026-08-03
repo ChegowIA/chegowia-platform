@@ -1,13 +1,23 @@
-import { randomBytes } from "node:crypto";
-import { ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
+import { createHash, randomBytes, randomInt } from "node:crypto";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
-import { Role } from "@prisma/client";
+import { AccountTokenType, Role } from "@prisma/client";
+import { PermissionKey } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { MailService } from "../common/mail/mail.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
+import { RealtimeGateway } from "../realtime/realtime.gateway";
 
 interface IssuedTokens {
   accessToken: string;
@@ -16,13 +26,25 @@ interface IssuedTokens {
 }
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
+const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
+const MFA_TTL_MS = 10 * 60 * 1000;
+const EMPLOYEE_ROLES: Role[] = [Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM];
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly jwtService: JwtService,
+    private readonly mail: MailService,
+    private readonly realtime: RealtimeGateway,
   ) {}
+
+  private db() {
+    return this.prisma as any;
+  }
 
   private toPayload(user: { id: string; email: string; role: Role; companyId: string | null }): JwtPayload {
     return { sub: user.id, email: user.email, role: user.role, companyId: user.companyId };
@@ -31,14 +53,16 @@ export class AuthService {
   private async issueTokens(user: { id: string; email: string; role: Role; companyId: string | null }): Promise<IssuedTokens> {
     const accessToken = this.jwtService.sign(this.toPayload(user), {
       secret: process.env.JWT_ACCESS_SECRET,
-      expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? "15m",
+      expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ?? "15m") as any,
+      issuer: process.env.JWT_ISSUER ?? "chegowia-api",
+      audience: process.env.JWT_AUDIENCE ?? "chegowia-web",
     });
 
     const secret = randomBytes(32).toString("hex");
     const tokenHash = await bcrypt.hash(secret, 10);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
 
-    const record = await (this.prisma as any).refreshToken.create({
+    const record = await this.db().refreshToken.create({
       data: { userId: user.id, tokenHash, expiresAt },
     });
 
@@ -50,37 +74,207 @@ export class AuthService {
   }
 
   async validateUser(email: string, password: string) {
-    const user = await (this.prisma as any).user.findUnique({ where: { email } });
+    const user = await this.db().user.findUnique({ where: { email: email.trim().toLowerCase() } });
     if (!user || !user.isActive) throw new UnauthorizedException("Credenciais inválidas.");
     const passwordOk = await bcrypt.compare(password, user.passwordHash);
     if (!passwordOk) throw new UnauthorizedException("Credenciais inválidas.");
+    if (!user.emailVerifiedAt) {
+      throw new UnauthorizedException(
+        "Confirme seu e-mail antes de entrar. Se necessário, solicite um novo link de confirmação.",
+      );
+    }
     return user;
   }
 
   async login(dto: LoginDto) {
     const user = await this.validateUser(dto.email, dto.password);
+    if (this.requiresMfa(user.role)) {
+      await this.db().accountToken.updateMany({
+        where: {
+          userId: user.id,
+          type: AccountTokenType.LOGIN_MFA,
+          usedAt: null,
+        },
+        data: { usedAt: new Date() },
+      });
+      const code = String(randomInt(100000, 1_000_000));
+      const challenge = await this.db().accountToken.create({
+        data: {
+          userId: user.id,
+          type: AccountTokenType.LOGIN_MFA,
+          tokenHash: await bcrypt.hash(code, 10),
+          expiresAt: new Date(Date.now() + MFA_TTL_MS),
+        },
+      });
+      await this.mail.sendMfaCode(user.email, user.name, code);
+      return {
+        mfaRequired: true as const,
+        challengeId: challenge.id,
+        emailHint: this.maskEmail(user.email),
+      };
+    }
     const tokens = await this.issueTokens(user);
     return {
       ...tokens,
-      user: this.publicUser(user),
+      mfaRequired: false as const,
+      user: await this.publicUser(user),
     };
   }
 
   async registerCustomer(dto: RegisterCustomerDto) {
-    const existing = await (this.prisma as any).user.findUnique({ where: { email: dto.email } });
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.db().user.findUnique({ where: { email } });
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
 
-    const user = await (this.prisma as any).user.create({
+    const acceptedAt = new Date();
+    const user = await this.db().user.create({
       data: {
-        name: dto.name,
-        email: dto.email,
-        passwordHash: await bcrypt.hash(dto.password, 10),
+        name: dto.name.trim(),
+        email,
+        passwordHash: await bcrypt.hash(dto.password, 12),
         role: Role.CLIENTE,
+        termsAcceptedAt: acceptedAt,
+        privacyAcceptedAt: acceptedAt,
+        addresses: {
+          create: {
+            label: "Casa",
+            street: dto.street,
+            number: dto.number,
+            neighborhood: dto.neighborhood,
+            city: dto.city,
+            state: dto.state.toUpperCase(),
+            zipCode: dto.zipCode,
+            complement: dto.complement,
+            isDefault: true,
+          },
+        },
       },
     });
+    const delivered = await this.sendVerificationForUser(user.id);
+    return {
+      verificationRequired: true,
+      email: user.email,
+      message: delivered
+        ? "Conta criada. Enviamos um link de confirmação para o seu e-mail."
+        : "Conta criada. O envio do e-mail ficou pendente; use “reenviar confirmação” em alguns instantes.",
+    };
+  }
 
+  async verifyEmail(token: string) {
+    const record = await this.findUrlToken(token, AccountTokenType.VERIFICACAO_EMAIL);
+    const user = await this.db().$transaction(async (tx: any) => {
+      await tx.accountToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() },
+      });
+      return tx.user.update({
+        where: { id: record.userId },
+        data: { emailVerifiedAt: new Date() },
+      });
+    });
     const tokens = await this.issueTokens(user);
-    return { ...tokens, user: this.publicUser(user) };
+    return { ...tokens, user: await this.publicUser(user) };
+  }
+
+  async resendVerification(emailInput: string) {
+    const email = emailInput.trim().toLowerCase();
+    const user = await this.db().user.findUnique({ where: { email } });
+    if (user?.isActive && !user.emailVerifiedAt) {
+      await this.sendVerificationForUser(user.id);
+    }
+    return {
+      success: true,
+      message: "Se existir uma conta pendente para este e-mail, um novo link será enviado.",
+    };
+  }
+
+  async sendVerificationForUser(userId: string) {
+    const user = await this.db().user.findUnique({ where: { id: userId } });
+    if (!user?.isActive || user.emailVerifiedAt) return true;
+    const token = await this.createUrlToken(
+      user.id,
+      AccountTokenType.VERIFICACAO_EMAIL,
+      EMAIL_VERIFICATION_TTL_MS,
+    );
+    try {
+      await this.mail.sendVerification(user.email, user.name, token);
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Falha ao enviar confirmação para o usuário ${user.id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return false;
+    }
+  }
+
+  async forgotPassword(emailInput: string) {
+    const email = emailInput.trim().toLowerCase();
+    const user = await this.db().user.findUnique({ where: { email } });
+    if (user?.isActive) {
+      const token = await this.createUrlToken(
+        user.id,
+        AccountTokenType.REDEFINICAO_SENHA,
+        PASSWORD_RESET_TTL_MS,
+      );
+      await this.mail.sendPasswordReset(user.email, user.name, token).catch((error) => {
+        this.logger.error(
+          `Falha ao enviar redefinição para o usuário ${user.id}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      });
+    }
+    return {
+      success: true,
+      message: "Se este e-mail estiver cadastrado, você receberá as instruções em instantes.",
+    };
+  }
+
+  async resetPassword(token: string, password: string) {
+    const record = await this.findUrlToken(token, AccountTokenType.REDEFINICAO_SENHA);
+    await this.db().$transaction([
+      this.db().user.update({
+        where: { id: record.userId },
+        data: {
+          passwordHash: await bcrypt.hash(password, 12),
+          emailVerifiedAt: new Date(),
+        },
+      }),
+      this.db().accountToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() },
+      }),
+      this.db().refreshToken.updateMany({
+        where: { userId: record.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+    // Redefinir senha é o caminho de "perdi o controle da conta": derrubar os
+    // sockets corta o stream ao vivo de quem estiver conectado com a
+    // credencial antiga.
+    this.realtime.disconnectUser(record.userId, "senha redefinida");
+    return { success: true };
+  }
+
+  async verifyMfa(challengeId: string, code: string) {
+    const record = await this.db().accountToken.findFirst({
+      where: {
+        id: challengeId,
+        type: AccountTokenType.LOGIN_MFA,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      include: { user: true },
+    });
+    if (!record || !record.user.isActive || !(await bcrypt.compare(code, record.tokenHash))) {
+      throw new UnauthorizedException("Código inválido ou expirado.");
+    }
+    await this.db().accountToken.update({
+      where: { id: record.id },
+      data: { usedAt: new Date() },
+    });
+    const tokens = await this.issueTokens(record.user);
+    return { ...tokens, user: await this.publicUser(record.user) };
   }
 
   async refresh(cookieValue: string | undefined) {
@@ -88,7 +282,7 @@ export class AuthService {
       throw new UnauthorizedException("Sessão inválida.");
     }
     const [tokenId, secret] = cookieValue.split(".");
-    const record = await (this.prisma as any).refreshToken.findUnique({ where: { id: tokenId } });
+    const record = await this.db().refreshToken.findUnique({ where: { id: tokenId } });
 
     if (!record || record.revokedAt || record.expiresAt < new Date()) {
       throw new UnauthorizedException("Sessão expirada, faça login novamente.");
@@ -96,33 +290,86 @@ export class AuthService {
     const secretOk = await bcrypt.compare(secret, record.tokenHash);
     if (!secretOk) throw new UnauthorizedException("Sessão inválida.");
 
-    await (this.prisma as any).refreshToken.update({
-      where: { id: record.id },
+    const revoked = await this.db().refreshToken.updateMany({
+      where: { id: record.id, revokedAt: null, expiresAt: { gt: new Date() } },
       data: { revokedAt: new Date() },
     });
+    if (revoked.count !== 1) {
+      throw new UnauthorizedException("Sessão já utilizada. Faça login novamente.");
+    }
 
-    const user = await (this.prisma as any).user.findUnique({ where: { id: record.userId } });
-    if (!user || !user.isActive) throw new UnauthorizedException("Usuário inativo.");
+    const user = await this.db().user.findUnique({ where: { id: record.userId } });
+    if (!user || !user.isActive || !user.emailVerifiedAt) throw new UnauthorizedException("Usuário inativo.");
 
     const tokens = await this.issueTokens(user);
-    return { ...tokens, user: this.publicUser(user) };
+    return { ...tokens, user: await this.publicUser(user) };
   }
 
   async logout(cookieValue: string | undefined) {
     if (!cookieValue || !cookieValue.includes(".")) return;
     const [tokenId] = cookieValue.split(".");
-    await (this.prisma as any).refreshToken
+    await this.db().refreshToken
       .update({ where: { id: tokenId }, data: { revokedAt: new Date() } })
       .catch(() => undefined);
   }
 
   async me(userId: string) {
-    const user = await (this.prisma as any).user.findUnique({ where: { id: userId } });
-    if (!user) throw new UnauthorizedException();
+    const user = await this.db().user.findUnique({ where: { id: userId } });
+    if (!user || !user.isActive) throw new UnauthorizedException();
     return this.publicUser(user);
   }
 
-  private publicUser(user: any) {
+  private async createUrlToken(userId: string, type: AccountTokenType, ttlMs: number) {
+    await this.db().accountToken.updateMany({
+      where: { userId, type, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    const token = randomBytes(32).toString("base64url");
+    await this.db().accountToken.create({
+      data: {
+        userId,
+        type,
+        tokenHash: this.hashUrlToken(token),
+        expiresAt: new Date(Date.now() + ttlMs),
+      },
+    });
+    return token;
+  }
+
+  private async findUrlToken(token: string, type: AccountTokenType) {
+    const record = await this.db().accountToken.findFirst({
+      where: {
+        tokenHash: this.hashUrlToken(token),
+        type,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    if (!record) throw new BadRequestException("Link inválido ou expirado.");
+    return record;
+  }
+
+  private hashUrlToken(token: string) {
+    return createHash("sha256").update(token).digest("hex");
+  }
+
+  private requiresMfa(role: Role) {
+    const configured = process.env.MFA_REQUIRED_ROLES
+      ?? (process.env.NODE_ENV === "production" ? "SUPER_ADMIN,ADMIN,REVENDEDOR" : "");
+    return configured
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .includes(role);
+  }
+
+  private maskEmail(email: string) {
+    const [name, domain] = email.split("@");
+    return `${name.slice(0, 2)}***@${domain}`;
+  }
+
+  private async publicUser(user: any) {
+    const permissionKeys = await this.permissionKeysFor(user);
     return {
       id: user.id,
       name: user.name,
@@ -130,6 +377,28 @@ export class AuthService {
       role: user.role,
       companyId: user.companyId,
       avatarUrl: user.avatarUrl,
+      emailVerified: Boolean(user.emailVerifiedAt),
+      permissionKeys,
     };
+  }
+
+  /**
+   * O painel usa esta lista somente para mostrar ou desabilitar seções. A API
+   * continua validando cada ação no PermissionsGuard, portanto a interface não
+   * se torna uma fonte de autorização.
+   */
+  private async permissionKeysFor(user: { id: string; role: Role }) {
+    if (user.role === Role.ADMIN || user.role === Role.SUPER_ADMIN) {
+      return Object.values(PermissionKey);
+    }
+    if (!EMPLOYEE_ROLES.includes(user.role)) {
+      return [];
+    }
+
+    const profile = await this.db().employeeProfile.findUnique({
+      where: { userId: user.id },
+      select: { rolePermissions: { select: { permission: { select: { key: true } } } } },
+    });
+    return (profile?.rolePermissions ?? []).map((rolePermission: any) => rolePermission.permission.key);
   }
 }

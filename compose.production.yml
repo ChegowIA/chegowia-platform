@@ -1,0 +1,202 @@
+name: chegowia
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  storage-init:
+    image: alpine:3.22
+    restart: "no"
+    command: ["sh", "-c", "mkdir -p /data/uploads /data/private_uploads && chown -R 1001:1001 /data/uploads /data/private_uploads && chmod 0750 /data/uploads /data/private_uploads"]
+    volumes:
+      - ${DATA_ROOT:-/srv/chegowia/data}/uploads:/data/uploads
+      - ${DATA_ROOT:-/srv/chegowia/data}/private_uploads:/data/private_uploads
+    network_mode: none
+    logging: *default-logging
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?obrigatorio}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-chegowia}
+      MYSQL_USER: ${MYSQL_USER:-chegowia}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?obrigatorio}
+      TZ: ${TZ:-America/Sao_Paulo}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=-03:00
+      - --slow-query-log=1
+      - --long-query-time=2
+    volumes:
+      - ${DATA_ROOT:-/srv/chegowia/data}/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [backend]
+    logging: *default-logging
+
+  clamav:
+    image: clamav/clamav:1.4_base
+    restart: unless-stopped
+    volumes:
+      - ${DATA_ROOT:-/srv/chegowia/data}/clamav:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping", "10"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 180s
+    networks: [backend]
+    logging: *default-logging
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: ${PRODUCTION_ENV_FILE:-.env.production}
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      # Só HTTP. A fila de cobrança e a limpeza rodam no serviço `worker`.
+      APP_ROLE: api
+      UPLOAD_ROOT: /data/uploads
+      PRIVATE_UPLOAD_ROOT: /data/private_uploads
+      CLAMAV_SCAN_ENABLED: "true"
+      CLAMAV_CONFIG_PATH: /etc/clamav/clamd-client.conf
+    volumes:
+      - ${DATA_ROOT:-/srv/chegowia/data}/uploads:/data/uploads
+      - ${DATA_ROOT:-/srv/chegowia/data}/private_uploads:/data/private_uploads
+      - ./infra/clamd-client.conf:/etc/clamav/clamd-client.conf:ro
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks: [backend, frontend]
+    logging: *default-logging
+
+  # Mesma imagem da API, papel diferente: processa a fila de eventos Stripe, os
+  # repasses, a sincronização de uso e a limpeza. Precisa de exatamente uma
+  # réplica — os claims são atômicos, mas duplicar não traz ganho. Fica só na
+  # rede interna: o Caddy não roteia para cá, e o HTTP existe apenas para o
+  # health check abaixo.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    deploy:
+      replicas: 1
+    env_file: ${PRODUCTION_ENV_FILE:-.env.production}
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      APP_ROLE: worker
+      UPLOAD_ROOT: /data/uploads
+      PRIVATE_UPLOAD_ROOT: /data/private_uploads
+      CLAMAV_SCAN_ENABLED: "true"
+      CLAMAV_CONFIG_PATH: /etc/clamav/clamd-client.conf
+    volumes:
+      - ${DATA_ROOT:-/srv/chegowia/data}/uploads:/data/uploads
+      - ${DATA_ROOT:-/srv/chegowia/data}/private_uploads:/data/private_uploads
+      - ./infra/clamd-client.conf:/etc/clamav/clamd-client.conf:ro
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 45s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks: [backend]
+    logging: *default-logging
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: https://${DOMAIN}
+        NEXT_PUBLIC_SOCKET_URL: https://${DOMAIN}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /app/apps/web/.next/cache:size=256m,mode=1777
+    networks: [frontend]
+    logging: *default-logging
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?obrigatorio}
+      TLS_EMAIL: ${TLS_EMAIL:?obrigatorio}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks: [frontend]
+    logging: *default-logging
+
+networks:
+  frontend:
+  backend:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:

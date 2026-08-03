@@ -1,10 +1,16 @@
-import { IsString, MinLength } from "class-validator";
+import { IsString } from "class-validator";
+import { IsStrongPassword } from "../../common/validators/strong-password.validator";
+import { MatchesProperty } from "../../common/validators/match-property.validator";
 
 export class ChangePasswordDto {
   @IsString()
   currentPassword: string;
 
   @IsString()
-  @MinLength(6)
+  @IsStrongPassword()
   newPassword: string;
+
+  @IsString()
+  @MatchesProperty("newPassword")
+  confirmPassword: string;
 }

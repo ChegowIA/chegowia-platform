@@ -6,8 +6,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { Order } from "@/lib/types";
 import { formatCurrency, formatDateTime } from "@/lib/format";
-import { connectSocket, disconnectSocket, getSocket } from "@/lib/socket-client";
+import { connectSocket } from "@/lib/socket-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toneCard } from "@/lib/surface";
 import { Button } from "@/components/ui/button";
 import { OrderStatusBadge } from "@/components/ui/badge";
 import { Table } from "@/components/ui/table";
@@ -48,7 +49,6 @@ export default function DashboardPage() {
     return () => {
       socket.off("order.created", onCreated);
       socket.off("order.status_changed", onStatusChanged);
-      disconnectSocket();
     };
   }, [queryClient]);
 
@@ -56,8 +56,13 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Dashboard</h1>
+      <div className="relative overflow-hidden rounded-3xl bg-slate-950 px-6 py-7 text-white shadow-2xl sm:px-8">
+        <div className="relative flex items-center justify-between">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-brand-300">Visão geral de hoje</p>
+          <h1 className="mt-2 text-3xl font-black tracking-tight">Sua operação, agora</h1>
+          <p className="mt-1 text-sm text-slate-300">Pedidos, receita e pontos que precisam da sua atenção.</p>
+        </div>
         {newOrdersCount > 0 && (
           <button
             onClick={() => setNewOrdersCount(0)}
@@ -66,10 +71,11 @@ export default function DashboardPage() {
             {newOrdersCount} novo{newOrdersCount > 1 ? "s" : ""} pedido{newOrdersCount > 1 ? "s" : ""}
           </button>
         )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card>
+        <Card className={toneCard("sky")}>
           <CardHeader>
             <CardTitle>Pedidos hoje</CardTitle>
           </CardHeader>
@@ -79,7 +85,7 @@ export default function DashboardPage() {
             </p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className={toneCard("emerald")}>
           <CardHeader>
             <CardTitle>Receita hoje</CardTitle>
           </CardHeader>
@@ -87,12 +93,12 @@ export default function DashboardPage() {
             <p className="text-3xl font-bold text-slate-900 dark:text-slate-50">{formatCurrency(revenueToday)}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className={toneCard("rose")}>
           <CardHeader>
             <CardTitle>Pedidos atrasados</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold text-red-600">{loadingDelayed ? "..." : delayedOrders?.length ?? 0}</p>
+            <p className="text-3xl font-bold text-red-600 dark:text-red-400">{loadingDelayed ? "..." : delayedOrders?.length ?? 0}</p>
           </CardContent>
         </Card>
       </div>

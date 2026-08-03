@@ -1,0 +1,88 @@
+name: Qualidade e segurança
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: chegowia_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate --workspace apps/api
+      - name: Validar migrações em banco vazio
+        run: npm run prisma:deploy --workspace apps/api
+        env:
+          DATABASE_URL: mysql://root:ci-root-password@127.0.0.1:3306/chegowia_ci
+      - run: npm run verify
+      - name: Testes ponta a ponta contra MySQL real
+        # O `verify` roda sem infraestrutura, por isso é rápido. Os e2e sobem o
+        # AppModule inteiro e são o único lugar onde o isolamento multiempresa
+        # é exercido de verdade — a extensão do Prisma que o garante é
+        # justamente o que os testes unitários substituem por mock.
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: mysql://root:ci-root-password@127.0.0.1:3306/chegowia_ci
+          JWT_ACCESS_SECRET: ci-secret-com-mais-de-32-caracteres-aqui
+          APP_URL: http://localhost:3000
+          CORS_ORIGIN: http://localhost:3000
+          FISCAL_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+
+  imagem:
+    name: Scan das imagens de container
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir imagem da API
+        run: docker build -f apps/api/Dockerfile -t chegowia-api:ci .
+      # A auditoria de dependências (`npm audit`) não enxerga o que vem da
+      # imagem base: openssl, glibc, o próprio Node. Uma CVE crítica aí é tão
+      # explorável quanto uma no package.json.
+      - name: Vulnerabilidades da imagem
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: chegowia-api:ci
+          format: sarif
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Publicar resultado no Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-api.sarif
+      - name: Falhar em vulnerabilidade crítica sem correção pendente
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: chegowia-api:ci
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true

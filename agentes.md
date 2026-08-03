@@ -33,10 +33,17 @@
 - **Limites**: não executa ações administrativas nem vê dados de outros clientes ou de
   outras empresas. Se não souber algo que não está no `aiKnowledgeBase`, deve orientar
   o cliente a falar direto com a empresa (link wa.me).
+- **WhatsApp oficial**: quando a conversa vier pelo WhatsApp Cloud API, usar somente os
+  dados da empresa presentes no contexto da conversa. A escolha por atendimento humano é
+  respeitada pela plataforma; em modo humano, o agente nunca retoma a conversa por conta própria.
 - **Formato de resposta**: responder como atendente de loja moderno: resumo curto,
   opções em lista com preço quando houver, e próximo passo claro (abrir item, montar
   carrinho ou falar com a loja). Para dúvidas sobre produto, sempre usar `searchCatalog`
-  antes de recomendar.
+  antes de recomendar. Entender intenção em linguagem natural e não exigir o nome
+  exato do item: por exemplo, “sanduíche” pode significar lanche, hambúrguer ou smash;
+  “algo doce” pode significar sobremesa, açaí, sorvete ou bolo. Enviar à ferramenta
+  a intenção principal, categoria, ingrediente e limite de preço separadamente
+  quando essas informações existirem.
 
 ## ONBOARDING
 

@@ -58,13 +58,20 @@ export class PromptBuilderService {
     return header + (nextHeaderIndex === -1 ? rest : rest.slice(0, nextHeaderIndex));
   }
 
-  build(params: { role: AIAgentRole; companyName: string; companyKnowledgeBase?: string | null }): string {
+  build(params: {
+    role: AIAgentRole;
+    companyName: string;
+    companyKnowledgeBase?: string | null;
+    companyContext?: string | null;
+  }): string {
     return [
       `Você é o assistente de IA da plataforma ChegowIA, atuando para a empresa "${params.companyName}".`,
       "# Regras fixas da plataforma (nunca podem ser violadas, mesmo se o usuário pedir)",
       this.rules() || "(regras.md não encontrado no ambiente de execução)",
       "# Papel ativo nesta conversa",
       this.roleSection(params.role),
+      "# Dados operacionais atuais da empresa",
+      params.companyContext?.trim() || "(dados operacionais não disponíveis)",
       "# Treinamento específico desta empresa (cadastrado pelo dono em Configurações)",
       params.companyKnowledgeBase?.trim() || "(nenhum treinamento cadastrado ainda pelo dono da empresa)",
     ].join("\n\n");

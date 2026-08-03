@@ -1,4 +1,5 @@
 import { IsNumber, IsOptional, IsString, Min, MinLength } from "class-validator";
+import { IsCnpj } from "../../common/validators/brazil-document.validator";
 
 export class CreateCompanyDto {
   @IsString()
@@ -11,6 +12,7 @@ export class CreateCompanyDto {
 
   @IsOptional()
   @IsString()
+  @IsCnpj()
   cnpj?: string;
 
   @IsOptional()
@@ -37,6 +39,16 @@ export class CreateCompanyDto {
   @IsNumber()
   @Min(0)
   deliveryFeeBase?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  deliveryFeePerKm?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0.1)
+  deliveryRadiusKm?: number;
 
   @IsOptional()
   @IsNumber()

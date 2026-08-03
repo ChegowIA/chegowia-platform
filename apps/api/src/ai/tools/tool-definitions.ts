@@ -52,7 +52,7 @@ export const OPERATIONAL_TOOLS: AIToolDefinition[] = [
   {
     name: "createPromotionDraft",
     description:
-      "Cria um RASCUNHO de promoção pendente de confirmação humana. Nunca ativa a promoção sozinho — sempre pede confirmação explícita do ADMIN antes de ativar.",
+      "Cria um RASCUNHO de promoção pendente de confirmação humana. Nunca ativa a promoção sozinho — sempre pede confirmação explícita do ADMIN antes de ativar. A promoção é apenas divulgação: o carrinho NÃO abate o valor automaticamente, o desconto é concedido pela loja no atendimento. Deixe isso claro ao confirmar com o lojista.",
     parameters: {
       type: "object",
       properties: {
@@ -89,7 +89,7 @@ export const ATENDIMENTO_TOOLS: AIToolDefinition[] = [
   {
     name: "searchCatalog",
     description:
-      "Busca produtos ativos do cardápio público da empresa atual por nome, descrição, categoria ou faixa de preço. Use sempre antes de responder dúvidas sobre itens específicos.",
+      "Busca semanticamente produtos ativos do cardápio público por nome, descrição, categoria, ingrediente ou faixa de preço. Aceita linguagem natural e sinônimos (ex.: sanduíche, lanche, hambúrguer e smash). Use sempre antes de responder dúvidas sobre itens.",
     parameters: {
       type: "object",
       properties: {

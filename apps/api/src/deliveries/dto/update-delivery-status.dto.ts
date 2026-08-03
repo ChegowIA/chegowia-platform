@@ -1,5 +1,5 @@
-import { IsEnum, IsOptional, IsString } from "class-validator";
-import { DeliveryStatus } from "@prisma/client";
+import { IsEnum, IsOptional, IsString, MaxLength, ValidateIf } from "class-validator";
+import { DeliveryProblemReason, DeliveryStatus } from "@prisma/client";
 
 export class UpdateDeliveryStatusDto {
   @IsEnum(DeliveryStatus)
@@ -7,5 +7,15 @@ export class UpdateDeliveryStatusDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   notes?: string;
+
+  @ValidateIf((dto: UpdateDeliveryStatusDto) => dto.status === DeliveryStatus.PROBLEMA)
+  @IsEnum(DeliveryProblemReason, { message: "Selecione um motivo válido para o problema." })
+  problemReason?: DeliveryProblemReason;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  problemDescription?: string;
 }

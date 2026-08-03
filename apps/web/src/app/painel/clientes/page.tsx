@@ -63,7 +63,7 @@ export default function ClientesPage() {
           />
           <Card>
             {loadingActive ? (
-              <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+              <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
             ) : (
               <Table
                 columns={[
@@ -82,7 +82,7 @@ export default function ClientesPage() {
           </Card>
           {activeData && activeData.totalPages > 1 && (
             <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
                 Página {activeData.page} de {activeData.totalPages} · {activeData.total} clientes
               </p>
               <div className="flex gap-2">
@@ -116,7 +116,7 @@ export default function ClientesPage() {
           </div>
           <Card>
             {loadingInactive ? (
-              <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+              <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
             ) : (
               <Table
                 columns={[

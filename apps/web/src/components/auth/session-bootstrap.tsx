@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { api, refreshAccessToken } from "@/lib/api-client";
 import { AuthUser, useAuthStore } from "@/lib/auth-store";
+import { connectSocket, disconnectSocket } from "@/lib/socket-client";
+import { CustomerOrderTracker } from "@/components/orders/customer-order-tracker";
 
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
@@ -42,5 +44,30 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
     };
   }, [hasHydrated, setSession, setSessionLoading]);
 
-  return <>{children}</>;
+  /**
+   * O servidor derruba os sockets quando o vínculo muda (conta desativada,
+   * senha alterada ou redefinida). Sem tratar o evento, a pessoa ficaria com a
+   * tela viva e sem atualizações, sem entender o que houve.
+   */
+  useEffect(() => {
+    if (!hasHydrated) return;
+    const socket = connectSocket();
+    const onRevoked = (payload?: { reason?: string }) => {
+      useAuthStore.getState().clear();
+      disconnectSocket();
+      const motivo = payload?.reason ? `?motivo=${encodeURIComponent(payload.reason)}` : "";
+      window.location.href = `/acesso${motivo}`;
+    };
+    socket.on("session.revoked", onRevoked);
+    return () => {
+      socket.off("session.revoked", onRevoked);
+    };
+  }, [hasHydrated]);
+
+  return (
+    <>
+      {children}
+      <CustomerOrderTracker />
+    </>
+  );
 }

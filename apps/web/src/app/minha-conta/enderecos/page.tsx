@@ -8,6 +8,7 @@ import { PublicHeader } from "@/components/layout/public-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input } from "@/components/ui/input";
+import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { Modal } from "@/components/ui/modal";
 
 interface AddressFormState {
@@ -124,10 +125,10 @@ export default function AddressesPage() {
           </Button>
         </div>
 
-        {isLoading && <p className="text-slate-500">Carregando...</p>}
+        {isLoading && <p className="text-slate-500 dark:text-slate-400">Carregando...</p>}
         {!isLoading && addresses?.length === 0 && (
           <Card>
-            <CardContent className="py-8 text-center text-slate-500">Nenhum endereço cadastrado.</CardContent>
+            <CardContent className="py-8 text-center text-slate-500 dark:text-slate-400">Nenhum endereço cadastrado.</CardContent>
           </Card>
         )}
 
@@ -141,7 +142,7 @@ export default function AddressesPage() {
                     {addr.street}, {addr.number}
                     {addr.isDefault && <span className="ml-2 text-xs font-normal text-brand-600">(padrão)</span>}
                   </p>
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
                     {addr.neighborhood}, {addr.city} - {addr.state}
                     {addr.complement ? ` · ${addr.complement}` : ""}
                   </p>
@@ -197,15 +198,10 @@ export default function AddressesPage() {
               <Input required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
             </FormField>
             <FormField label="Estado (UF)">
-              <Input
-                required
-                maxLength={2}
-                value={form.state}
-                onChange={(e) => setForm({ ...form, state: e.target.value.toUpperCase() })}
-              />
+              <BrazilStateSelect required value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
             </FormField>
             <FormField label="CEP">
-              <Input value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
+              <MaskedInput mask="cep" placeholder="00000-000" value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
             </FormField>
           </div>
           <FormField label="Referência">
@@ -219,7 +215,7 @@ export default function AddressesPage() {
             />
             Definir como endereço padrão
           </label>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => setModalOpen(false)}>
               Cancelar

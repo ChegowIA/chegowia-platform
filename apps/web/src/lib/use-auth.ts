@@ -8,8 +8,18 @@ interface LoginPayload {
 }
 
 interface RegisterPayload extends LoginPayload {
+  confirmPassword: string;
   name: string;
   phone?: string;
+  street: string;
+  number: string;
+  neighborhood: string;
+  city: string;
+  state: string;
+  zipCode?: string;
+  complement?: string;
+  acceptTerms: boolean;
+  acceptPrivacy: boolean;
 }
 
 export function useLogin() {
@@ -19,15 +29,26 @@ export function useLogin() {
       const { data } = await api.post("/auth/login", payload);
       return data;
     },
-    onSuccess: (data) => setSession(data.accessToken, data.user),
+    onSuccess: (data) => {
+      if (!data.mfaRequired) setSession(data.accessToken, data.user);
+    },
   });
 }
 
 export function useRegisterCustomer() {
-  const setSession = useAuthStore((s) => s.setSession);
   return useMutation({
     mutationFn: async (payload: RegisterPayload) => {
       const { data } = await api.post("/auth/register", payload);
+      return data;
+    },
+  });
+}
+
+export function useVerifyMfa() {
+  const setSession = useAuthStore((s) => s.setSession);
+  return useMutation({
+    mutationFn: async (payload: { challengeId: string; code: string }) => {
+      const { data } = await api.post("/auth/mfa/verify", payload);
       return data;
     },
     onSuccess: (data) => setSession(data.accessToken, data.user),

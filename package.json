@@ -7,11 +7,37 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:api": "npm run start:dev --workspace apps/api",
+    "prepare:api": "npm run build --workspace packages/shared && npm run prisma:generate --workspace apps/api",
+    "dev:api": "npm run prepare:api && npm run start:dev --workspace apps/api",
     "dev:web": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace packages/shared && npm run build --workspace apps/api && npm run build --workspace apps/web",
+    "lint": "npm run lint --workspace apps/api && npm run lint --workspace apps/web",
+    "typecheck": "npm run build --workspace packages/shared && npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
+    "test": "npm run test --workspace apps/api",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "verify": "npm run lint && npm run check:dark && npm run check:glyphs && npm run typecheck && npm run test && npm run audit:prod && npm run build",
     "prisma:generate": "npm run prisma:generate --workspace apps/api",
     "prisma:migrate": "npm run prisma:migrate --workspace apps/api",
-    "prisma:seed": "npm run prisma:seed --workspace apps/api"
+    "prisma:seed": "npm run prisma:seed --workspace apps/api",
+    "test:e2e": "npm run test:e2e --workspace apps/api",
+    "check:dark": "node scripts/check-dark-mode.mjs",
+    "check:glyphs": "node scripts/check-glyphs.mjs"
+  },
+  "overrides": {
+    "@nestjs/swagger": {
+      "js-yaml": "5.2.2"
+    },
+    "postcss": "8.5.25",
+    "sharp": "0.35.3"
+  },
+  "devDependencies": {
+    "@nestjs/common": "^11.1.28",
+    "@nestjs/core": "^11.1.28",
+    "@nestjs/platform-express": "^11.1.28",
+    "@nestjs/platform-socket.io": "^11.1.28",
+    "@nestjs/websockets": "^11.1.28",
+    "@types/supertest": "^7.2.1",
+    "rxjs": "7.8.1",
+    "supertest": "^7.2.2"
   }
 }

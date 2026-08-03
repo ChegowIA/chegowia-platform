@@ -36,10 +36,10 @@ export default function MyOrdersPage() {
       <main className="mx-auto max-w-3xl px-4 py-8">
         <h1 className="mb-6 text-2xl font-bold text-slate-900 dark:text-slate-50">Meus pedidos</h1>
 
-        {isLoading && <p className="text-slate-500">Carregando pedidos...</p>}
+        {isLoading && <p className="text-slate-500 dark:text-slate-400">Carregando pedidos...</p>}
         {!isLoading && orders?.length === 0 && (
           <Card>
-            <CardContent className="py-8 text-center text-slate-500">Você ainda não fez nenhum pedido.</CardContent>
+            <CardContent className="py-8 text-center text-slate-500 dark:text-slate-400">Você ainda não fez nenhum pedido.</CardContent>
           </Card>
         )}
 
@@ -54,10 +54,10 @@ export default function MyOrdersPage() {
                   >
                     Pedido #{order.id.slice(0, 8)}
                   </Link>
-                  <p className="text-sm text-slate-500">
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
                     {formatDateTime(order.createdAt)} · {order.company?.name}
                   </p>
-                  <p className="text-sm text-slate-500">{formatCurrency(order.total)}</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">{formatCurrency(order.total)}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <OrderStatusBadge status={order.status} />
@@ -74,7 +74,7 @@ export default function MyOrdersPage() {
             </Card>
           ))}
         </div>
-        {repeatOrder.isError && <p className="mt-3 text-sm text-red-600">{apiErrorMessage(repeatOrder.error)}</p>}
+        {repeatOrder.isError && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{apiErrorMessage(repeatOrder.error)}</p>}
       </main>
     </>
   );

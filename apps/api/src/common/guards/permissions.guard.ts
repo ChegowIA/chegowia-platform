@@ -8,7 +8,7 @@ import { PRISMA_CLIENT } from "../prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../prisma/prisma-client.factory";
 
 /**
- * Checa permissões granulares de um FUNCIONARIO/COZINHA/MOTOBOY para o módulo da
+ * Checa permissões granulares de um FUNCIONARIO/COZINHA/MOTOBOY/GARCOM para o módulo da
  * rota. ADMIN e SUPER_ADMIN sempre passam — eles têm acesso irrestrito à própria
  * empresa/plataforma (ver regras.md, seção 1).
  */
@@ -29,7 +29,6 @@ export class PermissionsGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (!user) throw new ForbiddenException("Não autenticado.");
     if (user.role === Role.SUPER_ADMIN || user.role === Role.ADMIN) return true;
-
     const employeeProfile = await (this.prisma as any).employeeProfile.findUnique({
       where: { userId: user.sub },
       include: { rolePermissions: { include: { permission: true } } },

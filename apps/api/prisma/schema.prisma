@@ -17,7 +17,9 @@ enum Role {
   FUNCIONARIO
   COZINHA
   MOTOBOY
+  GARCOM
   CLIENTE
+  REVENDEDOR
 }
 
 enum OrderStatus {
@@ -36,6 +38,16 @@ enum DeliveryStatus {
   EM_ROTA
   ENTREGUE
   PROBLEMA
+}
+
+enum DeliveryProblemReason {
+  CLIENTE_NAO_ATENDEU
+  ENDERECO_NAO_LOCALIZADO
+  CLIENTE_RECUSOU
+  VEICULO_COM_PROBLEMA
+  PEDIDO_DANIFICADO
+  AREA_DE_RISCO
+  OUTRO
 }
 
 enum PaymentMethod {
@@ -66,6 +78,7 @@ enum AIAgentRole {
 enum AIChannel {
   INTERNO
   CLIENTE
+  WHATSAPP
 }
 
 enum AIMessageRole {
@@ -84,34 +97,249 @@ enum MessagingChannelStatus {
   INATIVO
 }
 
+enum WhatsAppConversationMode {
+  VIRTUAL
+  HUMANO
+}
+
+enum WhatsAppConversationStatus {
+  ABERTA
+  ENCERRADA
+}
+
+enum WhatsAppMessageDirection {
+  RECEBIDA
+  ENVIADA
+}
+
+enum WhatsAppMessageStatus {
+  RECEBIDA
+  ENVIADA
+  ENTREGUE
+  LIDA
+  FALHOU
+}
+
+enum UsageSource {
+  IA
+  WHATSAPP
+}
+
+enum UsageMetric {
+  IA_TOKENS_ENTRADA
+  IA_TOKENS_ENTRADA_CACHE
+  IA_TOKENS_SAIDA
+  WHATSAPP_SERVICO
+  WHATSAPP_TEMPLATE_UTILIDADE
+  WHATSAPP_TEMPLATE_MARKETING
+  WHATSAPP_TEMPLATE_AUTENTICACAO
+}
+
+enum UsageLedgerStatus {
+  PENDENTE
+  SINCRONIZADO
+  FATURADO
+  FALHOU
+}
+
+enum TableStatus {
+  LIVRE
+  OCUPADA
+  RESERVADA
+  INATIVA
+}
+
+enum TableSessionStatus {
+  ABERTA
+  FECHADA
+  CANCELADA
+}
+
+enum DiningOrderStatus {
+  RECEBIDO
+  EM_PREPARO
+  PRONTO
+  SERVIDO
+  CANCELADO
+}
+
+enum ApplicationStatus {
+  EM_ANALISE_IA
+  RECUSADA_IA
+  REVISAO_HUMANA
+  APROVADA
+  RECUSADA
+}
+
+enum SubscriptionStatus {
+  PENDENTE
+  ATIVA
+  INADIMPLENTE
+  CANCELADA
+}
+
+enum CommissionStatus {
+  PENDENTE
+  PROCESSANDO
+  DISPONIVEL
+  PAGA
+  ESTORNADA
+}
+
+enum PayoutBatchStatus {
+  PROCESSANDO
+  PAGO
+  FALHOU
+}
+
+enum StripeEventStatus {
+  PENDENTE
+  PROCESSANDO
+  PROCESSADO
+  FALHOU
+}
+
+enum AccountTokenType {
+  VERIFICACAO_EMAIL
+  REDEFINICAO_SENHA
+  LOGIN_MFA
+}
+
+enum IdentityDocumentOwnerType {
+  USER
+  COMPANY
+}
+
+enum LeadStatus {
+  DISPONIVEL
+  EM_ATENDIMENTO
+  PROPOSTA
+  CONVERTIDO
+  PERDIDO
+}
+
+// Regime tributário da empresa. Define o motor de cálculo (CSOSN no Simples,
+// CST nos demais) e é obrigatório no XML da NFC-e.
+enum TaxRegime {
+  SIMPLES_NACIONAL
+  SIMPLES_NACIONAL_EXCESSO
+  REGIME_NORMAL
+}
+
+// Ambiente da SEFAZ. Homologação é o padrão e emite documento sem valor
+// fiscal; produção é liberada só depois da homologação do estado.
+enum FiscalEnvironment {
+  HOMOLOGACAO
+  PRODUCAO
+}
+
+// Origem da mercadoria (tabela A do CST). O dígito que vai no XML está em
+// packages/shared/src/fiscal.ts — aqui fica o nome para o código ser legível.
+enum TaxOrigin {
+  NACIONAL
+  ESTRANGEIRA_IMPORTACAO_DIRETA
+  ESTRANGEIRA_MERCADO_INTERNO
+  NACIONAL_IMPORTACAO_ACIMA_40
+  NACIONAL_PROCESSOS_BASICOS
+  NACIONAL_IMPORTACAO_ATE_40
+  ESTRANGEIRA_IMPORTACAO_SEM_SIMILAR
+  ESTRANGEIRA_MERCADO_INTERNO_SEM_SIMILAR
+  NACIONAL_IMPORTACAO_ACIMA_70
+}
+
+// Ciclo de vida da NFC-e. RASCUNHO existe porque a numeração é reservada antes
+// do envio: número queimado sem documento é inutilização pendente, não buraco
+// silencioso na sequência.
+enum FiscalDocumentStatus {
+  RASCUNHO
+  ASSINADA
+  ENVIANDO
+  AUTORIZADA
+  REJEITADA
+  DENEGADA
+  CANCELADA
+  CONTINGENCIA
+  INUTILIZADA
+}
+
+// tpEmis do layout: 1 normal, 9 contingência offline da NFC-e.
+enum FiscalEmissionType {
+  NORMAL
+  CONTINGENCIA_OFFLINE
+}
+
+enum FiscalEventType {
+  CANCELAMENTO
+  CARTA_CORRECAO
+  INUTILIZACAO
+}
+
+enum FiscalEventStatus {
+  PENDENTE
+  REGISTRADO
+  REJEITADO
+}
+
+enum CashSessionStatus {
+  ABERTO
+  FECHADO
+}
+
+// Sangria retira dinheiro do caixa, suprimento coloca. Os dois precisam de
+// registro porque o fechamento confere o esperado contra o contado.
+enum CashMovementType {
+  SANGRIA
+  SUPRIMENTO
+  AJUSTE
+}
+
+enum FiscalCertificateStatus {
+  ATIVO
+  SUBSTITUIDO
+  REVOGADO
+}
+
 // ---------------------------------------------------------------------------
 // Identidade / plataforma
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         Role
-  avatarUrl    String?
-  isActive     Boolean  @default(true)
-  companyId    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                String    @id @default(cuid())
+  name              String
+  email             String    @unique
+  document          String?   @unique
+  passwordHash      String
+  role              Role
+  avatarUrl         String?
+  isActive          Boolean   @default(true)
+  emailVerifiedAt   DateTime?
+  termsAcceptedAt   DateTime?
+  privacyAcceptedAt DateTime?
+  companyId         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   company Company? @relation(fields: [companyId], references: [id])
 
-  refreshTokens   RefreshToken[]
-  employeeProfile EmployeeProfile?
+  refreshTokens    RefreshToken[]
+  accountTokens    AccountToken[]
+  employeeProfile  EmployeeProfile?
   customerProfiles CustomerProfile[]
-  addresses       Address[]
+  addresses        Address[]
 
-  ordersAsCustomer     Order[]            @relation("OrderCustomer")
-  orderStatusChanges   OrderStatusHistory[] @relation("OrderStatusChangedBy")
-  deliveriesAsMotoboy  Delivery[]         @relation("DeliveryMotoboy")
-  aiConversations      AIConversation[]   @relation("AIConversationUser")
-  aiActionsConfirmed   AIActionLog[]      @relation("AIActionConfirmedBy")
+  ordersAsCustomer              Order[]                @relation("OrderCustomer")
+  orderStatusChanges            OrderStatusHistory[]   @relation("OrderStatusChangedBy")
+  deliveriesAsMotoboy           Delivery[]             @relation("DeliveryMotoboy")
+  aiConversations               AIConversation[]       @relation("AIConversationUser")
+  aiActionsConfirmed            AIActionLog[]          @relation("AIActionConfirmedBy")
+  whatsappConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignedTo")
+  whatsappMessagesSent          WhatsAppMessage[]      @relation("WhatsAppMessageSentBy")
+  tableSessionsOpened           TableSession[]         @relation("TableSessionOpenedBy")
+  tableSessionsClosed           TableSession[]         @relation("TableSessionClosedBy")
+  diningOrdersCreated           DiningOrder[]          @relation("DiningOrderCreatedBy")
+  resellerProfile               ResellerProfile?
+  resellerApplicationsReviewed  ResellerApplication[]  @relation("ResellerApplicationReviewedBy")
+  leadsClaimed                  SalesLead[]            @relation("SalesLeadClaimedBy")
 
   @@index([companyId])
 }
@@ -129,43 +357,339 @@ model RefreshToken {
   @@index([userId])
 }
 
+model AccountToken {
+  id        String           @id @default(cuid())
+  userId    String
+  type      AccountTokenType
+  tokenHash String           @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, expiresAt])
+}
+
+model IdentityDocument {
+  value     String                    @id
+  ownerType IdentityDocumentOwnerType
+  ownerId   String                    @unique
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+
+  @@index([ownerType])
+}
+
 // ---------------------------------------------------------------------------
 // Empresa (tenant)
 // ---------------------------------------------------------------------------
 
 model Company {
-  id                      String   @id @default(cuid())
-  name                    String
-  slug                    String   @unique
-  cnpj                    String?
-  phone                   String?
-  whatsapp                String?
-  addressLine             String?
-  city                    String?
-  state                   String?
-  deliveryFeeBase         Decimal  @default(0) @db.Decimal(10, 2)
-  avgDeliveryTimeMinutes  Int      @default(40)
-  logoUrl                 String?
-  isActive                Boolean  @default(true)
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id                     String   @id @default(cuid())
+  name                   String
+  slug                   String   @unique
+  cnpj                   String?  @unique
+  phone                  String?
+  whatsapp               String?
+  addressLine            String?
+  city                   String?
+  state                  String?
+  latitude               Decimal? @db.Decimal(10, 7)
+  longitude              Decimal? @db.Decimal(10, 7)
+  deliveryFeeBase        Decimal  @default(0) @db.Decimal(10, 2)
+  deliveryFeePerKm       Decimal  @default(1.50) @db.Decimal(10, 2)
+  deliveryRadiusKm       Decimal  @default(10) @db.Decimal(6, 2)
+  avgDeliveryTimeMinutes Int      @default(40)
+  logoUrl                String?
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
-  settings          CompanySettings?
-  users             User[]
-  deliveryAreas     DeliveryArea[]
-  categories        Category[]
-  products          Product[]
-  orders            Order[]
-  deliveries        Delivery[]
-  payments          Payment[]
-  employeeProfiles  EmployeeProfile[]
-  customerProfiles  CustomerProfile[]
-  promotions        Promotion[]
-  messagingChannels MessagingChannel[]
-  aiConversations   AIConversation[]
-  aiActionLogs      AIActionLog[]
+  settings              CompanySettings?
+  users                 User[]
+  deliveryAreas         DeliveryArea[]
+  categories            Category[]
+  products              Product[]
+  orders                Order[]
+  deliveries            Delivery[]
+  payments              Payment[]
+  employeeProfiles      EmployeeProfile[]
+  customerProfiles      CustomerProfile[]
+  promotions            Promotion[]
+  messagingChannels     MessagingChannel[]
+  whatsappConversations WhatsAppConversation[]
+  whatsappMessages      WhatsAppMessage[]
+  usageLedgers          UsageLedger[]
+  aiConversations       AIConversation[]
+  aiActionLogs          AIActionLog[]
+  restaurantTables      RestaurantTable[]
+  tableSessions         TableSession[]
+  diningOrders          DiningOrder[]
+  subscription          ClientSubscription?
+  clientApplication     ClientApplication?
+  fiscalProfile         CompanyFiscalProfile?
+  fiscalCertificates    FiscalCertificate[]
+  fiscalDocuments       FiscalDocument[]
+  cashRegisters         CashRegister[]
+  cashSessions          CashSession[]
 
   @@index([city, state])
+}
+
+// ---------------------------------------------------------------------------
+// Fiscal
+// ---------------------------------------------------------------------------
+
+// Cadastro fiscal da empresa: o que a SEFAZ exige no emitente da NFC-e e que
+// não cabe no cadastro comercial. Fica separado de `Company` de propósito —
+// são dados de responsabilidade contábil, alterados por outro papel e com
+// outro ciclo de vida.
+//
+// O endereço aqui é o **fiscal** (o do CNPJ), que pode divergir do endereço de
+// contato mostrado ao cliente. `cityIbgeCode` é o código do IBGE de 7 dígitos,
+// obrigatório no XML — não dá para derivar do nome da cidade com segurança.
+model CompanyFiscalProfile {
+  id                    String            @id @default(cuid())
+  companyId             String            @unique
+  taxRegime             TaxRegime
+  // CNAE principal, 7 dígitos, sem máscara.
+  cnae                  String            @db.VarChar(7)
+  // Inscrição estadual; "ISENTO" quando a empresa é isenta.
+  stateRegistration     String            @db.VarChar(20)
+  municipalRegistration String?           @db.VarChar(20)
+  legalName             String
+  tradeName             String?
+  addressStreet         String
+  addressNumber         String            @db.VarChar(20)
+  addressComplement     String?
+  addressDistrict       String
+  cityIbgeCode          String            @db.VarChar(7)
+  cityName              String
+  state                 String            @db.VarChar(2)
+  zipCode               String            @db.VarChar(8)
+  environment           FiscalEnvironment @default(HOMOLOGACAO)
+  // Série e próximo número da NFC-e. A numeração é por empresa e por série.
+  nfceSeries            Int               @default(1)
+  nfceNextNumber        Int               @default(1)
+  // Emissão automática ao marcar o pedido como pago. Desligada por padrão:
+  // ligar antes de homologar na SEFAZ produziria rejeição a cada venda.
+  autoEmit              Boolean           @default(false)
+  // Identificador do CSC (token do QR Code) fornecido pela SEFAZ.
+  cscId                 String?           @db.VarChar(6)
+  // CSC cifrado em repouso — é segredo, nunca sai em resposta nem em log.
+  cscTokenEncrypted     String?           @db.Text
+
+  // Padrões fiscais do cardápio. Um restaurante tem centenas de itens e quase
+  // todos compartilham a mesma tributação; obrigar o preenchimento produto a
+  // produto garantiria cadastro incompleto ou copiado errado. O produto só
+  // guarda o que difere daqui.
+  defaultNcm        String?   @db.VarChar(8)
+  defaultCest       String?   @db.VarChar(7)
+  defaultCfop       String    @default("5102") @db.VarChar(4)
+  defaultTaxOrigin  TaxOrigin @default(NACIONAL)
+  // CSOSN no Simples, CST nos demais — validado contra o regime da empresa.
+  defaultIcmsCode   String?   @db.VarChar(3)
+  defaultIcmsRate   Decimal?  @db.Decimal(5, 2)
+  defaultPisCode    String?   @db.VarChar(2)
+  defaultPisRate    Decimal?  @db.Decimal(5, 2)
+  defaultCofinsCode String?   @db.VarChar(2)
+  defaultCofinsRate Decimal?  @db.Decimal(5, 2)
+  defaultUnit       String    @default("UN") @db.VarChar(6)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+// Certificado digital A1 (arquivo .pfx/.p12 + senha).
+//
+// O arquivo e a senha ficam cifrados com AES-256-GCM no banco, nunca em disco:
+// o container roda com sistema de arquivos somente leitura e um .pfx em disco
+// é a chave privada da empresa esperando para vazar. Os metadados (titular,
+// emissor, validade) são extraídos no upload para permitir o alerta de
+// expiração sem precisar decifrar nada.
+//
+// O histórico é preservado — trocar o certificado marca o anterior como
+// SUBSTITUIDO em vez de apagar, porque documentos já emitidos foram assinados
+// por ele e a auditoria precisa saber com qual.
+// NFC-e emitida (ou tentada).
+//
+// Guarda o XML assinado e o protocolo de autorização porque a lei exige a
+// guarda por cinco anos e porque, sem o XML original, um cancelamento ou uma
+// consulta posterior não tem como ser montado. `accessKey` é a chave de 44
+// dígitos e é única no sistema inteiro — número repetido é rejeição na SEFAZ.
+model FiscalDocument {
+  id             String               @id @default(cuid())
+  companyId      String
+  orderId        String?              @unique
+  tableSessionId String?              @unique
+  status         FiscalDocumentStatus @default(RASCUNHO)
+  emissionType   FiscalEmissionType   @default(NORMAL)
+  environment    FiscalEnvironment
+  series         Int
+  number         Int
+  accessKey      String?              @unique @db.VarChar(44)
+  // Código numérico aleatório (cNF) e dígito verificador, guardados porque
+  // entram na chave e precisam ser reproduzidos em qualquer reenvio.
+  numericCode    String               @db.VarChar(8)
+  issuedAt       DateTime
+  totalAmount    Decimal              @db.Decimal(10, 2)
+  icmsAmount     Decimal              @default(0) @db.Decimal(10, 2)
+  pisAmount      Decimal              @default(0) @db.Decimal(10, 2)
+  cofinsAmount   Decimal              @default(0) @db.Decimal(10, 2)
+  xml            String?              @db.LongText
+  protocolXml    String?              @db.LongText
+  protocolNumber String?              @db.VarChar(20)
+  authorizedAt   DateTime?
+  qrCodeUrl      String?              @db.Text
+  // Código e motivo da SEFAZ, mais a versão traduzida para o lojista.
+  statusCode     String?              @db.VarChar(10)
+  statusReason   String?              @db.Text
+  actionHint     String?              @db.Text
+  attempts       Int                  @default(0)
+  nextAttemptAt  DateTime?
+  alertedAt      DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  company Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order   Order?                @relation(fields: [orderId], references: [id])
+  events  FiscalDocumentEvent[]
+
+  @@unique([companyId, environment, series, number])
+  @@index([companyId, status, createdAt])
+  @@index([status, nextAttemptAt])
+}
+
+// Cancelamento, carta de correção e inutilização. Ficam separados do documento
+// porque um mesmo documento pode ter vários, e porque a inutilização não tem
+// documento nenhum — só uma faixa de numeração queimada.
+model FiscalDocumentEvent {
+  id              String            @id @default(cuid())
+  companyId       String
+  documentId      String?
+  type            FiscalEventType
+  status          FiscalEventStatus @default(PENDENTE)
+  sequence        Int               @default(1)
+  reason          String            @db.Text
+  // Faixa usada só na inutilização.
+  rangeStart      Int?
+  rangeEnd        Int?
+  protocolNumber  String?           @db.VarChar(20)
+  statusCode      String?           @db.VarChar(10)
+  statusReason    String?           @db.Text
+  xml             String?           @db.LongText
+  protocolXml     String?           @db.LongText
+  createdByUserId String?
+  registeredAt    DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  document FiscalDocument? @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, type, createdAt])
+  @@index([documentId])
+}
+
+// ---------------------------------------------------------------------------
+// Caixa
+// ---------------------------------------------------------------------------
+
+// Ponto de venda físico. Uma loja pode ter mais de um (balcão, delivery), e o
+// fechamento é por turno de cada um — misturar os dois torna a conferência
+// impossível.
+model CashRegister {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sessions CashSession[]
+
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+}
+
+// Turno de caixa: abre com um valor contado, fecha com outro.
+//
+// `expected*` é calculado no fechamento e congelado — recalcular depois daria
+// número diferente se um pedido fosse alterado, e a conferência precisa ser
+// uma foto do momento.
+model CashSession {
+  id             String            @id @default(cuid())
+  companyId      String
+  cashRegisterId String
+  status         CashSessionStatus @default(ABERTO)
+  openingAmount  Decimal           @db.Decimal(10, 2)
+  countedAmount  Decimal?          @db.Decimal(10, 2)
+  expectedCash   Decimal?          @db.Decimal(10, 2)
+  expectedCard   Decimal?          @db.Decimal(10, 2)
+  expectedPix    Decimal?          @db.Decimal(10, 2)
+  // Contado menos esperado, em dinheiro. Negativo é falta.
+  difference     Decimal?          @db.Decimal(10, 2)
+  // Fotografia do fechamento: vendas por método, CMV, margem, cancelamentos e
+  // movimentações. Guardado como documento porque é isso que ele é — o
+  // resultado daquele turno, imutável, não uma consulta que se refaz.
+  summary        Json?
+  notes          String?           @db.Text
+  openedByUserId String
+  closedByUserId String?
+  openedAt       DateTime          @default(now())
+  closedAt       DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cashRegister CashRegister   @relation(fields: [cashRegisterId], references: [id])
+  movements    CashMovement[]
+
+  @@index([companyId, status, openedAt])
+  @@index([cashRegisterId, status])
+}
+
+model CashMovement {
+  id              String           @id @default(cuid())
+  companyId       String
+  cashSessionId   String
+  type            CashMovementType
+  amount          Decimal          @db.Decimal(10, 2)
+  reason          String           @db.Text
+  createdByUserId String
+  createdAt       DateTime         @default(now())
+
+  session CashSession @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+
+  @@index([cashSessionId, createdAt])
+  @@index([companyId, createdAt])
+}
+
+model FiscalCertificate {
+  id                String                  @id @default(cuid())
+  companyId         String
+  fileName          String
+  contentEncrypted  String                  @db.LongText
+  passwordEncrypted String                  @db.Text
+  subjectName       String
+  issuerName        String
+  serialNumber      String                  @db.VarChar(80)
+  notBefore         DateTime
+  notAfter          DateTime
+  status            FiscalCertificateStatus @default(ATIVO)
+  // Último aviso de expiração enviado, para não repetir a cada rodada.
+  expiryAlertedAt   DateTime?
+  uploadedByUserId  String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([status, notAfter])
 }
 
 model CompanySettings {
@@ -246,8 +770,11 @@ model Address {
   state        String
   zipCode      String?
   reference    String?
+  latitude     Decimal? @db.Decimal(10, 7)
+  longitude    Decimal? @db.Decimal(10, 7)
   isDefault    Boolean  @default(false)
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   orders Order[]
@@ -300,23 +827,40 @@ model Category {
 }
 
 model Product {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   companyId   String
   categoryId  String
   name        String
-  description String?  @db.Text
-  price       Decimal  @db.Decimal(10, 2)
+  description String? @db.Text
+  price       Decimal @db.Decimal(10, 2)
   imageUrl    String?
-  isActive    Boolean  @default(true)
-  isFeatured  Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive    Boolean @default(true)
+  isFeatured  Boolean @default(false)
 
-  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category   Category           @relation(fields: [categoryId], references: [id])
-  variations ProductVariation[]
-  addons     ProductAddon[]
-  orderItems OrderItem[]
+  // Tributação do item. Tudo opcional: nulo significa "usa o padrão da
+  // empresa" (CompanyFiscalProfile.default*). O NCM é o que mais varia num
+  // cardápio — refeição pronta, bebida e cerveja têm códigos diferentes.
+  ncm        String?    @db.VarChar(8)
+  cest       String?    @db.VarChar(7)
+  cfop       String?    @db.VarChar(4)
+  taxOrigin  TaxOrigin?
+  icmsCode   String?    @db.VarChar(3)
+  icmsRate   Decimal?   @db.Decimal(5, 2)
+  pisCode    String?    @db.VarChar(2)
+  pisRate    Decimal?   @db.Decimal(5, 2)
+  cofinsCode String?    @db.VarChar(2)
+  cofinsRate Decimal?   @db.Decimal(5, 2)
+  unit       String?    @db.VarChar(6)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company          Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category         Category           @relation(fields: [categoryId], references: [id])
+  variations       ProductVariation[]
+  addons           ProductAddon[]
+  orderItems       OrderItem[]
+  diningOrderItems DiningOrderItem[]
 
   @@index([companyId])
   @@index([categoryId])
@@ -351,11 +895,11 @@ model ProductAddon {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id         String  @id @default(cuid())
+  id         String @id @default(cuid())
   companyId  String
   customerId String
 
-  addressId        String?
+  addressId            String?
   deliveryStreet       String
   deliveryNumber       String
   deliveryComplement   String?
@@ -364,10 +908,12 @@ model Order {
   deliveryState        String
   deliveryReference    String?
 
-  subtotal    Decimal @db.Decimal(10, 2)
-  deliveryFee Decimal @db.Decimal(10, 2)
-  discount    Decimal @default(0) @db.Decimal(10, 2)
-  total       Decimal @db.Decimal(10, 2)
+  subtotal                     Decimal  @db.Decimal(10, 2)
+  deliveryFee                  Decimal  @db.Decimal(10, 2)
+  deliveryDistanceKm           Decimal? @db.Decimal(8, 2)
+  deliveryRouteDurationMinutes Int?
+  discount                     Decimal  @default(0) @db.Decimal(10, 2)
+  total                        Decimal  @db.Decimal(10, 2)
 
   paymentMethod PaymentMethod
   paymentStatus PaymentStatus @default(PENDENTE)
@@ -377,31 +923,39 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company  Company @relation(fields: [companyId], references: [id])
-  customer User    @relation("OrderCustomer", fields: [customerId], references: [id])
+  company  Company  @relation(fields: [companyId], references: [id])
+  customer User     @relation("OrderCustomer", fields: [customerId], references: [id])
   address  Address? @relation(fields: [addressId], references: [id])
 
-  items         OrderItem[]
-  statusHistory OrderStatusHistory[]
-  delivery      Delivery?
-  payment       Payment?
+  items          OrderItem[]
+  statusHistory  OrderStatusHistory[]
+  delivery       Delivery?
+  payment        Payment?
+  FiscalDocument FiscalDocument?
 
   @@index([companyId, status])
   @@index([customerId])
+  // Os relatórios filtram por faixa de createdAt dentro da empresa; sem este
+  // índice a consulta varria todos os pedidos da empresa para depois descartar.
+  @@index([companyId, createdAt])
 }
 
 model OrderItem {
-  id                   String  @id @default(cuid())
-  orderId              String
-  productId            String
-  productName          String
-  quantity             Int
-  unitPrice            Decimal @db.Decimal(10, 2)
-  variationName        String?
-  variationPriceDelta  Decimal @default(0) @db.Decimal(10, 2)
-  addons               Json?
-  notes                String?
-  totalPrice           Decimal @db.Decimal(10, 2)
+  id                  String   @id @default(cuid())
+  orderId             String
+  productId           String
+  productName         String
+  quantity            Int
+  unitPrice           Decimal  @db.Decimal(10, 2)
+  variationName       String?
+  variationPriceDelta Decimal  @default(0) @db.Decimal(10, 2)
+  addons              Json?
+  notes               String?
+  totalPrice          Decimal  @db.Decimal(10, 2)
+  // Custo unitário no instante da venda. Guardado, não consultado depois: o
+  // custo do produto muda, e recalcular a margem de um pedido antigo pelo
+  // preço de compra de hoje reescreveria o resultado de um mês já fechado.
+  unitCost            Decimal? @db.Decimal(10, 2)
 
   order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
@@ -410,11 +964,11 @@ model OrderItem {
 }
 
 model OrderStatusHistory {
-  id            String      @id @default(cuid())
-  orderId       String
-  status        OrderStatus
+  id              String      @id @default(cuid())
+  orderId         String
+  status          OrderStatus
   changedByUserId String?
-  createdAt     DateTime    @default(now())
+  createdAt       DateTime    @default(now())
 
   order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
   changedBy User? @relation("OrderStatusChangedBy", fields: [changedByUserId], references: [id])
@@ -423,30 +977,139 @@ model OrderStatusHistory {
 }
 
 // ---------------------------------------------------------------------------
+// Salão, mesas e comandas locais
+// ---------------------------------------------------------------------------
+
+model RestaurantTable {
+  id        String      @id @default(cuid())
+  companyId String
+  name      String
+  seats     Int         @default(4)
+  area      String?
+  status    TableStatus @default(LIVRE)
+  sortOrder Int         @default(0)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sessions TableSession[]
+
+  @@unique([companyId, name])
+  @@index([companyId, status])
+}
+
+model TableSession {
+  id             String             @id @default(cuid())
+  companyId      String
+  tableId        String
+  status         TableSessionStatus @default(ABERTA)
+  customerName   String?
+  customerPhone  String?
+  guestCount     Int                @default(1)
+  notes          String?            @db.Text
+  openedByUserId String
+  closedByUserId String?
+  openedAt       DateTime           @default(now())
+  closedAt       DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  table    RestaurantTable @relation(fields: [tableId], references: [id])
+  openedBy User            @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy User?           @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
+  orders   DiningOrder[]
+
+  @@index([companyId, status])
+  @@index([tableId, status])
+}
+
+model DiningOrder {
+  id              String            @id @default(cuid())
+  companyId       String
+  tableSessionId  String
+  createdByUserId String
+  status          DiningOrderStatus @default(RECEBIDO)
+  subtotal        Decimal           @db.Decimal(10, 2)
+  notes           String?           @db.Text
+  servedAt        DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  session   TableSession      @relation(fields: [tableSessionId], references: [id], onDelete: Cascade)
+  createdBy User              @relation("DiningOrderCreatedBy", fields: [createdByUserId], references: [id])
+  items     DiningOrderItem[]
+
+  @@index([companyId, status])
+  @@index([tableSessionId])
+}
+
+model DiningOrderItem {
+  id            String  @id @default(cuid())
+  diningOrderId String
+  productId     String
+  productName   String
+  quantity      Int
+  unitPrice     Decimal @db.Decimal(10, 2)
+  notes         String?
+  totalPrice    Decimal @db.Decimal(10, 2)
+
+  order   DiningOrder @relation(fields: [diningOrderId], references: [id], onDelete: Cascade)
+  product Product     @relation(fields: [productId], references: [id])
+
+  @@index([diningOrderId])
+}
+
+// ---------------------------------------------------------------------------
 // Entregas e pagamentos
 // ---------------------------------------------------------------------------
 
 model Delivery {
-  id          String         @id @default(cuid())
-  orderId     String         @unique
-  companyId   String
-  motoboyId   String?
-  status      DeliveryStatus @default(AGUARDANDO_RETIRADA)
-  pickedUpAt  DateTime?
-  deliveredAt DateTime?
-  notes       String?        @db.Text
+  id                       String                 @id @default(cuid())
+  orderId                  String                 @unique
+  companyId                String
+  motoboyId                String?
+  status                   DeliveryStatus         @default(AGUARDANDO_RETIRADA)
+  pickedUpAt               DateTime?
+  deliveredAt              DateTime?
+  notes                    String?                @db.Text
+  problemReason            DeliveryProblemReason?
+  problemDescription       String?                @db.Text
+  statusBeforeProblem      DeliveryStatus?
+  problemReportedAt        DateTime?
+  problemResolvedAt        DateTime?
   motoboyLatitude          Float?
   motoboyLongitude         Float?
   motoboyLocationUpdatedAt DateTime?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
 
-  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  company Company @relation(fields: [companyId], references: [id])
-  motoboy User?   @relation("DeliveryMotoboy", fields: [motoboyId], references: [id])
+  order     Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  company   Company            @relation(fields: [companyId], references: [id])
+  motoboy   User?              @relation("DeliveryMotoboy", fields: [motoboyId], references: [id])
+  incidents DeliveryIncident[]
 
   @@index([companyId, status])
   @@index([motoboyId])
+  @@index([companyId, createdAt])
+}
+
+model DeliveryIncident {
+  id               String                @id @default(cuid())
+  deliveryId       String
+  previousStatus   DeliveryStatus
+  reason           DeliveryProblemReason
+  description      String?               @db.Text
+  reportedByUserId String
+  reportedAt       DateTime              @default(now())
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId, reportedAt])
+  @@index([reportedByUserId])
 }
 
 model Payment {
@@ -485,6 +1148,261 @@ model Promotion {
 }
 
 // ---------------------------------------------------------------------------
+// Revendedores, planos, assinaturas e aquisição comercial
+// ---------------------------------------------------------------------------
+
+model ResellerApplication {
+  id                          String            @id @default(cuid())
+  fullName                    String
+  email                       String
+  phone                       String
+  document                    String
+  city                        String
+  state                       String
+  linkedinUrl                 String?
+  resumeUrl                   String?
+  resumeText                  String?           @db.Text
+  motivation                  String            @db.Text
+  commitment                  String            @db.Text
+  experience                  String?           @db.Text
+  passwordHash                String
+  termsAcceptedAt             DateTime?
+  privacyAcceptedAt           DateTime?
+  automatedAnalysisAcceptedAt DateTime?
+  status                      ApplicationStatus @default(EM_ANALISE_IA)
+  attemptCount                Int               @default(1)
+  aiScore                     Int?
+  aiDecision                  String?
+  aiFeedback                  String?           @db.Text
+  aiAnalysis                  Json?
+  reviewNotes                 String?           @db.Text
+  reviewedByUserId            String?
+  reviewedAt                  DateTime?
+  createdAt                   DateTime          @default(now())
+  updatedAt                   DateTime          @updatedAt
+
+  reviewedBy User?            @relation("ResellerApplicationReviewedBy", fields: [reviewedByUserId], references: [id])
+  reseller   ResellerProfile?
+
+  @@index([email])
+  @@index([status, createdAt])
+}
+
+model ResellerProfile {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  applicationId      String?  @unique
+  code               String   @unique
+  commissionRate     Decimal  @default(0.30) @db.Decimal(5, 4)
+  stripeAccountId    String?  @unique
+  stripeOnboardingOk Boolean  @default(false)
+  isActive           Boolean  @default(true)
+  approvedAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application        ResellerApplication? @relation(fields: [applicationId], references: [id])
+  subscriptions      ClientSubscription[]
+  commissions        CommissionLedger[]
+  prospects          ResellerProspect[]
+  leads              SalesLead[]
+  clientApplications ClientApplication[]
+  payoutBatches      PayoutBatch[]
+}
+
+model SoftwarePlan {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  description   String?  @db.Text
+  monthlyPrice  Decimal  @db.Decimal(10, 2)
+  currency      String   @default("brl")
+  stripePriceId String?  @unique
+  features      Json
+  isActive      Boolean  @default(true)
+  isFeatured    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  subscriptions      ClientSubscription[]
+  clientApplications ClientApplication[]
+}
+
+model ClientApplication {
+  id                          String            @id @default(cuid())
+  companyId                   String?           @unique
+  planId                      String
+  resellerId                  String?
+  resellerCode                String?
+  responsibleName             String
+  email                       String
+  phone                       String
+  document                    String
+  companyName                 String
+  tradeName                   String?
+  city                        String
+  state                       String
+  businessType                String
+  operationDetails            String            @db.Text
+  passwordHash                String
+  termsAcceptedAt             DateTime?
+  privacyAcceptedAt           DateTime?
+  automatedAnalysisAcceptedAt DateTime?
+  status                      ApplicationStatus @default(EM_ANALISE_IA)
+  aiScore                     Int?
+  aiFeedback                  String?           @db.Text
+  aiAnalysis                  Json?
+  stripeSessionId             String?           @unique
+  sourceLeadId                String?           @unique
+  createdAt                   DateTime          @default(now())
+  updatedAt                   DateTime          @updatedAt
+
+  company    Company?         @relation(fields: [companyId], references: [id])
+  plan       SoftwarePlan     @relation(fields: [planId], references: [id])
+  reseller   ResellerProfile? @relation(fields: [resellerId], references: [id])
+  sourceLead SalesLead?       @relation(fields: [sourceLeadId], references: [id])
+
+  @@index([email])
+  @@index([status])
+}
+
+model ClientSubscription {
+  id                   String             @id @default(cuid())
+  companyId            String             @unique
+  planId               String
+  resellerId           String?
+  status               SubscriptionStatus @default(PENDENTE)
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  referralCode         String?
+  referralLockedAt     DateTime?
+  discountEndsAt       DateTime?
+  currentPeriodEnd     DateTime?
+  canceledAt           DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  plan        SoftwarePlan       @relation(fields: [planId], references: [id])
+  reseller    ResellerProfile?   @relation(fields: [resellerId], references: [id])
+  commissions CommissionLedger[]
+
+  @@index([resellerId, status])
+}
+
+model CommissionLedger {
+  id               String           @id @default(cuid())
+  resellerId       String
+  subscriptionId   String
+  stripeInvoiceId  String           @unique
+  grossAmount      Decimal          @db.Decimal(10, 2)
+  commissionRate   Decimal          @db.Decimal(5, 4)
+  commissionAmount Decimal          @db.Decimal(10, 2)
+  currency         String           @default("brl")
+  status           CommissionStatus @default(DISPONIVEL)
+  availableAt      DateTime?
+  paidAt           DateTime?
+  stripeTransferId String?
+  payoutBatchId    String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  reseller     ResellerProfile    @relation(fields: [resellerId], references: [id])
+  subscription ClientSubscription @relation(fields: [subscriptionId], references: [id])
+  payoutBatch  PayoutBatch?       @relation(fields: [payoutBatchId], references: [id])
+
+  @@index([resellerId, status])
+  @@index([stripeTransferId])
+  @@index([payoutBatchId])
+}
+
+model PayoutBatch {
+  id               String            @id @default(cuid())
+  resellerId       String
+  status           PayoutBatchStatus @default(PROCESSANDO)
+  amount           Decimal           @db.Decimal(10, 2)
+  currency         String            @default("brl")
+  stripeTransferId String?           @unique
+  failureReason    String?           @db.Text
+  attempts         Int               @default(0)
+  nextAttemptAt    DateTime?
+  // Mesmo papel do campo homônimo em StripeEvent: garante um único aviso por
+  // lote encerrado por esgotamento de tentativas.
+  alertedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @default(now()) @updatedAt
+  completedAt      DateTime?
+
+  reseller    ResellerProfile    @relation(fields: [resellerId], references: [id])
+  commissions CommissionLedger[]
+
+  @@index([resellerId, status, createdAt])
+  @@index([status, nextAttemptAt])
+}
+
+model StripeEvent {
+  id          String            @id
+  type        String
+  payload     Json
+  status      StripeEventStatus @default(PENDENTE)
+  attempts    Int               @default(0)
+  lastError   String?           @db.Text
+  processedAt DateTime?
+  // Marca que a operação já foi avisada de que este evento esgotou as
+  // tentativas. Sem isso o alerta se repetiria a cada rodada do worker.
+  alertedAt   DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([status, createdAt])
+  @@index([status, alertedAt])
+}
+
+model ResellerProspect {
+  id            String    @id @default(cuid())
+  resellerId    String
+  name          String
+  companyName   String?
+  email         String?
+  phone         String?
+  stage         String    @default("NOVO")
+  notes         String?   @db.Text
+  nextContactAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  reseller ResellerProfile @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+
+  @@index([resellerId, stage])
+}
+
+model SalesLead {
+  id              String     @id @default(cuid())
+  name            String
+  companyName     String?
+  email           String
+  phone           String
+  city            String?
+  state           String?
+  message         String     @db.Text
+  status          LeadStatus @default(DISPONIVEL)
+  resellerId      String?
+  claimedByUserId String?
+  claimedAt       DateTime?
+  convertedAt     DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  reseller          ResellerProfile?   @relation(fields: [resellerId], references: [id])
+  claimedBy         User?              @relation("SalesLeadClaimedBy", fields: [claimedByUserId], references: [id])
+  clientApplication ClientApplication?
+
+  @@index([status, createdAt])
+  @@index([resellerId, status])
+}
+
+// ---------------------------------------------------------------------------
 // Agente de IA
 // ---------------------------------------------------------------------------
 
@@ -501,8 +1419,9 @@ model AIConversation {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   user    User?   @relation("AIConversationUser", fields: [userId], references: [id])
 
-  messages    AIMessage[]
-  actionLogs  AIActionLog[]
+  messages             AIMessage[]
+  actionLogs           AIActionLog[]
+  whatsappConversation WhatsAppConversation?
 
   @@index([companyId, channel])
 }
@@ -534,9 +1453,9 @@ model AIActionLog {
   result               Json?
   createdAt            DateTime  @default(now())
 
-  conversation  AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  confirmedBy   User?          @relation("AIActionConfirmedBy", fields: [confirmedByUserId], references: [id])
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  confirmedBy  User?          @relation("AIActionConfirmedBy", fields: [confirmedByUserId], references: [id])
 
   @@index([companyId])
 }
@@ -546,15 +1465,138 @@ model AIActionLog {
 // ---------------------------------------------------------------------------
 
 model MessagingChannel {
-  id        String                 @id @default(cuid())
-  companyId String
-  type      MessagingChannelType   @default(WHATSAPP)
-  status    MessagingChannelStatus @default(ATIVO)
-  config    Json
-  createdAt DateTime               @default(now())
-  updatedAt DateTime               @updatedAt
+  id                           String                 @id @default(cuid())
+  companyId                    String
+  type                         MessagingChannelType   @default(WHATSAPP)
+  status                       MessagingChannelStatus @default(ATIVO)
+  config                       Json
+  metaPhoneNumberId            String?                @unique
+  metaBusinessAccountId        String?
+  metaBusinessPortfolioId      String?
+  metaAccessTokenEncrypted     String?                @db.Text
+  metaAccessTokenExpiresAt     DateTime?
+  metaRegistrationPinEncrypted String?                @db.Text
+  metaDisplayPhoneNumber       String?
+  metaVerifiedName             String?
+  metaQualityRating            String?
+  metaEmbeddedSignupAt         DateTime?
+  automationEnabled            Boolean                @default(true)
+  welcomeMessage               String?                @db.Text
+  connectedAt                  DateTime?
+  lastWebhookAt                DateTime?
+  lastError                    String?                @db.Text
+  createdAt                    DateTime               @default(now())
+  updatedAt                    DateTime               @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversations WhatsAppConversation[]
+  messages      WhatsAppMessage[]
+  usageLedgers  UsageLedger[]
 
   @@unique([companyId, type])
+}
+
+// ---------------------------------------------------------------------------
+// Central de atendimento WhatsApp Cloud API e consumo variável
+// ---------------------------------------------------------------------------
+
+model WhatsAppConversation {
+  id               String                     @id @default(cuid())
+  companyId        String
+  channelId        String
+  aiConversationId String?                    @unique
+  customerPhone    String
+  customerName     String?
+  mode             WhatsAppConversationMode   @default(VIRTUAL)
+  status           WhatsAppConversationStatus @default(ABERTA)
+  assignedToUserId String?
+  lastMessageText  String?                    @db.Text
+  lastMessageAt    DateTime                   @default(now())
+  lastInboundAt    DateTime?
+  humanRequestedAt DateTime?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel        MessagingChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  aiConversation AIConversation?   @relation(fields: [aiConversationId], references: [id], onDelete: SetNull)
+  assignedTo     User?             @relation("WhatsAppConversationAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  messages       WhatsAppMessage[]
+
+  @@unique([channelId, customerPhone])
+  @@index([companyId, status, lastMessageAt])
+  @@index([assignedToUserId])
+}
+
+model WhatsAppMessage {
+  id                String                   @id @default(cuid())
+  companyId         String
+  channelId         String
+  conversationId    String
+  providerMessageId String?                  @unique
+  direction         WhatsAppMessageDirection
+  status            WhatsAppMessageStatus
+  type              String                   @default("text")
+  body              String?                  @db.Text
+  pricingCategory   String?
+  providerCost      Decimal                  @default(0) @db.Decimal(16, 6)
+  billableAmount    Decimal                  @default(0) @db.Decimal(16, 6)
+  sentByUserId      String?
+  errorCode         String?
+  errorMessage      String?                  @db.Text
+  rawPayload        Json?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel      MessagingChannel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  conversation WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sentBy       User?                @relation("WhatsAppMessageSentBy", fields: [sentByUserId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([channelId, providerMessageId])
+}
+
+model UsageRate {
+  id               String      @id @default(cuid())
+  metric           UsageMetric @unique
+  provider         String
+  label            String
+  unitSize         Decimal     @default(1) @db.Decimal(16, 6)
+  providerUnitCost Decimal     @default(0) @db.Decimal(16, 6)
+  markupPercent    Decimal     @default(0) @db.Decimal(8, 4)
+  isActive         Boolean     @default(true)
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  usageLedgers UsageLedger[]
+}
+
+model UsageLedger {
+  id                  String            @id @default(cuid())
+  companyId           String
+  channelId           String?
+  usageRateId         String?
+  source              UsageSource
+  metric              UsageMetric
+  quantity            Decimal           @db.Decimal(18, 6)
+  providerAmount      Decimal           @default(0) @db.Decimal(16, 6)
+  billableAmount      Decimal           @default(0) @db.Decimal(16, 6)
+  currency            String            @default("brl")
+  externalReference   String?           @unique
+  status              UsageLedgerStatus @default(PENDENTE)
+  stripeInvoiceItemId String?
+  stripeInvoiceId     String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel   MessagingChannel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  usageRate UsageRate?        @relation(fields: [usageRateId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, status])
+  @@index([stripeInvoiceItemId])
+  @@index([stripeInvoiceId])
 }

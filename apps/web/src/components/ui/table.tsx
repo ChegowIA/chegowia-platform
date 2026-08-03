@@ -17,7 +17,20 @@ export function Table<T>({ columns, rows, rowKey, emptyMessage = "Nenhum registr
   }
 
   return (
-    <div className="max-w-full overflow-x-auto">
+    <>
+      <div className="grid gap-3 sm:hidden">
+        {rows.map((row) => (
+          <article key={rowKey(row)} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            {columns.map((col, index) => (
+              <div key={col.header} className={index === 0 ? "border-b border-slate-100 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-800/60" : "grid grid-cols-[96px_minmax(0,1fr)] gap-3 border-b border-slate-100 px-4 py-3 last:border-0 dark:border-slate-800"}>
+                {index > 0 && <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">{col.header}</p>}
+                <div className={index === 0 ? "font-black text-slate-950 dark:text-slate-100" : "min-w-0 text-sm text-slate-700 dark:text-slate-300"}>{col.render(row)}</div>
+              </div>
+            ))}
+          </article>
+        ))}
+      </div>
+      <div className="hidden max-w-full overflow-x-auto sm:block">
       <table className="min-w-[640px] w-full text-left text-sm">
         <thead>
           <tr className="border-b border-slate-100 bg-slate-50/70 text-xs uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
@@ -43,6 +56,7 @@ export function Table<T>({ columns, rows, rowKey, emptyMessage = "Nenhum registr
           ))}
         </tbody>
       </table>
-    </div>
+      </div>
+    </>
   );
 }

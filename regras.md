@@ -18,6 +18,8 @@
 - `MOTOBOY`: vê e atualiza status apenas das entregas atribuídas a ele.
 - `CLIENTE`: cadastro livre, navega catálogo público, faz pedidos, acompanha status,
   histórico e endereços.
+- `REVENDEDOR`: parceiro comercial aprovado por análise automática ou humana. Acessa
+  apenas seu código, prospects, leads assumidos, clientes indicados e extrato.
 
 ## 2. Isolamento multiempresa (regra absoluta)
 
@@ -66,6 +68,9 @@ online foi processado automaticamente.
   ferramenta (`ToolsService`) real, nunca de suposição do modelo.
 - Nunca expor dados de uma empresa a um usuário de outra empresa, nem dados de um
   cliente a outro cliente.
+- Em conversas originadas no WhatsApp, responder somente com o contexto da empresa
+  vinculada àquele número. Se o cliente escolher atendimento humano, a plataforma pausa
+  o agente; nunca tentar contornar essa escolha ou continuar respondendo automaticamente.
 - Sempre deixar claro quando uma sugestão é uma opinião/recomendação e não um fato do
   sistema.
 - Respeitar o papel ativo (ver `agentes.md`): um agente de Atendimento ao cliente final
@@ -75,6 +80,29 @@ online foi processado automaticamente.
   - Quando houver dados, organizar em blocos curtos com títulos como `Resumo`,
     `Encontrados`, `Atenção` e `Próximo passo`.
   - Preferir listas objetivas a parágrafos longos.
+  - Usar somente Markdown padrão (GFM), sem HTML, arte ASCII ou blocos decorativos.
+  - Quando uma tabela realmente facilitar a comparação, limitar a no máximo 4
+    colunas, manter células curtas e nunca simular tabela com espaços.
+  - Usar emojis com moderação, no máximo um por título ou opção, sem sequências
+    decorativas e sem substituir informações importantes por emoji.
   - Em recomendações de produtos, citar nome, preço, loja e condição relevante
     quando esses dados vierem de ferramenta.
   - Não usar jargão técnico com cliente final.
+
+## 8. Revenda, assinatura e comissões
+
+- Candidatura de revendedor exige dados pessoais, currículo, motivação e compromisso.
+- A IA pode aprovar ou recusar usando apenas critérios profissionais. Nunca considerar
+  atributos pessoais protegidos. Após três recusas automáticas, a decisão é humana.
+- Aprovação cria automaticamente usuário `REVENDEDOR` e código único.
+- Código aplicado a uma nova assinatura concede 15% de desconto nas três primeiras
+  mensalidades e fica bloqueado naquela assinatura até o cancelamento.
+- O revendedor recebe 30% recorrentes sobre o valor efetivamente pago e confirmado,
+  enquanto cliente, assinatura e revendedor estiverem ativos.
+- Comissão só é registrada por webhook Stripe `invoice.paid`, com idempotência pelo
+  identificador da fatura. Reembolso reduz ou estorna a comissão.
+- Saldo no painel é contábil. Repasse externo exige Stripe Connect aprovado.
+- Cadastro da empresa e do primeiro ADMIN só ocorre após validação e confirmação de
+  pagamento pelo webhook. Abrir Checkout ou retornar à página de sucesso não libera acesso.
+- Um lead disponível é assumido atomicamente pelo primeiro revendedor; depois disso,
+  somente ele e o super-admin podem acessar o contato completo.

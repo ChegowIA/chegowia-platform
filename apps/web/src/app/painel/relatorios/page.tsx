@@ -155,7 +155,7 @@ export default function RelatoriosPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Relatórios</h1>
 
-      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20">{error}</p>}
+      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
 
       <Card>
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
@@ -165,7 +165,7 @@ export default function RelatoriosPage() {
           <FormField label="Até">
             <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
           </FormField>
-          <p className="pb-2 text-xs text-slate-500">Filtro aplicado em vendas, top produtos e horários de pico.</p>
+          <p className="pb-2 text-xs text-slate-500 dark:text-slate-400">Filtro aplicado em vendas, top produtos e horários de pico.</p>
         </CardContent>
       </Card>
 
@@ -176,7 +176,7 @@ export default function RelatoriosPage() {
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
             <p className="text-2xl font-bold text-slate-900 dark:text-slate-50">{sales ? sales.ordersCount : "..."}</p>
-            <p className="text-slate-500">pedidos</p>
+            <p className="text-slate-500 dark:text-slate-400">pedidos</p>
             <p>Receita: {sales ? formatCurrency(Number(sales.revenue)) : "..."}</p>
             <p>Ticket médio: {sales ? formatCurrency(Number(sales.averageTicket)) : "..."}</p>
           </CardContent>
@@ -211,7 +211,7 @@ export default function RelatoriosPage() {
                 />
               ))}
             </div>
-            <p className="mt-1 text-center text-xs text-slate-500">0h — 23h</p>
+            <p className="mt-1 text-center text-xs text-slate-500 dark:text-slate-400">0h — 23h</p>
           </CardContent>
         </Card>
       </div>
@@ -254,7 +254,7 @@ export default function RelatoriosPage() {
         <CardHeader className="flex items-center justify-between">
           <CardTitle>Entregas atrasadas</CardTitle>
           <div className="flex items-center gap-2">
-            <label className="text-xs text-slate-500">Limite (min):</label>
+            <label className="text-xs text-slate-500 dark:text-slate-400">Limite (min):</label>
             <Input
               type="number"
               className="max-w-[90px]"
@@ -299,7 +299,7 @@ export default function RelatoriosPage() {
           </Button>
         </CardHeader>
         {loadingPromotions ? (
-          <p className="px-5 py-8 text-center text-sm text-slate-500">Carregando...</p>
+          <p className="px-5 py-8 text-center text-sm text-slate-500 dark:text-slate-400">Carregando...</p>
         ) : (
           <Table
             columns={[

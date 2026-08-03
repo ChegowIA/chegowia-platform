@@ -1,4 +1,6 @@
 import { IsEmail, IsString, MinLength } from "class-validator";
+import { IsStrongPassword } from "../../common/validators/strong-password.validator";
+import { MatchesProperty } from "../../common/validators/match-property.validator";
 
 export class CreateCompanyAdminDto {
   @IsString()
@@ -9,6 +11,10 @@ export class CreateCompanyAdminDto {
   email: string;
 
   @IsString()
-  @MinLength(6)
+  @IsStrongPassword()
   password: string;
+
+  @IsString()
+  @MatchesProperty("password")
+  confirmPassword: string;
 }

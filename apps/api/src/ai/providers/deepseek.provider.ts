@@ -20,7 +20,7 @@ export class DeepSeekProvider implements AIProvider {
     }
 
     const baseUrl = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
-    const model = process.env.DEEPSEEK_MODEL ?? "deepseek-chat";
+    const model = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
 
     const body: Record<string, unknown> = {
       model,
@@ -69,6 +69,16 @@ export class DeepSeekProvider implements AIProvider {
         name: call.function?.name,
         arguments: safeParseJson(call.function?.arguments),
       })),
+      requestId: typeof data.id === "string" ? data.id : null,
+      usage: data.usage
+        ? {
+            inputTokens: data.usage.prompt_tokens ?? null,
+            cachedInputTokens: data.usage.prompt_cache_hit_tokens ?? null,
+            uncachedInputTokens: data.usage.prompt_cache_miss_tokens ?? null,
+            outputTokens: data.usage.completion_tokens ?? null,
+            totalTokens: data.usage.total_tokens ?? null,
+          }
+        : null,
     };
   }
 }

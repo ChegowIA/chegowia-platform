@@ -7,6 +7,7 @@ import { Company } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select } from "@/components/ui/input";
+import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { Badge } from "@/components/ui/badge";
 
 interface CompanyForm {
@@ -35,6 +36,7 @@ interface AdminForm {
   name: string;
   email: string;
   password: string;
+  confirmPassword: string;
 }
 
 const EMPTY_COMPANY_FORM: CompanyForm = {
@@ -65,7 +67,7 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
 
   const [companyForm, setCompanyForm] = useState<CompanyForm>(EMPTY_COMPANY_FORM);
   const [settingsForm, setSettingsForm] = useState<SettingsForm>(EMPTY_SETTINGS_FORM);
-  const [adminForm, setAdminForm] = useState<AdminForm>({ name: "", email: "", password: "" });
+  const [adminForm, setAdminForm] = useState<AdminForm>({ name: "", email: "", password: "", confirmPassword: "" });
 
   const [companyError, setCompanyError] = useState<string | null>(null);
   const [companySuccess, setCompanySuccess] = useState<string | null>(null);
@@ -172,7 +174,7 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
     onSuccess: () => {
       setAdminError(null);
       setAdminSuccess("Administrador criado com sucesso.");
-      setAdminForm({ name: "", email: "", password: "" });
+      setAdminForm({ name: "", email: "", password: "", confirmPassword: "" });
       queryClient.invalidateQueries({ queryKey: ["super-admin-company", id] });
     },
     onError: (err) => {
@@ -182,11 +184,11 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
   });
 
   if (isLoading) {
-    return <p className="text-sm text-slate-500">Carregando...</p>;
+    return <p className="text-sm text-slate-500 dark:text-slate-400">Carregando...</p>;
   }
 
   if (!company) {
-    return <p className="text-sm text-red-600">Empresa não encontrada.</p>;
+    return <p className="text-sm text-red-600 dark:text-red-400">Empresa não encontrada.</p>;
   }
 
   return (
@@ -230,13 +232,13 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
             </FormField>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField label="CNPJ">
-                <Input value={companyForm.cnpj} onChange={(e) => setCompanyForm((f) => ({ ...f, cnpj: e.target.value }))} />
+                <MaskedInput mask="document" value={companyForm.cnpj} onChange={(e) => setCompanyForm((f) => ({ ...f, cnpj: e.target.value }))} />
               </FormField>
               <FormField label="Telefone">
-                <Input value={companyForm.phone} onChange={(e) => setCompanyForm((f) => ({ ...f, phone: e.target.value }))} />
+                <MaskedInput mask="phone" value={companyForm.phone} onChange={(e) => setCompanyForm((f) => ({ ...f, phone: e.target.value }))} />
               </FormField>
               <FormField label="WhatsApp">
-                <Input
+                <MaskedInput mask="phone"
                   value={companyForm.whatsapp}
                   onChange={(e) => setCompanyForm((f) => ({ ...f, whatsapp: e.target.value }))}
                 />
@@ -256,11 +258,7 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
                 <Input value={companyForm.city} onChange={(e) => setCompanyForm((f) => ({ ...f, city: e.target.value }))} />
               </FormField>
               <FormField label="UF">
-                <Input
-                  maxLength={2}
-                  value={companyForm.state}
-                  onChange={(e) => setCompanyForm((f) => ({ ...f, state: e.target.value.toUpperCase() }))}
-                />
+                <BrazilStateSelect value={companyForm.state} onChange={(e) => setCompanyForm((f) => ({ ...f, state: e.target.value }))} />
               </FormField>
               <FormField label="Taxa de entrega base (R$)">
                 <Input
@@ -281,8 +279,8 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
               </FormField>
             </div>
 
-            {companyError && <p className="text-sm text-red-600">{companyError}</p>}
-            {companySuccess && <p className="text-sm text-emerald-600">{companySuccess}</p>}
+            {companyError && <p className="text-sm text-red-600 dark:text-red-400">{companyError}</p>}
+            {companySuccess && <p className="text-sm text-emerald-600 dark:text-emerald-400">{companySuccess}</p>}
 
             <Button type="submit" isLoading={updateCompany.isPending}>
               Salvar dados gerais
@@ -343,8 +341,8 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
               IA habilitada para esta empresa
             </label>
 
-            {settingsError && <p className="text-sm text-red-600">{settingsError}</p>}
-            {settingsSuccess && <p className="text-sm text-emerald-600">{settingsSuccess}</p>}
+            {settingsError && <p className="text-sm text-red-600 dark:text-red-400">{settingsError}</p>}
+            {settingsSuccess && <p className="text-sm text-emerald-600 dark:text-emerald-400">{settingsSuccess}</p>}
 
             <Button type="submit" isLoading={updateSettings.isPending}>
               Salvar plano e limites
@@ -383,16 +381,28 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
               <Input
                 type="password"
                 required
-                minLength={6}
+                minLength={8}
+                pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).{8,}"
+                title="Use ao menos 8 caracteres, uma letra maiúscula, uma minúscula e um símbolo."
                 value={adminForm.password}
                 onChange={(e) => setAdminForm((f) => ({ ...f, password: e.target.value }))}
               />
+              <p className="text-xs leading-5 text-slate-400">Mínimo de 8 caracteres, com maiúscula, minúscula e símbolo.</p>
+            </FormField>
+            <FormField label="Confirmar senha *">
+              <Input
+                type="password"
+                required
+                value={adminForm.confirmPassword}
+                onChange={(e) => setAdminForm((f) => ({ ...f, confirmPassword: e.target.value }))}
+              />
+              {adminForm.confirmPassword && adminForm.password !== adminForm.confirmPassword && <p className="text-xs font-bold text-rose-600 dark:text-rose-400">As senhas não coincidem.</p>}
             </FormField>
 
-            {adminError && <p className="text-sm text-red-600">{adminError}</p>}
-            {adminSuccess && <p className="text-sm text-emerald-600">{adminSuccess}</p>}
+            {adminError && <p className="text-sm text-red-600 dark:text-red-400">{adminError}</p>}
+            {adminSuccess && <p className="text-sm text-emerald-600 dark:text-emerald-400">{adminSuccess}</p>}
 
-            <Button type="submit" isLoading={createAdmin.isPending}>
+            <Button type="submit" disabled={!adminForm.confirmPassword || adminForm.password !== adminForm.confirmPassword} isLoading={createAdmin.isPending}>
               Criar administrador
             </Button>
           </form>

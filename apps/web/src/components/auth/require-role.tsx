@@ -15,7 +15,7 @@ export function RequireRole({ roles, children }: { roles: Role[]; children: Reac
   useEffect(() => {
     if (!hasHydrated || isSessionLoading) return;
     if (!user) {
-      router.replace("/login");
+      router.replace("/acesso");
       return;
     }
     if (!roles.includes(user.role)) router.replace(homePathForRole(user.role));

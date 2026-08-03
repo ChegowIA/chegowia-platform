@@ -1,13 +1,48 @@
-import { Inject, Injectable } from "@nestjs/common";
+import { ForbiddenException, Inject, Injectable } from "@nestjs/common";
 import { OrderStatus } from "@prisma/client";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
+import { tenantContext } from "../common/tenant/tenant-context";
+import { businessDayRange, dateKeyInTimeZone, hourInTimeZone } from "../common/utils/business-date";
 
+/**
+ * Filtro de empresa para consultas em models SEM `companyId` próprio (OrderItem
+ * e afins). A extensão do Prisma só reescreve o `where` de topo do model
+ * consultado — nunca filtros de relação — então um `groupBy` de OrderItem
+ * filtrado por `order: {...}` cruza todas as empresas se este filtro não for
+ * aplicado à mão.
+ *
+ * Em `bypass` (SUPER_ADMIN sem empresa selecionada) devolve `{}`, mantendo a
+ * visão global que o resto do módulo já tem para esse papel.
+ */
+function companyScopeFilter() {
+  const context = tenantContext.get();
+  if (!context || context.bypass) return {};
+  if (!context.companyId) throw new ForbiddenException("Empresa não identificada para o relatório.");
+  return { companyId: context.companyId };
+}
+
+/**
+ * Janela de datas no fuso da operação.
+ *
+ * A versão anterior fazia `new Date("2026-01-31")` — meia-noite UTC — e depois
+ * `setHours(23,59)` em hora local. Com `de=01/01` `até=31/01` isso produzia um
+ * intervalo terminando em 30/01 23:59 local: **o dia final sumia do relatório**
+ * e pedidos do fim do mês anterior entravam no mês seguinte.
+ *
+ * `businessDayRange` devolve intervalo SEMIABERTO, então o filtro usa `lt` no
+ * fim — é o que inclui o dia inteiro sem invadir o dia seguinte.
+ */
 function parseRange(from?: string, to?: string) {
-  const start = from ? new Date(from) : new Date(new Date().setDate(new Date().getDate() - 30));
-  const end = to ? new Date(to) : new Date();
-  end.setHours(23, 59, 59, 999);
-  return { start, end };
+  const timeZone = process.env.BUSINESS_TIMEZONE ?? "America/Sao_Paulo";
+  const today = dateKeyInTimeZone(new Date(), timeZone);
+  const toKey = to?.trim() || today;
+  const fromKey = from?.trim() || dateKeyInTimeZone(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), timeZone);
+
+  return {
+    start: businessDayRange(fromKey, timeZone).start,
+    end: businessDayRange(toKey, timeZone).end,
+  };
 }
 
 @Injectable()
@@ -25,7 +60,7 @@ export class ReportsService {
   async salesByPeriod(from?: string, to?: string) {
     const { start, end } = parseRange(from, to);
     const orders = await this.db().order.findMany({
-      where: { createdAt: { gte: start, lte: end }, status: { not: OrderStatus.CANCELADO } },
+      where: { createdAt: { gte: start, lt: end }, status: { not: OrderStatus.CANCELADO } },
       select: { id: true, total: true, createdAt: true, status: true },
     });
 
@@ -47,7 +82,7 @@ export class ReportsService {
     const { start, end } = parseRange(from, to);
     const grouped = await this.db().orderItem.groupBy({
       by: ["productId", "productName"],
-      where: { order: { createdAt: { gte: start, lte: end }, status: { not: OrderStatus.CANCELADO } } },
+      where: { order: { ...companyScopeFilter(), createdAt: { gte: start, lt: end }, status: { not: OrderStatus.CANCELADO } } },
       _sum: { quantity: true, totalPrice: true },
       orderBy: { _sum: { quantity: "desc" } },
       take: limit,
@@ -103,11 +138,14 @@ export class ReportsService {
   async peakHours(from?: string, to?: string) {
     const { start, end } = parseRange(from, to);
     const orders = await this.db().order.findMany({
-      where: { createdAt: { gte: start, lte: end } },
+      where: { createdAt: { gte: start, lt: end } },
       select: { createdAt: true },
     });
+    const timeZone = process.env.BUSINESS_TIMEZONE ?? "America/Sao_Paulo";
     const buckets = new Array(24).fill(0);
-    for (const o of orders) buckets[new Date(o.createdAt).getHours()] += 1;
+    // Hora no fuso da loja: `getHours()` usaria o fuso do processo e deslocaria
+    // o pico em 3 horas quando o container sobe sem TZ definido.
+    for (const o of orders) buckets[hourInTimeZone(new Date(o.createdAt), timeZone)] += 1;
     return buckets.map((count, hour) => ({ hour, count }));
   }
 
@@ -153,12 +191,15 @@ export class ReportsService {
   async growthByPeriod(from?: string, to?: string) {
     const { start, end } = parseRange(from, to);
     const orders = await this.db().order.findMany({
-      where: { createdAt: { gte: start, lte: end } },
+      where: { createdAt: { gte: start, lt: end } },
       select: { createdAt: true, total: true },
     });
+    const timeZone = process.env.BUSINESS_TIMEZONE ?? "America/Sao_Paulo";
     const byDay = new Map<string, { orders: number; revenue: number }>();
     for (const o of orders) {
-      const key = new Date(o.createdAt).toISOString().slice(0, 10);
+      // Chave em UTC jogava todo pedido feito depois das 21h para o dia
+      // seguinte — cerca de um quarto do movimento de um delivery.
+      const key = dateKeyInTimeZone(new Date(o.createdAt), timeZone);
       const entry = byDay.get(key) ?? { orders: 0, revenue: 0 };
       entry.orders += 1;
       entry.revenue += Number(o.total);

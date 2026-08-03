@@ -2,12 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PermissionKey, Role, TaxRegime } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
-import { Category, Paginated, Product } from "@/lib/types";
+import { useAuthStore } from "@/lib/auth-store";
+import { Category, FiscalStatus, Paginated, Product } from "@/lib/types";
 import { formatCurrency } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select, Textarea } from "@/components/ui/input";
+import {
+  EMPTY_PRODUCT_TAX,
+  ProductTaxDraft,
+  ProductTaxFields,
+  productTaxDraftFrom,
+  productTaxPayload,
+} from "@/components/catalog/product-tax-fields";
 import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/badge";
 import { ProductImage } from "@/components/catalog/product-image";
@@ -24,6 +33,8 @@ interface AddonDraft {
 
 export default function CardapioPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const canEditMenu = user?.role === Role.ADMIN || user?.permissionKeys?.includes(PermissionKey.CARDAPIO_EDITAR);
   const [error, setError] = useState<string | null>(null);
 
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
@@ -38,6 +49,7 @@ export default function CardapioPage() {
     name: "",
     description: "",
     price: "",
+    costPrice: "",
     imageUrl: "",
     isFeatured: false,
   });
@@ -45,6 +57,20 @@ export default function CardapioPage() {
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [variationsDraft, setVariationsDraft] = useState<VariationDraft[]>([]);
   const [addonsDraft, setAddonsDraft] = useState<AddonDraft[]>([]);
+  const [taxDraft, setTaxDraft] = useState<ProductTaxDraft>(EMPTY_PRODUCT_TAX);
+
+  // O regime decide se o campo de ICMS oferece CSOSN ou CST. Sem cadastro
+  // fiscal ainda, o Simples é o padrão — é o caso da esmagadora maioria dos
+  // restaurantes que assinam sozinhos pelo site.
+  const { data: fiscal } = useQuery({
+    queryKey: ["fiscal-profile"],
+    queryFn: async () => {
+      const { data } = await api.get<FiscalStatus>("/fiscal/profile");
+      return data;
+    },
+    retry: false,
+  });
+  const taxRegime = fiscal?.profile?.taxRegime ?? TaxRegime.SIMPLES_NACIONAL;
 
   useEffect(() => {
     if (!productImageFile) {
@@ -130,7 +156,8 @@ export default function CardapioPage() {
   });
 
   function resetProductForm(categoryId = "") {
-    setProductForm({ categoryId, name: "", description: "", price: "", imageUrl: "", isFeatured: false });
+    setProductForm({ categoryId, name: "", description: "", price: "", costPrice: "", imageUrl: "", isFeatured: false });
+    setTaxDraft(EMPTY_PRODUCT_TAX);
     setProductImageFile(null);
     setVariationsDraft([]);
     setAddonsDraft([]);
@@ -149,9 +176,11 @@ export default function CardapioPage() {
       name: product.name,
       description: product.description ?? "",
       price: String(product.price),
+      costPrice: product.costPrice === null || product.costPrice === undefined ? "" : String(product.costPrice),
       imageUrl: product.imageUrl ?? "",
       isFeatured: product.isFeatured,
     });
+    setTaxDraft(productTaxDraftFrom(product as never));
     setProductImageFile(null);
     setVariationsDraft([]);
     setAddonsDraft([]);
@@ -173,8 +202,12 @@ export default function CardapioPage() {
         name: productForm.name,
         description: productForm.description || undefined,
         price: Number(productForm.price),
+        // Vazio significa "sem custo cadastrado", não zero: custo zero faria a
+        // margem do turno aparecer como 100%.
+        costPrice: productForm.costPrice.trim() ? Number(productForm.costPrice) : undefined,
         imageUrl: productForm.imageUrl || undefined,
         isFeatured: productForm.isFeatured,
+        ...productTaxPayload(taxDraft),
       };
 
       const saved = editingProduct
@@ -215,18 +248,20 @@ export default function CardapioPage() {
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <p className="text-xs font-bold uppercase tracking-wide text-brand-700">Catálogo da empresa</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-brand-700 dark:text-brand-300">Catálogo da empresa</p>
           <h1 className="mt-1 text-3xl font-black text-slate-950 dark:text-slate-50">Cardápio</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Organize categorias, fotos, preços, adicionais e destaques que aparecem para os clientes.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={openCreateCategory}>
-            Nova categoria
-          </Button>
-          <Button onClick={() => openCreateProduct()}>Novo produto</Button>
-        </div>
+        {canEditMenu && (
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={openCreateCategory}>
+              Nova categoria
+            </Button>
+            <Button onClick={() => openCreateProduct()}>Novo produto</Button>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -235,8 +270,8 @@ export default function CardapioPage() {
         <Metric label="Categorias" value={categories?.length ?? 0} tone="slate" />
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20">{error}</p>}
-      {loadingCategories && <p className="text-sm text-slate-500">Carregando categorias...</p>}
+      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
+      {loadingCategories && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando categorias...</p>}
 
       <div className="space-y-6">
         {categories?.map((category) => {
@@ -252,28 +287,30 @@ export default function CardapioPage() {
                     </Badge>
                     <Badge tone="info">{categoryProducts.length} produtos</Badge>
                   </div>
-                  {category.description && <p className="mt-1 text-sm text-slate-500">{category.description}</p>}
+                  {category.description && <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{category.description}</p>}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => openEditCategory(category)}>
-                    Editar
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    isLoading={toggleCategoryActive.isPending}
-                    onClick={() => toggleCategoryActive.mutate(category)}
-                  >
-                    {category.isActive ? "Desativar" : "Ativar"}
-                  </Button>
-                  <Button size="sm" onClick={() => openCreateProduct(category.id)}>
-                    Produto
-                  </Button>
-                </div>
+                {canEditMenu && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={() => openEditCategory(category)}>
+                      Editar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      isLoading={toggleCategoryActive.isPending}
+                      onClick={() => toggleCategoryActive.mutate(category)}
+                    >
+                      {category.isActive ? "Desativar" : "Ativar"}
+                    </Button>
+                    <Button size="sm" onClick={() => openCreateProduct(category.id)}>
+                      Produto
+                    </Button>
+                  </div>
+                )}
               </CardHeader>
               <CardContent>
                 {loadingProducts ? (
-                  <p className="text-sm text-slate-500">Carregando produtos...</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Carregando produtos...</p>
                 ) : categoryProducts.length ? (
                   <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {categoryProducts.map((product) => (
@@ -282,15 +319,18 @@ export default function CardapioPage() {
                         product={product}
                         onEdit={() => openEditProduct(product)}
                         onToggle={() => toggleProductActive.mutate(product)}
+                        canEdit={Boolean(canEditMenu)}
                       />
                     ))}
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                    <p className="text-sm font-medium text-slate-600">Nenhum produto nesta categoria.</p>
-                    <Button className="mt-3" size="sm" onClick={() => openCreateProduct(category.id)}>
-                      Cadastrar produto
-                    </Button>
+                  <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center dark:bg-slate-800/60 dark:border-slate-700">
+                    <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Nenhum produto nesta categoria.</p>
+                    {canEditMenu && (
+                      <Button className="mt-3" size="sm" onClick={() => openCreateProduct(category.id)}>
+                        Cadastrar produto
+                      </Button>
+                    )}
                   </div>
                 )}
               </CardContent>
@@ -326,7 +366,7 @@ export default function CardapioPage() {
           <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
             <ProductImage src={imagePreviewUrl} alt={productForm.name || "Produto"} className="h-36 w-full" />
             <div className="space-y-3">
-              <label className="block cursor-pointer rounded-lg border border-dashed border-brand-200 bg-brand-50 px-4 py-3 text-sm font-semibold text-brand-800 hover:bg-brand-100">
+              <label className="block cursor-pointer rounded-lg border border-dashed border-brand-200 bg-brand-50 px-4 py-3 text-sm font-semibold text-brand-800 hover:bg-brand-100 dark:bg-brand-950/30 dark:border-brand-900/60 dark:text-brand-300">
                 Enviar foto do produto
                 <input
                   type="file"
@@ -373,15 +413,32 @@ export default function CardapioPage() {
               onChange={(e) => setProductForm((form) => ({ ...form, description: e.target.value }))}
             />
           </FormField>
-          <FormField label="Preço">
-            <Input
-              type="number"
-              step="0.01"
-              value={productForm.price}
-              onChange={(e) => setProductForm((form) => ({ ...form, price: e.target.value }))}
-            />
-          </FormField>
-          <label className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <FormField label="Preço de venda">
+              <Input
+                type="number"
+                step="0.01"
+                value={productForm.price}
+                onChange={(e) => setProductForm((form) => ({ ...form, price: e.target.value }))}
+              />
+            </FormField>
+            <FormField label="Custo (opcional)">
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="Sem custo cadastrado"
+                value={productForm.costPrice}
+                onChange={(e) => setProductForm((form) => ({ ...form, costPrice: e.target.value }))}
+              />
+            </FormField>
+          </div>
+          <p className="-mt-2 text-xs text-slate-400 dark:text-slate-500">
+            O custo alimenta a margem no fechamento de caixa. Sem ele, o turno mostra faturamento e
+            não calcula lucro — e basta um item sem custo para a margem do dia inteiro ficar
+            indisponível, porque margem parcial engana.
+          </p>
+          <label className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 dark:border-slate-800 dark:text-slate-300">
             Produto em destaque
             <input
               type="checkbox"
@@ -389,6 +446,8 @@ export default function CardapioPage() {
               onChange={(e) => setProductForm((form) => ({ ...form, isFeatured: e.target.checked }))}
             />
           </label>
+
+          <ProductTaxFields value={taxDraft} onChange={setTaxDraft} regime={taxRegime} />
 
           {!editingProduct && (
             <>
@@ -492,9 +551,9 @@ export default function CardapioPage() {
 
 function Metric({ label, value, tone }: { label: string; value: number; tone: "brand" | "accent" | "slate" }) {
   const classes = {
-    brand: "bg-brand-50 text-brand-800",
+    brand: "bg-brand-50 text-brand-800 dark:bg-brand-950/30 dark:text-brand-300",
     accent: "bg-accent-50 text-accent-800",
-    slate: "bg-white text-slate-800",
+    slate: "bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-200",
   };
 
   return (
@@ -509,21 +568,23 @@ function AdminProductCard({
   product,
   onEdit,
   onToggle,
+  canEdit,
 }: {
   product: Product;
   onEdit: () => void;
   onToggle: () => void;
+  canEdit: boolean;
 }) {
   return (
-    <article className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition hover:border-brand-200 hover:shadow-soft">
+    <article className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition hover:border-brand-200 hover:shadow-soft dark:bg-slate-900 dark:border-slate-800">
       <ProductImage src={product.imageUrl} alt={product.name} className="h-40 w-full rounded-none" />
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="line-clamp-1 font-bold text-slate-950">{product.name}</h3>
-            {product.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500">{product.description}</p>}
+            <h3 className="line-clamp-1 font-bold text-slate-950 dark:text-slate-100">{product.name}</h3>
+            {product.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{product.description}</p>}
           </div>
-          <p className="shrink-0 text-sm font-black text-brand-700">{formatCurrency(Number(product.price))}</p>
+          <p className="shrink-0 text-sm font-black text-brand-700 dark:text-brand-300">{formatCurrency(Number(product.price))}</p>
         </div>
         <div className="flex flex-wrap gap-1.5">
           <Badge tone={product.isActive ? "success" : "neutral"}>{product.isActive ? "Ativo" : "Inativo"}</Badge>
@@ -531,14 +592,16 @@ function AdminProductCard({
           {product.variations.length > 0 && <Badge tone="info">{product.variations.length} variações</Badge>}
           {product.addons.length > 0 && <Badge tone="warning">{product.addons.length} adicionais</Badge>}
         </div>
-        <div className="flex gap-2">
-          <Button className="flex-1" size="sm" variant="outline" onClick={onEdit}>
-            Editar
-          </Button>
-          <Button className="flex-1" size="sm" variant="ghost" onClick={onToggle}>
-            {product.isActive ? "Desativar" : "Ativar"}
-          </Button>
-        </div>
+        {canEdit && (
+          <div className="flex gap-2">
+            <Button className="flex-1" size="sm" variant="outline" onClick={onEdit}>
+              Editar
+            </Button>
+            <Button className="flex-1" size="sm" variant="ghost" onClick={onToggle}>
+              {product.isActive ? "Desativar" : "Ativar"}
+            </Button>
+          </div>
+        )}
       </div>
     </article>
   );
@@ -556,9 +619,9 @@ function DraftList({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 p-3">
+    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-sm font-bold text-slate-800">{title}</p>
+        <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{title}</p>
         <Button size="sm" variant="outline" type="button" onClick={onAdd}>
           {actionLabel}
         </Button>

@@ -14,17 +14,17 @@ import { Badge } from "@/components/ui/badge";
 import { AssistantMessage, UserMessage } from "@/components/ai/assistant-message";
 import { FloatingAssistantChat } from "@/components/ai/floating-assistant-chat";
 
-const AGENT_ROLE_LABELS: Record<string, string> = {
-  OPERACIONAL: "Operacional",
-  ONBOARDING: "Onboarding",
-  ATENDIMENTO: "Atendimento",
+const AGENT_ROLE_LABELS: Record<AIAgentRole, string> = {
+  [AIAgentRole.OPERACIONAL]: "Operacional",
+  [AIAgentRole.ONBOARDING]: "Onboarding",
+  [AIAgentRole.ATENDIMENTO]: "Atendimento",
 };
 
 export default function AgentePage() {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
-  const [newAgentRole, setNewAgentRole] = useState<string>(AIAgentRole.OPERACIONAL);
+  const [newAgentRole, setNewAgentRole] = useState<AIAgentRole>(AIAgentRole.OPERACIONAL);
   const [message, setMessage] = useState("");
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -84,9 +84,9 @@ export default function AgentePage() {
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <p className="text-xs font-bold uppercase tracking-wide text-brand-700">Agente operacional</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-brand-700 dark:text-brand-300">Agente operacional</p>
           <h1 className="mt-1 text-3xl font-black text-slate-950 dark:text-slate-50">Agente de IA</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Analise operação, crie rascunhos de campanha e melhore respostas com dados da empresa.
           </p>
         </div>
@@ -95,12 +95,12 @@ export default function AgentePage() {
         </Link>
       </div>
 
-      <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-brand-900">
+      <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-brand-900 dark:bg-brand-950/30 dark:border-brand-900/50 dark:text-brand-200">
         Respostas seguem uma estrutura fixa: resumo curto, dados encontrados, atenção e próximo passo. Ações sensíveis
         continuam exigindo confirmação humana.
       </div>
 
-      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20">{error}</p>}
+      {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
         <Card>
@@ -109,7 +109,7 @@ export default function AgentePage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-2">
-              <Select value={newAgentRole} onChange={(e) => setNewAgentRole(e.target.value)}>
+              <Select value={newAgentRole} onChange={(e) => setNewAgentRole(e.target.value as AIAgentRole)}>
                 {Object.values(AIAgentRole)
                   .filter((role) => role === AIAgentRole.OPERACIONAL || role === AIAgentRole.ONBOARDING)
                   .map((role) => (
@@ -130,8 +130,8 @@ export default function AgentePage() {
                   onClick={() => setSelectedConversationId(item.id)}
                   className={`block w-full rounded-lg border px-3 py-3 text-left transition ${
                     selectedConversationId === item.id
-                      ? "border-brand-200 bg-brand-50 text-brand-800"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:bg-brand-50/60"
+                      ? "border-brand-200 bg-brand-50 text-brand-800 dark:bg-brand-950/30 dark:border-brand-900/60 dark:text-brand-300"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:bg-brand-50/60 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400"
                   }`}
                 >
                   <div className="mb-1 flex items-center justify-between gap-2">
@@ -153,15 +153,15 @@ export default function AgentePage() {
             <CardTitle>{conversation ? "Conversa selecionada" : "Agente"}</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-lg bg-slate-50 px-4 py-3">
-              <p className="text-xs font-semibold text-slate-500">Perfil</p>
-              <p className="mt-1 text-sm font-bold text-slate-900">
+            <div className="rounded-lg bg-slate-50 px-4 py-3 dark:bg-slate-800/60">
+              <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">Perfil</p>
+              <p className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100">
                 {conversation ? AGENT_ROLE_LABELS[conversation.agentRole] : AGENT_ROLE_LABELS[newAgentRole]}
               </p>
             </div>
-            <div className="rounded-lg bg-brand-50 px-4 py-3">
-              <p className="text-xs font-semibold text-brand-900">Mensagens</p>
-              <p className="mt-1 text-sm font-bold text-brand-700">{visibleMessages.length}</p>
+            <div className="rounded-lg bg-brand-50 px-4 py-3 dark:bg-brand-950/30">
+              <p className="text-xs font-semibold text-brand-900 dark:text-brand-200">Mensagens</p>
+              <p className="mt-1 text-sm font-bold text-brand-700 dark:text-brand-300">{visibleMessages.length}</p>
             </div>
             <div className="rounded-lg bg-accent-50 px-4 py-3">
               <p className="text-xs font-semibold text-accent-900">Atualização</p>
@@ -185,7 +185,7 @@ export default function AgentePage() {
           {!selectedConversationId ? (
             <>
               <div className="grid gap-2">
-                <Select value={newAgentRole} onChange={(e) => setNewAgentRole(e.target.value)}>
+                <Select value={newAgentRole} onChange={(e) => setNewAgentRole(e.target.value as AIAgentRole)}>
                   {Object.values(AIAgentRole)
                     .filter((role) => role === AIAgentRole.OPERACIONAL || role === AIAgentRole.ONBOARDING)
                     .map((role) => (
@@ -199,12 +199,12 @@ export default function AgentePage() {
                 </Button>
               </div>
 
-              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3">
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3 dark:bg-slate-800/50 dark:border-slate-800">
                 {conversations?.map((item) => (
                   <button
                     key={item.id}
                     onClick={() => setSelectedConversationId(item.id)}
-                    className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-left text-slate-600 transition hover:border-brand-200 hover:bg-brand-50/60 hover:text-brand-800"
+                    className="block w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-left text-slate-600 transition hover:border-brand-200 hover:bg-brand-50/60 hover:text-brand-800 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400"
                   >
                     <div className="mb-1 flex items-center justify-between gap-2">
                       <p className="line-clamp-1 text-sm font-bold">
@@ -222,16 +222,16 @@ export default function AgentePage() {
             </>
           ) : (
             <>
-              <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+              <div className="flex shrink-0 items-center justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 dark:bg-slate-800/60 dark:border-slate-800">
                 <div className="min-w-0">
-                  <p className="line-clamp-1 text-sm font-bold text-slate-900">{selectedTitle}</p>
-                  {conversation && <p className="text-xs text-slate-500">{AGENT_ROLE_LABELS[conversation.agentRole]}</p>}
+                  <p className="line-clamp-1 text-sm font-bold text-slate-900 dark:text-slate-100">{selectedTitle}</p>
+                  {conversation && <p className="text-xs text-slate-500 dark:text-slate-400">{AGENT_ROLE_LABELS[conversation.agentRole]}</p>}
                 </div>
                 {conversation && <Badge tone="brand">{conversation.channel}</Badge>}
               </div>
 
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800">
-                {loadingConversation && <p className="text-sm text-slate-500">Carregando...</p>}
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-3 dark:border-slate-800 dark:bg-slate-800/50">
+                {loadingConversation && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando...</p>}
                 {visibleMessages.map((item) =>
                   item.role === "USER" ? (
                     <UserMessage key={item.id} content={item.content} />

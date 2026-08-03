@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { Role } from "@chegowia/shared";
+import { PermissionKey, Role } from "@chegowia/shared";
 
 export interface AuthUser {
   id: string;
@@ -9,6 +9,8 @@ export interface AuthUser {
   role: Role;
   companyId: string | null;
   avatarUrl?: string | null;
+  /** Usado apenas para adaptar a interface; a API continua sendo a autoridade. */
+  permissionKeys: PermissionKey[];
 }
 
 interface AuthState {
@@ -23,9 +25,9 @@ interface AuthState {
 }
 
 /**
- * Access token fica em localStorage (via persist) só para sobreviver a um refresh
- * de página sem precisar de novo login — ele expira em 15min e o refresh token
- * (httpOnly cookie, nunca acessível via JS) é quem garante a renovação segura.
+ * O access token existe apenas em memória. Ao recarregar a página, o cookie
+ * httpOnly de refresh cria uma sessão curta nova; JavaScript nunca persiste o
+ * token de acesso em localStorage.
  */
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -41,7 +43,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "chegowia-auth",
-      partialize: (state) => ({ accessToken: state.accessToken, user: state.user }),
+      partialize: (state) => ({ accessToken: null, user: state.user }),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },

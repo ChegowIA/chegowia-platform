@@ -24,6 +24,19 @@ const TENANT_MODELS = new Set([
   "AIConversation",
   "AIActionLog",
   "MessagingChannel",
+  "WhatsAppConversation",
+  "WhatsAppMessage",
+  "UsageLedger",
+  "RestaurantTable",
+  "TableSession",
+  "DiningOrder",
+  "CompanyFiscalProfile",
+  "FiscalCertificate",
+  "FiscalDocument",
+  "FiscalDocumentEvent",
+  "CashRegister",
+  "CashSession",
+  "CashMovement",
 ]);
 
 const FILTERED_READ_OPS = new Set(["findMany", "findFirst", "findFirstOrThrow", "count", "aggregate", "groupBy"]);
