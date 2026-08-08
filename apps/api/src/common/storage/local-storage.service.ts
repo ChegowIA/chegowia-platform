@@ -141,12 +141,14 @@ export class LocalStorageService {
       }
       return;
     }
-    const command = process.env.CLAMAV_COMMAND ?? "clamdscan";
+    // `clamscan` é autocontido e não depende de um daemon paralelo. O
+    // container atualiza as assinaturas no boot; se essa atualização ou a
+    // varredura falhar, o upload continua bloqueado (fail closed).
+    const command = process.env.CLAMAV_COMMAND ?? "clamscan";
     const args = [
       ...(process.env.CLAMAV_CONFIG_PATH
         ? [`--config-file=${process.env.CLAMAV_CONFIG_PATH}`]
         : []),
-      "--stream",
       "--no-summary",
       path,
     ];
