@@ -50,4 +50,4 @@ RUN chmod 0555 /usr/local/bin/chegowia-api-entrypoint \
 USER nodeapp
 EXPOSE 3001
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/chegowia-api-entrypoint"]
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["node", "apps/api/dist/src/main.js"]
