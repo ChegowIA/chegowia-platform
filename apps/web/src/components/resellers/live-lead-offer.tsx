@@ -118,7 +118,7 @@ export function LiveLeadOffer() {
   if (claimedLead) {
     const whatsapp = claimedLead.phone?.replace(/\D/g, "");
     return (
-      <div className="fixed inset-x-4 bottom-4 z-[90] mx-auto max-w-md animate-[lead-in_.35s_ease-out] rounded-[28px] border border-emerald-300 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(15,23,42,.45)] sm:bottom-6 sm:right-6 sm:left-auto sm:mx-0 sm:w-[410px]">
+      <div className="fixed inset-x-4 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-[90] mx-auto max-w-md animate-[lead-in_.35s_ease-out] rounded-[28px] border border-emerald-300 bg-slate-950 p-5 text-white shadow-[0_24px_80px_rgba(15,23,42,.45)] sm:bottom-6 sm:right-6 sm:left-auto sm:mx-0 sm:w-[410px]">
         <div className="flex gap-4">
           <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-400 text-xl text-slate-950 dark:text-slate-100">✓</div>
           <div className="min-w-0 flex-1">
@@ -138,7 +138,7 @@ export function LiveLeadOffer() {
   if (!activeLead) return null;
 
   return (
-    <div role="dialog" aria-live="assertive" aria-label="Novo lead disponível" className="fixed inset-x-3 bottom-3 z-[90] mx-auto max-w-md animate-[lead-in_.35s_ease-out] overflow-hidden rounded-[30px] bg-slate-950 text-white shadow-[0_28px_90px_rgba(15,23,42,.5)] sm:bottom-6 sm:right-6 sm:left-auto sm:mx-0 sm:w-[430px]">
+    <div role="dialog" aria-live="assertive" aria-label="Novo lead disponível" className="fixed inset-x-3 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-[90] mx-auto max-w-md animate-[lead-in_.35s_ease-out] overflow-hidden rounded-[30px] bg-slate-950 text-white shadow-[0_28px_90px_rgba(15,23,42,.5)] sm:bottom-6 sm:right-6 sm:left-auto sm:mx-0 sm:w-[430px]">
       <div className="h-1 bg-gradient-to-r from-brand-500 via-amber-300 to-emerald-400" />
       <div className="relative p-5">
         <div className="absolute -right-12 -top-12 h-36 w-36 animate-pulse rounded-full bg-brand-500/20 blur-2xl" />

@@ -7,7 +7,8 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { DeliveryStatus, OrderStatus, PaymentStatus, Role } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { DeliveryStatus, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role, WhatsAppOrderDraftStatus } from "@prisma/client";
 import { ORDER_STATUS_FLOW } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { businessDayRange, dateKeyInTimeZone, formatDateKey } from "../common/utils/business-date";
@@ -40,6 +41,90 @@ export interface DeliveryQuote {
   distanceKm: number;
   durationMinutes: number;
   deliveryFee: number;
+}
+
+/**
+ * Entrada sem preço para um pedido montado fora do checkout autenticado.
+ * IDs e quantidades podem vir do WhatsApp, mas preço, adicionais e variações
+ * são sempre resolvidos novamente no banco da empresa antes de gravar.
+ */
+export interface TrustedOrderItemInput {
+  productId: string;
+  quantity: number;
+  variationId?: string | null;
+  addonIds?: string[] | null;
+  notes?: string | null;
+}
+
+export interface WhatsAppDeliveryAddress {
+  street: string;
+  number: string;
+  complement?: string | null;
+  neighborhood: string;
+  city: string;
+  state: string;
+  zipCode?: string | null;
+  reference?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+}
+
+export interface PreparedWhatsAppCheckout {
+  items: Array<{
+    productId: string;
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+    unitCost: number | null;
+    variationId: string | null;
+    variationName: string | null;
+    variationPriceDelta: number;
+    addonIds: string[];
+    addons: Array<{ name: string; price: number }>;
+    notes: string | null;
+    totalPrice: number;
+  }>;
+  address: WhatsAppDeliveryAddress & { latitude: number; longitude: number };
+  paymentMethod: PaymentMethod;
+  subtotal: number;
+  deliveryFee: number;
+  distanceKm: number;
+  durationMinutes: number;
+  total: number;
+}
+
+/** Hash estável da proposta que o cliente viu. Nunca inclui custo interno. */
+export function whatsappCheckoutFingerprint(checkout: PreparedWhatsAppCheckout) {
+  const payload = {
+    items: checkout.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      variationId: item.variationId,
+      variationPriceDelta: item.variationPriceDelta,
+      addonIds: [...item.addonIds].sort(),
+      addons: item.addons.map((addon) => ({ name: addon.name, price: addon.price })),
+      notes: item.notes,
+      totalPrice: item.totalPrice,
+    })),
+    address: {
+      street: checkout.address.street,
+      number: checkout.address.number,
+      complement: checkout.address.complement ?? null,
+      neighborhood: checkout.address.neighborhood,
+      city: checkout.address.city,
+      state: checkout.address.state,
+      zipCode: checkout.address.zipCode ?? null,
+      reference: checkout.address.reference ?? null,
+    },
+    paymentMethod: checkout.paymentMethod,
+    subtotal: checkout.subtotal,
+    deliveryFee: checkout.deliveryFee,
+    distanceKm: checkout.distanceKm,
+    durationMinutes: checkout.durationMinutes,
+    total: checkout.total,
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 @Injectable()
@@ -175,6 +260,153 @@ export class OrdersService {
     return this.calculateDeliveryQuote(company, address);
   }
 
+  // -------------------------------------------------------------------------
+  // Checkout pelo WhatsApp — sem conta do cliente, mas com a mesma regra de
+  // catálogo, horário, rota e preço usada no checkout autenticado.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Calcula uma rota real para o endereço informado no WhatsApp. Não grava um
+   * Address de usuário: o cliente não possui login e as coordenadas voltam ao
+   * rascunho da própria conversa, isolado por empresa.
+   */
+  async quoteWhatsAppDelivery(companyId: string, address: WhatsAppDeliveryAddress) {
+    return tenantContext.runAsCompany(companyId, async () => {
+      const company = await this.getActiveCompanyForWhatsApp(companyId);
+      return this.calculateDeliveryQuoteWithCoordinates(company, address);
+    });
+  }
+
+  /**
+   * Prepara a fotografia completa que será mostrada ao cliente antes de ele
+   * confirmar. Nada deste método confia em valores enviados pela IA.
+   */
+  async prepareWhatsAppCheckout(
+    companyId: string,
+    input: { items: TrustedOrderItemInput[]; address: WhatsAppDeliveryAddress; paymentMethod: PaymentMethod },
+  ): Promise<PreparedWhatsAppCheckout> {
+    return tenantContext.runAsCompany(companyId, async () => {
+      const company = await this.getActiveCompanyForWhatsApp(companyId);
+      this.assertCompanyCanReceiveOrder(company, input.paymentMethod);
+
+      const [items, delivery] = await Promise.all([
+        this.resolveTrustedOrderItems(input.items),
+        this.calculateDeliveryQuoteWithCoordinates(company, input.address),
+      ]);
+      const subtotal = this.roundCurrency(items.reduce((sum, item) => sum + item.totalPrice, 0));
+      const total = this.roundCurrency(subtotal + delivery.deliveryFee);
+
+      return {
+        items,
+        address: { ...input.address, latitude: delivery.latitude, longitude: delivery.longitude },
+        paymentMethod: input.paymentMethod,
+        subtotal,
+        deliveryFee: delivery.deliveryFee,
+        distanceKm: delivery.distanceKm,
+        durationMinutes: delivery.durationMinutes,
+        total,
+      };
+    });
+  }
+
+  /**
+   * Cria a venda sem criar uma conta artificial para quem falou pelo WhatsApp.
+   * O índice único do rascunho é a trava final contra um webhook duplicado ou
+   * duas tentativas simultâneas de confirmação gerarem pedidos duplicados.
+   */
+  async createWhatsAppOrder(
+    companyId: string,
+    input: {
+      draftId: string;
+      conversationId: string;
+      customerName: string;
+      customerPhone: string;
+      items: TrustedOrderItemInput[];
+      address: WhatsAppDeliveryAddress;
+      paymentMethod: PaymentMethod;
+      notes?: string | null;
+      expectedFingerprint?: string | null;
+    },
+  ) {
+    return tenantContext.runAsCompany(companyId, async () => {
+      const existing = await this.findExistingWhatsAppOrder(companyId, input.draftId);
+      if (existing) return { order: existing, created: false };
+
+      const checkout = await this.prepareWhatsAppCheckout(companyId, input);
+      if (input.expectedFingerprint && whatsappCheckoutFingerprint(checkout) !== input.expectedFingerprint) {
+        throw new ConflictException("O carrinho ou o valor foi atualizado. Mostre o novo resumo e peça uma nova confirmação.");
+      }
+      try {
+        const order = await this.db().$transaction(async (tx: any) => {
+          const created = await tx.order.create({
+            data: {
+              companyId,
+              customerId: null,
+              customerName: input.customerName,
+              customerPhone: input.customerPhone,
+              source: OrderSource.WHATSAPP,
+              whatsappConversationId: input.conversationId,
+              whatsappOrderDraftId: input.draftId,
+              deliveryStreet: checkout.address.street,
+              deliveryNumber: checkout.address.number,
+              deliveryComplement: checkout.address.complement ?? null,
+              deliveryNeighborhood: checkout.address.neighborhood,
+              deliveryCity: checkout.address.city,
+              deliveryState: checkout.address.state,
+              deliveryReference: checkout.address.reference ?? null,
+              subtotal: checkout.subtotal,
+              deliveryFee: checkout.deliveryFee,
+              deliveryDistanceKm: checkout.distanceKm,
+              deliveryRouteDurationMinutes: checkout.durationMinutes,
+              total: checkout.total,
+              paymentMethod: checkout.paymentMethod,
+              notes: input.notes?.trim() || null,
+              items: {
+                create: checkout.items.map((item) => ({
+                  productId: item.productId,
+                  productName: item.productName,
+                  quantity: item.quantity,
+                  unitPrice: item.unitPrice,
+                  unitCost: item.unitCost,
+                  variationName: item.variationName,
+                  variationPriceDelta: item.variationPriceDelta,
+                  addons: item.addons,
+                  notes: item.notes,
+                  totalPrice: item.totalPrice,
+                })),
+              },
+              statusHistory: { create: { status: OrderStatus.RECEBIDO } },
+              delivery: { create: { companyId } },
+              payment: { create: { companyId, method: checkout.paymentMethod, amount: checkout.total } },
+            },
+            include: ORDER_INCLUDE,
+          });
+          // Fecha o carrinho no mesmo commit que cria a venda. Assim uma queda
+          // entre as duas etapas não deixa uma proposta antiga aberta para ser
+          // confundida com um novo pedido do mesmo número.
+          await tx.whatsAppOrderDraft.updateMany({
+            where: { id: input.draftId, companyId },
+            data: {
+              status: WhatsAppOrderDraftStatus.CONCLUIDO,
+              activeKey: null,
+              confirmedAt: new Date(),
+              completedAt: new Date(),
+              lastError: null,
+            },
+          });
+          return created;
+        });
+        this.realtime.emitToCompany(companyId, "order.created", order);
+        return { order, created: true };
+      } catch (error) {
+        if (!isUniqueConstraint(error)) throw error;
+        const duplicate = await this.findExistingWhatsAppOrder(companyId, input.draftId);
+        if (duplicate) return { order: duplicate, created: false };
+        throw error;
+      }
+    });
+  }
+
   async myOrders(customerId: string) {
     return this.db().order.findMany({
       where: { customerId },
@@ -256,6 +488,8 @@ export class OrdersService {
         { id: { contains: search } },
         { customer: { is: { name: { contains: search } } } },
         { customer: { is: { email: { contains: search } } } },
+        { customerName: { contains: search } },
+        { customerPhone: { contains: search } },
       ];
     }
 
@@ -369,7 +603,7 @@ export class OrdersService {
     });
 
     this.realtime.emitToCompany(updated.companyId, "order.status_changed", updated);
-    this.realtime.emitToUser(updated.customerId, "order.status_changed", updated);
+    if (updated.customerId) this.realtime.emitToUser(updated.customerId, "order.status_changed", updated);
     if (deliveryStatus && updated.delivery) {
       this.realtime.emitToCompany(updated.companyId, "delivery.updated", updated.delivery);
     }
@@ -441,6 +675,119 @@ export class OrdersService {
     };
   }
 
+  private async getActiveCompanyForWhatsApp(companyId: string) {
+    const company = await this.db().company.findFirst({
+      where: { id: companyId, isActive: true },
+      include: { settings: true },
+    });
+    if (!company) throw new NotFoundException("Loja não encontrada ou indisponível.");
+    return company;
+  }
+
+  private async calculateDeliveryQuoteWithCoordinates(company: any, address: WhatsAppDeliveryAddress) {
+    const [origin, destination] = await Promise.all([
+      this.resolveCompanyCoordinates(company),
+      this.resolveTransientAddressCoordinates(address),
+    ]);
+    const route = await this.geography.calculateDrivingRoute(origin, destination);
+    const deliveryRadiusKm = Number(company.deliveryRadiusKm);
+    if (!Number.isFinite(deliveryRadiusKm) || deliveryRadiusKm <= 0) {
+      throw new BadRequestException("A loja ainda não configurou um raio de entrega válido.");
+    }
+    if (route.distanceKm > deliveryRadiusKm) {
+      throw new BadRequestException(
+        `O endereço está a ${route.distanceKm.toFixed(2)} km pela rota e excede o raio de entrega de ${deliveryRadiusKm.toFixed(2)} km.`,
+      );
+    }
+    return {
+      distanceKm: route.distanceKm,
+      durationMinutes: route.durationMinutes,
+      deliveryFee: this.roundCurrency(
+        Number(company.deliveryFeeBase) + route.distanceKm * Number(company.deliveryFeePerKm),
+      ),
+      latitude: destination.latitude,
+      longitude: destination.longitude,
+    };
+  }
+
+  private async resolveTransientAddressCoordinates(address: WhatsAppDeliveryAddress): Promise<GeographicPoint> {
+    const current = this.readCoordinates(address);
+    if (current) return current;
+    const addressLine = [address.street, address.number, address.complement]
+      .filter((part) => typeof part === "string" && part.trim())
+      .join(", ");
+    return this.geography.geocode({
+      addressLine,
+      neighborhood: address.neighborhood,
+      city: address.city,
+      state: address.state,
+      zipCode: address.zipCode,
+    });
+  }
+
+  private async resolveTrustedOrderItems(inputItems: TrustedOrderItemInput[]) {
+    if (!Array.isArray(inputItems) || inputItems.length === 0) {
+      throw new BadRequestException("Adicione ao menos um item ao pedido.");
+    }
+    if (inputItems.length > 40) throw new BadRequestException("O pedido pode ter no máximo 40 itens diferentes.");
+    const productIds = [...new Set(inputItems.map((item) => String(item.productId ?? "").trim()).filter(Boolean))];
+    const products = await this.db().product.findMany({
+      where: { id: { in: productIds }, isActive: true },
+      include: {
+        variations: { where: { isActive: true } },
+        addons: { where: { isActive: true } },
+      },
+    });
+    const productsById = new Map(products.map((product: any) => [product.id, product]));
+
+    return inputItems.map((input) => {
+      const quantity = Number(input.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+        throw new BadRequestException("A quantidade de cada item deve ser entre 1 e 99.");
+      }
+      const product = productsById.get(String(input.productId ?? "").trim()) as any;
+      if (!product) throw new BadRequestException("Um item do carrinho não está mais disponível.");
+
+      const variationId = typeof input.variationId === "string" ? input.variationId.trim() || null : null;
+      const variation = variationId ? product.variations.find((item: any) => item.id === variationId) : null;
+      if (variationId && !variation) throw new BadRequestException(`A variação escolhida para ${product.name} não está disponível.`);
+
+      const addonIds = [...new Set((input.addonIds ?? []).map((id) => String(id).trim()).filter(Boolean))];
+      if (addonIds.length > 20) throw new BadRequestException("Um item pode ter no máximo 20 adicionais.");
+      const addons = addonIds.map((addonId) => {
+        const addon = product.addons.find((item: any) => item.id === addonId);
+        if (!addon) throw new BadRequestException(`Um adicional escolhido para ${product.name} não está disponível.`);
+        return { name: addon.name, price: Number(addon.price) };
+      });
+      const unitPrice = this.roundCurrency(Number(product.price) + Number(variation?.priceDelta ?? 0));
+      const addonsTotal = addons.reduce((sum, addon) => sum + addon.price, 0);
+      const totalPrice = this.roundCurrency((unitPrice + addonsTotal) * quantity);
+      const notes = typeof input.notes === "string" ? input.notes.trim().slice(0, 500) || null : null;
+
+      return {
+        productId: product.id,
+        productName: product.name,
+        quantity,
+        unitPrice,
+        unitCost: product.costPrice === null || product.costPrice === undefined ? null : Number(product.costPrice),
+        variationId,
+        variationName: variation?.name ?? null,
+        variationPriceDelta: Number(variation?.priceDelta ?? 0),
+        addonIds,
+        addons,
+        notes,
+        totalPrice,
+      };
+    });
+  }
+
+  private findExistingWhatsAppOrder(companyId: string, draftId: string) {
+    return this.db().order.findFirst({
+      where: { companyId, whatsappOrderDraftId: draftId },
+      include: ORDER_INCLUDE,
+    });
+  }
+
   private async resolveCompanyCoordinates(company: any): Promise<GeographicPoint> {
     const current = this.readCoordinates(company);
     if (current) return current;
@@ -492,4 +839,8 @@ export class OrdersService {
   private roundCurrency(value: number) {
     return Math.round((value + Number.EPSILON) * 100) / 100;
   }
+}
+
+function isUniqueConstraint(error: unknown) {
+  return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "P2002");
 }

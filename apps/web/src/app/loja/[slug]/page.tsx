@@ -168,7 +168,7 @@ export default function StorePage() {
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   {featuredProducts.map((product) => (
-                    <ProductCard key={product.id} product={product} onAdd={() => setActiveProduct(product)} featured readOnly={readOnly} />
+                    <ProductCard key={product.id} product={product} companySlug={slug} onAdd={() => setActiveProduct(product)} featured readOnly={readOnly} />
                   ))}
                 </div>
               </section>
@@ -183,7 +183,7 @@ export default function StorePage() {
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     {category.products?.map((product) => (
-                      <ProductCard key={product.id} product={product} onAdd={() => setActiveProduct(product)} readOnly={readOnly} />
+                      <ProductCard key={product.id} product={product} companySlug={slug} onAdd={() => setActiveProduct(product)} readOnly={readOnly} />
                     ))}
                   </div>
                 </section>
@@ -245,11 +245,13 @@ function CategoryButton({
 
 function ProductCard({
   product,
+  companySlug,
   onAdd,
   featured = false,
   readOnly = false,
 }: {
   product: Product;
+  companySlug: string;
   onAdd: () => void;
   featured?: boolean;
   readOnly?: boolean;
@@ -264,7 +266,14 @@ function ProductCard({
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="min-w-0">
             <div className="flex items-start justify-between gap-2">
-              <h3 className="line-clamp-2 font-bold text-slate-950 group-hover:text-brand-700 dark:text-slate-100">{product.name}</h3>
+              <h3 className="line-clamp-2 font-bold text-slate-950 group-hover:text-brand-700 dark:text-slate-100">
+                <Link
+                  href={`/loja/${encodeURIComponent(companySlug)}/produto/${encodeURIComponent(product.id)}`}
+                  className="rounded-sm outline-none transition hover:text-brand-700 focus-visible:ring-2 focus-visible:ring-brand-500 dark:hover:text-brand-300"
+                >
+                  {product.name}
+                </Link>
+              </h3>
             </div>
             {product.description && <p className="mt-1 line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{product.description}</p>}
           </div>

@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PaymentMethod } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
-import { Company } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Company, CompanySettings } from "@/lib/types";
+import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
@@ -53,6 +53,7 @@ function serializeOpeningHours(hours: OpeningHoursDraft): Record<string, string>
 
 export default function ConfiguracoesPage() {
   const queryClient = useQueryClient();
+  const hydratedCompanyId = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -98,7 +99,11 @@ export default function ConfiguracoesPage() {
   }, [generalForm.logoUrl, storeImageFile]);
 
   useEffect(() => {
-    if (!company) return;
+    if (!company) {
+      hydratedCompanyId.current = null;
+      return;
+    }
+    if (hydratedCompanyId.current === company.id) return;
     setGeneralForm({
       name: company.name ?? "",
       cnpj: company.cnpj ?? "",
@@ -118,7 +123,21 @@ export default function ConfiguracoesPage() {
     setAiEnabled(company.settings?.aiEnabled ?? true);
     setAiKnowledgeBase(company.settings?.aiKnowledgeBase ?? "");
     setSettingsWhatsapp(company.settings?.whatsappNumber ?? "");
+    hydratedCompanyId.current = company.id;
   }, [company]);
+
+  function updateCachedSettings(patch: Partial<CompanySettings>) {
+    queryClient.setQueryData<Company>(["company-me"], (current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          ...patch,
+        } as CompanySettings,
+      };
+    });
+  }
 
   const saveGeneral = useMutation({
     mutationFn: async () => {
@@ -150,25 +169,43 @@ export default function ConfiguracoesPage() {
       setSuccess("Dados gerais atualizados.");
       setStoreImageFile(null);
       setGeneralForm((form) => ({ ...form, logoUrl: saved.logoUrl ?? form.logoUrl }));
-      queryClient.invalidateQueries({ queryKey: ["company-me"] });
+      queryClient.setQueryData<Company>(["company-me"], saved);
     },
     onError: (err) => setError(apiErrorMessage(err)),
   });
 
-  const saveSettings = useMutation({
+  const savePaymentMethods = useMutation({
     mutationFn: async () => {
       const { data } = await api.patch("/companies/me/settings", {
         paymentMethodsEnabled: paymentMethods,
-        aiEnabled,
-        aiKnowledgeBase,
-        whatsappNumber: settingsWhatsapp || undefined,
       });
       return data;
     },
     onSuccess: () => {
       setError(null);
-      setSuccess("Configurações atualizadas.");
-      queryClient.invalidateQueries({ queryKey: ["company-me"] });
+      setSuccess("Formas de pagamento atualizadas.");
+      updateCachedSettings({ paymentMethodsEnabled: paymentMethods });
+    },
+    onError: (err) => setError(apiErrorMessage(err)),
+  });
+
+  const saveAiTraining = useMutation({
+    mutationFn: async () => {
+      const { data } = await api.patch("/companies/me/settings", {
+        aiEnabled,
+        aiKnowledgeBase,
+        whatsappNumber: settingsWhatsapp.trim() || null,
+      });
+      return data;
+    },
+    onSuccess: () => {
+      setError(null);
+      setSuccess("Configurações do agente de IA atualizadas.");
+      updateCachedSettings({
+        aiEnabled,
+        aiKnowledgeBase,
+        whatsappNumber: settingsWhatsapp.trim() || null,
+      });
     },
     onError: (err) => setError(apiErrorMessage(err)),
   });
@@ -183,7 +220,7 @@ export default function ConfiguracoesPage() {
     onSuccess: () => {
       setError(null);
       setSuccess("Horário de funcionamento atualizado.");
-      queryClient.invalidateQueries({ queryKey: ["company-me"] });
+      updateCachedSettings({ openingHours: serializeOpeningHours(openingHours) });
     },
     onError: (err) => setError(apiErrorMessage(err)),
   });
@@ -303,12 +340,12 @@ export default function ConfiguracoesPage() {
               </FormField>
             </div>
           </div>
-          <div className="sm:col-span-2">
-            <Button isLoading={saveGeneral.isPending} onClick={() => saveGeneral.mutate()}>
-              Salvar dados gerais
-            </Button>
-          </div>
         </CardContent>
+        <CardActions>
+          <Button className="w-full sm:w-auto" isLoading={saveGeneral.isPending} onClick={() => saveGeneral.mutate()}>
+            Salvar dados gerais
+          </Button>
+        </CardActions>
       </Card>
 
       <Card>
@@ -357,13 +394,12 @@ export default function ConfiguracoesPage() {
               );
             })}
           </div>
-          <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
-            <p className="text-xs text-slate-500 dark:text-slate-400">Exemplo: 18:00 até 00:00 indica que o fechamento acontece no dia seguinte.</p>
-            <Button isLoading={saveOpeningHours.isPending} onClick={() => saveOpeningHours.mutate()}>
-              Salvar horário de funcionamento
-            </Button>
-          </div>
         </CardContent>
+        <CardActions description="Exemplo: 18:00 até 00:00 indica que o fechamento acontece no dia seguinte.">
+          <Button className="w-full sm:w-auto" isLoading={saveOpeningHours.isPending} onClick={() => saveOpeningHours.mutate()}>
+            Salvar horário de funcionamento
+          </Button>
+        </CardActions>
       </Card>
 
       <Card>
@@ -382,6 +418,11 @@ export default function ConfiguracoesPage() {
             </label>
           ))}
         </CardContent>
+        <CardActions>
+          <Button className="w-full sm:w-auto" isLoading={savePaymentMethods.isPending} onClick={() => savePaymentMethods.mutate()}>
+            Salvar formas de pagamento
+          </Button>
+        </CardActions>
       </Card>
 
       <Card>
@@ -404,10 +445,12 @@ export default function ConfiguracoesPage() {
           <FormField label="Número de WhatsApp usado pelo agente (configurações da IA)">
             <Input value={settingsWhatsapp} onChange={(e) => setSettingsWhatsapp(e.target.value)} />
           </FormField>
-          <Button isLoading={saveSettings.isPending} onClick={() => saveSettings.mutate()}>
-            Salvar configurações
-          </Button>
         </CardContent>
+        <CardActions>
+          <Button className="w-full sm:w-auto" isLoading={saveAiTraining.isPending} onClick={() => saveAiTraining.mutate()}>
+            Salvar configurações do agente
+          </Button>
+        </CardActions>
       </Card>
 
       <WhatsAppCloudSettings />

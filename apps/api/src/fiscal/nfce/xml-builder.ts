@@ -134,20 +134,19 @@ export function buildNfceXml(input: NfceInput): string {
   emit.ele("CRT").txt(crtCode(emitter.taxRegime));
 
   // ---- dest ----
-  // Numa NFC-e o destinatário é opcional: só entra quando o cliente pede CPF
-  // na nota. Em homologação, se entrar, o nome tem de ser a frase de teste.
+  // Numa NFC-e de produção o destinatário é opcional: só entra quando o
+  // cliente pede CPF/CNPJ. Em homologação, porém, a regra E04-20 da SEFAZ
+  // exige o xNome literal de teste mesmo sem documento do consumidor.
   const documento = digits(input.customer?.document ?? "");
   if (documento || input.environment !== FiscalEnvironment.PRODUCAO) {
-    if (documento) {
-      const dest = infNFe.ele("dest");
-      if (documento.length === 14) dest.ele("CNPJ").txt(documento);
-      else dest.ele("CPF").txt(documento.padStart(11, "0"));
-      const nome = input.environment === FiscalEnvironment.PRODUCAO
-        ? input.customer?.name
-        : HOMOLOGACAO_NAME;
-      opcional(dest, "xNome", nome && cut(nome, 60));
-      dest.ele("indIEDest").txt("9"); // não contribuinte
-    }
+    const dest = infNFe.ele("dest");
+    if (documento.length === 14) dest.ele("CNPJ").txt(documento);
+    else if (documento) dest.ele("CPF").txt(documento.padStart(11, "0"));
+    const nome = input.environment === FiscalEnvironment.PRODUCAO
+      ? input.customer?.name
+      : HOMOLOGACAO_NAME;
+    opcional(dest, "xNome", nome && cut(nome, 60));
+    dest.ele("indIEDest").txt("9"); // não contribuinte
   }
 
   // ---- det ----

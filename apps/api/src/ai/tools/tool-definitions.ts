@@ -107,3 +107,98 @@ export const ATENDIMENTO_TOOLS: AIToolDefinition[] = [
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
+
+/**
+ * Ferramentas adicionais do atendimento pelo WhatsApp Cloud API. Elas não são
+ * entregues ao agente da loja pública: o cliente do WhatsApp não tem login e
+ * cada chamada é amarrada no servidor à conversa/número que a originou.
+ */
+export const WHATSAPP_ORDER_TOOLS: AIToolDefinition[] = [
+  {
+    name: "getWhatsAppOrderDraft",
+    description:
+      "Mostra o carrinho persistente desta conversa, os dados que já foram coletados, a estimativa de rota/frete e o próximo dado necessário. Use para retomar um pedido sem inventar valores.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "updateWhatsAppCart",
+    description:
+      "Altera o carrinho persistente desta conversa. Use somente IDs retornados por searchCatalog. Nunca informe preço manualmente: o servidor resolve preço, variação e adicionais ativos da empresa.",
+    parameters: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["ADD", "SET", "REMOVE", "CLEAR"], description: "ADD adiciona, SET altera quantidade, REMOVE remove uma linha e CLEAR esvazia o carrinho." },
+        lineId: { type: "string", description: "Identificador da linha retornado por getWhatsAppOrderDraft; obrigatório para SET e REMOVE." },
+        productId: { type: "string", description: "ID do produto retornado por searchCatalog; obrigatório para ADD." },
+        quantity: { type: "integer", minimum: 1, maximum: 99, description: "Quantidade; obrigatória para ADD e SET." },
+        variationId: { type: "string", description: "ID da variação retornada por searchCatalog, se o cliente escolheu uma." },
+        addonIds: { type: "array", items: { type: "string" }, description: "IDs dos adicionais retornados por searchCatalog." },
+        notes: { type: "string", description: "Observação do item, como retirar cebola." },
+      },
+      required: ["operation"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setWhatsAppCustomerName",
+    description: "Registra o nome que o cliente informou para este pedido pelo WhatsApp.",
+    parameters: {
+      type: "object",
+      properties: { customerName: { type: "string" } },
+      required: ["customerName"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setWhatsAppDeliveryAddress",
+    description:
+      "Registra endereço completo e calcula imediatamente a rota e o frete reais. Só chame depois que o cliente informar rua, número, bairro, cidade e UF; não invente campos faltantes.",
+    parameters: {
+      type: "object",
+      properties: {
+        customerName: { type: "string", description: "Nome do cliente, caso ele o informe junto do endereço." },
+        street: { type: "string" },
+        number: { type: "string" },
+        complement: { type: "string" },
+        neighborhood: { type: "string" },
+        city: { type: "string" },
+        state: { type: "string", description: "UF com duas letras, por exemplo MG." },
+        zipCode: { type: "string", description: "CEP, se informado." },
+        reference: { type: "string" },
+      },
+      required: ["street", "number", "neighborhood", "city", "state"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setWhatsAppPaymentMethod",
+    description: "Registra a forma de pagamento escolhida. Só ofereça opções retornadas por getStoreInfo.",
+    parameters: {
+      type: "object",
+      properties: { paymentMethod: { type: "string", enum: ["DINHEIRO", "CARTAO_ENTREGA", "PIX_MANUAL"] } },
+      required: ["paymentMethod"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "setWhatsAppOrderNotes",
+    description: "Registra uma observação geral do pedido, se o cliente pedir.",
+    parameters: {
+      type: "object",
+      properties: { notes: { type: "string" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "prepareWhatsAppOrderConfirmation",
+    description:
+      "Calcula e congela um resumo atualizado com itens, rota, frete e total. Chame somente depois de ter itens, nome, endereço e pagamento. Após o resultado, peça a palavra exata CONFIRMAR e não crie o pedido ainda.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "confirmWhatsAppOrder",
+    description:
+      "Tenta criar o pedido somente quando a mensagem atual do cliente contiver confirmação explícita (CONFIRMAR, CONFIRMO ou PODE CONFIRMAR) e um resumo vigente já tiver sido apresentado. Nunca chame apenas porque o cliente disse oi, sim genérico ou pediu orçamento.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+];

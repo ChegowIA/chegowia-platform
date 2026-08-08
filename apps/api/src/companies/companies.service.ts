@@ -288,7 +288,7 @@ export class CompaniesService {
         avgDeliveryTimeMinutes: true,
         deliveryAreas: {
           where: { isActive: true },
-          select: { id: true, neighborhood: true, city: true, state: true, deliveryFee: true },
+          select: { id: true, neighborhood: true, city: true, deliveryFee: true },
         },
         settings: { select: { openingHours: true, paymentMethodsEnabled: true } },
       },

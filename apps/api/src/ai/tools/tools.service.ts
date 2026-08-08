@@ -5,6 +5,7 @@ import { ExtendedPrismaClient } from "../../common/prisma/prisma-client.factory"
 import { tenantContext } from "../../common/tenant/tenant-context";
 import { AI_PROVIDER, AIProvider } from "../providers/ai-provider.interface";
 import { UsageService } from "../../usage/usage.service";
+import { WhatsAppOrdersService } from "../../orders/whatsapp-orders.service";
 
 /**
  * Implementação das ferramentas listadas em tool-definitions.ts. Cada método recebe
@@ -21,6 +22,7 @@ export class ToolsService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly usage: UsageService,
+    private readonly whatsappOrders?: WhatsAppOrdersService,
   ) {}
 
   private db() {
@@ -37,7 +39,15 @@ export class ToolsService {
       start.setHours(0, 0, 0, 0);
       const orders = await this.db().order.findMany({
         where: { createdAt: { gte: start } },
-        select: { id: true, status: true, total: true, createdAt: true, customer: { select: { name: true } } },
+        select: {
+          id: true,
+          status: true,
+          total: true,
+          createdAt: true,
+          customerName: true,
+          customerPhone: true,
+          customer: { select: { name: true } },
+        },
         orderBy: { createdAt: "desc" },
       });
       return {
@@ -53,7 +63,14 @@ export class ToolsService {
       const threshold = new Date(Date.now() - thresholdMinutes * 60 * 1000);
       return this.db().order.findMany({
         where: { status: { notIn: ["ENTREGUE", "CANCELADO"] }, updatedAt: { lt: threshold } },
-        select: { id: true, status: true, updatedAt: true, customer: { select: { name: true } } },
+        select: {
+          id: true,
+          status: true,
+          updatedAt: true,
+          customerName: true,
+          customerPhone: true,
+          customer: { select: { name: true } },
+        },
         orderBy: { updatedAt: "asc" },
       });
     });
@@ -217,10 +234,11 @@ export class ToolsService {
         isFeatured: product.isFeatured,
         category: product.category?.name,
         variations: product.variations.map((variation: any) => ({
+          id: variation.id,
           name: variation.name,
           priceDelta: Number(variation.priceDelta),
         })),
-        addons: product.addons.map((addon: any) => ({ name: addon.name, price: Number(addon.price) })),
+        addons: product.addons.map((addon: any) => ({ id: addon.id, name: addon.name, price: Number(addon.price) })),
       }));
     });
   }
@@ -252,6 +270,45 @@ export class ToolsService {
           paymentMethodsEnabled: company.settings?.paymentMethodsEnabled,
         }
       : null;
+  }
+
+  async getWhatsAppOrderDraft(companyId: string, aiConversationId: string) {
+    return this.whatsappOrderService().getDraft(companyId, aiConversationId);
+  }
+
+  async updateWhatsAppCart(companyId: string, aiConversationId: string, data: any) {
+    return this.whatsappOrderService().updateCart(companyId, aiConversationId, data);
+  }
+
+  async setWhatsAppCustomerName(companyId: string, aiConversationId: string, data: any) {
+    return this.whatsappOrderService().setCustomerName(companyId, aiConversationId, data);
+  }
+
+  async setWhatsAppDeliveryAddress(companyId: string, aiConversationId: string, data: any) {
+    return this.whatsappOrderService().setDeliveryAddress(companyId, aiConversationId, data);
+  }
+
+  async setWhatsAppPaymentMethod(companyId: string, aiConversationId: string, data: any) {
+    return this.whatsappOrderService().setPaymentMethod(companyId, aiConversationId, data);
+  }
+
+  async setWhatsAppOrderNotes(companyId: string, aiConversationId: string, data: any) {
+    return this.whatsappOrderService().setOrderNotes(companyId, aiConversationId, data);
+  }
+
+  async prepareWhatsAppOrderConfirmation(companyId: string, aiConversationId: string) {
+    return this.whatsappOrderService().prepareConfirmation(companyId, aiConversationId);
+  }
+
+  async confirmWhatsAppOrder(companyId: string, aiConversationId: string, customerMessage: string) {
+    return this.whatsappOrderService().confirmOrder(companyId, aiConversationId, customerMessage);
+  }
+
+  private whatsappOrderService() {
+    if (!this.whatsappOrders) {
+      throw new BadRequestException("O checkout pelo WhatsApp não está disponível neste ambiente.");
+    }
+    return this.whatsappOrders;
   }
 
   /**

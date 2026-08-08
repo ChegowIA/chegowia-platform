@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { MessagingChannel } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 
 type EmbeddedSignupEvent =
@@ -280,20 +280,22 @@ export function WhatsAppCloudSettings() {
             </div>
           )}
 
-          <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-5 sm:flex-row sm:items-center sm:justify-between dark:bg-slate-900 dark:border-slate-800">
-            <div>
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+            <div className="p-5">
               <p className="text-sm font-black text-slate-900 dark:text-slate-100">{channel?.connected ? "Trocar ou reconectar WhatsApp" : "Conectar meu WhatsApp"}</p>
               <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">A janela aberta é da própria Meta. Nenhuma senha ou credencial fica visível aqui.</p>
             </div>
-            <Button
-              type="button"
-              size="lg"
-              isLoading={signupBusy}
-              disabled={isLoadingSignupConfig || !signupConfig?.enabled}
-              onClick={() => void startEmbeddedSignup()}
-            >
-              {channel?.connected ? "Reconectar pela Meta" : "Conectar meu WhatsApp"}
-            </Button>
+            <CardActions>
+              <Button
+                className="w-full sm:w-auto"
+                type="button"
+                isLoading={signupBusy}
+                disabled={isLoadingSignupConfig || !signupConfig?.enabled}
+                onClick={() => void startEmbeddedSignup()}
+              >
+                {channel?.connected ? "Reconectar pela Meta" : "Conectar meu WhatsApp"}
+              </Button>
+            </CardActions>
           </div>
 
           {!isLoadingSignupConfig && !signupConfig?.enabled && (
@@ -303,31 +305,33 @@ export function WhatsAppCloudSettings() {
           )}
 
           {channel?.connected && (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 dark:bg-slate-800/50 dark:border-slate-800">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-black text-slate-900 dark:text-slate-100">Atendimento com IA e equipe</p>
-                  <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Na primeira mensagem, a pessoa escolhe quem vai atender. Ao pedir uma pessoa, a IA para naquela conversa.</p>
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-800/50">
+              <div className="p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-black text-slate-900 dark:text-slate-100">Atendimento com IA e equipe</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Na primeira mensagem, a pessoa escolhe quem vai atender. Ao pedir uma pessoa, a IA para naquela conversa.</p>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-bold text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" checked={form.automationEnabled} onChange={(event) => setForm((current) => ({ ...current, automationEnabled: event.target.checked }))} />
+                    Atendente virtual ativo
+                  </label>
                 </div>
-                <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-bold text-slate-700 dark:text-slate-300">
-                  <input type="checkbox" checked={form.automationEnabled} onChange={(event) => setForm((current) => ({ ...current, automationEnabled: event.target.checked }))} />
-                  Atendente virtual ativo
-                </label>
+                <div className="mt-4">
+                  <FormField label="Mensagem de boas-vindas (opcional)">
+                    <Textarea rows={3} value={form.welcomeMessage} placeholder="Olá! Você está falando com {empresa}. Como prefere continuar?" onChange={(event) => setForm((current) => ({ ...current, welcomeMessage: event.target.value }))} />
+                  </FormField>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Use <code>{"{empresa}"}</code> para inserir o nome da sua empresa.</p>
+                </div>
               </div>
-              <div className="mt-4">
-                <FormField label="Mensagem de boas-vindas (opcional)">
-                  <Textarea rows={3} value={form.welcomeMessage} placeholder="Olá! Você está falando com {empresa}. Como prefere continuar?" onChange={(event) => setForm((current) => ({ ...current, welcomeMessage: event.target.value }))} />
-                </FormField>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Use <code>{"{empresa}"}</code> para inserir o nome da sua empresa.</p>
-              </div>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <Button variant="outline" isLoading={saveAutomation.isPending} onClick={() => saveAutomation.mutate()}>Salvar atendimento</Button>
-                <Link href="/painel/atendimento" className="inline-flex items-center rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white transition hover:bg-slate-800">Abrir central de atendimento</Link>
-              </div>
+              <CardActions>
+                <Button className="w-full sm:w-auto" isLoading={saveAutomation.isPending} onClick={() => saveAutomation.mutate()}>Salvar atendimento</Button>
+                <Link href="/painel/atendimento" className="inline-flex min-h-11 w-full items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 sm:w-auto dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Abrir central de atendimento</Link>
+              </CardActions>
             </div>
           )}
 
-          <details className="rounded-2xl border border-slate-200 bg-white p-4 dark:bg-slate-900 dark:border-slate-800">
+          <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
             <summary className="cursor-pointer text-sm font-black text-slate-800 dark:text-slate-200">Opções avançadas de suporte</summary>
             <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Você não precisa usar esta área. Abra somente se nossa equipe orientar uma conexão técnica manual.</p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -343,17 +347,21 @@ export function WhatsAppCloudSettings() {
                 </FormField>
               </div>
             </div>
-            <Button className="mt-4" variant="outline" isLoading={connectManually.isPending} disabled={!readyForManualConnection} onClick={() => connectManually.mutate()}>
-              Conectar manualmente
-            </Button>
-            <div className="mt-5 border-t border-slate-100 pt-4 dark:border-slate-800">
+            <CardActions className="-mx-4 mt-4 !px-4">
+              <Button className="w-full sm:w-auto" variant="outline" isLoading={connectManually.isPending} disabled={!readyForManualConnection} onClick={() => connectManually.mutate()}>
+                Conectar manualmente
+              </Button>
+            </CardActions>
+            <div className="pt-5">
               <p className="text-sm font-black text-slate-900 dark:text-slate-100">Número usado nos links do site</p>
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Normalmente ele é preenchido automaticamente pela conexão acima.</p>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <div className="mt-3">
                 <Input placeholder="5511999999999" value={form.fallbackNumber} onChange={(event) => setForm((current) => ({ ...current, fallbackNumber: event.target.value }))} />
-                <Button variant="outline" isLoading={saveFallbackNumber.isPending} disabled={!form.fallbackNumber.trim()} onClick={() => saveFallbackNumber.mutate()}>Salvar número</Button>
               </div>
             </div>
+            <CardActions className="-mx-4 -mb-4 mt-4 !px-4">
+              <Button className="w-full sm:w-auto" variant="outline" isLoading={saveFallbackNumber.isPending} disabled={!form.fallbackNumber.trim()} onClick={() => saveFallbackNumber.mutate()}>Salvar número</Button>
+            </CardActions>
           </details>
         </>}
       </CardContent>

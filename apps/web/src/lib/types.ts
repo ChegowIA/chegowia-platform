@@ -212,6 +212,9 @@ export interface Order {
   updatedAt: string;
   items: OrderItem[];
   statusHistory: { status: OrderStatus; createdAt: string }[];
+  customerName?: string | null;
+  customerPhone?: string | null;
+  source?: "SITE" | "WHATSAPP";
   customer?: { id: string; name: string; email: string };
   delivery?: {
     id: string;
@@ -274,6 +277,8 @@ export interface Delivery {
     deliveryCity: string;
     deliveryState: string;
     deliveryReference?: string | null;
+    customerName?: string | null;
+    customerPhone?: string | null;
     customer?: { id: string; name: string };
   };
 }
@@ -399,6 +404,28 @@ export interface WhatsAppConversation {
     automationEnabled: boolean;
   };
   _count?: { messages: number };
+  orderDraft?: WhatsAppOrderDraft | null;
+}
+
+export interface WhatsAppOrderDraft {
+  status: "MONTANDO" | "AGUARDANDO_CONFIRMACAO" | "CONCLUIDO" | "CANCELADO";
+  customerName?: string | null;
+  paymentMethod?: PaymentMethod | null;
+  addressStreet?: string | null;
+  addressNumber?: string | null;
+  addressNeighborhood?: string | null;
+  addressCity?: string | null;
+  addressState?: string | null;
+  quoteSnapshot?: {
+    type?: string;
+    checkout?: {
+      subtotal?: number;
+      total?: number;
+      delivery?: { deliveryFee?: number; distanceKm?: number; durationMinutes?: number };
+    };
+    delivery?: { deliveryFee?: number; distanceKm?: number; durationMinutes?: number };
+  } | null;
+  updatedAt?: string;
 }
 
 export interface WhatsAppConversationDetail extends WhatsAppConversation {
@@ -738,6 +765,7 @@ export interface CashHistoryResponse {
 export interface FiscalDocument {
   id: string;
   orderId: string | null;
+  tableSessionId: string | null;
   status: FiscalDocumentStatus;
   emissionType: FiscalEmissionType;
   environment: FiscalEnvironment;

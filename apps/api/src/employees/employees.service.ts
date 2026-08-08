@@ -75,10 +75,12 @@ export class EmployeesService {
 
   async update(id: string, dto: UpdateEmployeeDto) {
     const profile = await this.findById(id);
+    const roleChanged = dto.role !== undefined && dto.role !== profile.user.role;
 
     const userUpdates: Record<string, unknown> = {};
     if (dto.name !== undefined) userUpdates.name = dto.name;
     if (dto.isActive !== undefined) userUpdates.isActive = dto.isActive;
+    if (dto.role !== undefined) userUpdates.role = dto.role;
     if (Object.keys(userUpdates).length > 0) {
       await this.db().user.update({ where: { id: profile.user.id }, data: userUpdates });
     }
@@ -90,6 +92,14 @@ export class EmployeesService {
     // pessoais dos clientes — até a aba ser fechada.
     if (dto.isActive === false) {
       this.realtime.disconnectUser(profile.user.id, "conta desativada");
+    }
+    if (roleChanged && dto.role) {
+      // O cargo define uma base segura. Não deixamos permissões extras de um
+      // papel anterior (por exemplo, caixa de um funcionário) escaparem para
+      // um motoboy ou garçom. O administrador pode liberar exceções pela tela
+      // específica logo depois.
+      await this.permissionsService.setForEmployee(id, DEFAULT_PERMISSIONS_BY_ROLE[dto.role] ?? []);
+      this.realtime.emitToUser(profile.user.id, "access.updated", { employeeProfileId: id });
     }
     return this.findById(id);
   }

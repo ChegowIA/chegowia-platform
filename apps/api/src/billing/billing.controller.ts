@@ -85,6 +85,14 @@ export class BillingController {
     return this.billing.companyPortal(companyId);
   }
 
+  /** Disponível mesmo com o painel bloqueado ao final do teste. */
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Post("company/checkout")
+  companyCheckout(@CurrentUser("companyId") companyId: string) {
+    return this.billing.companyCheckout(companyId);
+  }
+
   @Roles(Role.SUPER_ADMIN)
   @Get("admin/applications")
   applications() { return this.billing.listClientApplications(); }

@@ -1,4 +1,4 @@
-import { Role } from "@prisma/client";
+import { Role, SubscriptionStatus } from "@prisma/client";
 import { PermissionKey } from "@chegowia/shared";
 import { RealtimeGateway } from "../src/realtime/realtime.gateway";
 
@@ -62,6 +62,7 @@ describe("salas de tempo real por tópico", () => {
       ["order.created", "company:empresa-1:pedidos"],
       ["delivery.location_updated", "company:empresa-1:entregas"],
       ["table.order_created", "company:empresa-1:mesas"],
+      ["table.attendant_assigned", "company:empresa-1:mesas"],
       ["whatsapp.message.received", "company:empresa-1:atendimento"],
     ])("%s vai para %s", (event, room) => {
       const { instance, server, emit } = gatewayComServidor();
@@ -100,9 +101,17 @@ describe("revalidação periódica do socket", () => {
   }
 
   function instanceWith(user: unknown) {
+    const validCompanyUser = {
+      emailVerifiedAt: new Date(),
+      company: {
+        isActive: true,
+        subscription: { status: SubscriptionStatus.ATIVA, trialEndsAt: null },
+      },
+      ...(user as object),
+    };
     return new RealtimeGateway(
       {} as never,
-      { user: { findUnique: jest.fn().mockResolvedValue(user) } } as never,
+      { user: { findUnique: jest.fn().mockResolvedValue(validCompanyUser) } } as never,
     );
   }
 

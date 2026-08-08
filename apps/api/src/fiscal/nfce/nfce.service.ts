@@ -9,12 +9,16 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import {
+  DiningOrderStatus,
   FiscalDocumentStatus,
   FiscalEmissionType,
   FiscalEnvironment,
   FiscalEventStatus,
   FiscalEventType,
+  OrderStatus,
   PaymentMethod,
+  PaymentStatus,
+  TableSessionStatus,
 } from "@prisma/client";
 import { create } from "xmlbuilder2";
 import { PRISMA_CLIENT } from "../../common/prisma/prisma.constants";
@@ -87,18 +91,26 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
    * existente em vez de emitir outra nota. Sem isso, um duplo clique no caixa
    * geraria duas notas para a mesma venda — e a segunda só se resolve com
    * cancelamento.
-   */
+  */
   async emitForOrder(companyId: string, orderId: string, options: { customerDocument?: string } = {}) {
-    const existente = await this.db().fiscalDocument.findUnique({ where: { orderId } });
+    const existente = await this.db().fiscalDocument.findFirst({ where: { orderId, companyId } });
     if (existente && existente.status !== FiscalDocumentStatus.REJEITADA) {
       return this.publicDocument(existente);
     }
 
     const order = await this.db().order.findFirst({
-      where: { id: orderId, companyId },
+      // A nota sempre nasce de uma venda recebida. A tela também só lista
+      // pedidos pagos, mas a regra fica no serviço para não poder ser burlada
+      // por uma chamada direta à API.
+      where: {
+        id: orderId,
+        companyId,
+        paymentStatus: PaymentStatus.PAGO,
+        status: { not: OrderStatus.CANCELADO },
+      },
       include: { items: true, customer: { select: { document: true, name: true } } },
     });
-    if (!order) throw new NotFoundException("Pedido não encontrado.");
+    if (!order) throw new NotFoundException("Pedido pago não encontrado ou já cancelado.");
 
     const preparado = await this.prepare(companyId, {
       items: order.items.map((item: any) => ({
@@ -111,24 +123,58 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
       discount: Number(order.discount),
       payments: [{ method: order.paymentMethod, amountCents: toCents(Number(order.total)) }],
       customerDocument: options.customerDocument ?? order.customer?.document ?? null,
-      customerName: order.customer?.name ?? null,
+      customerName: order.customer?.name ?? order.customerName ?? null,
     });
 
     return this.issue(companyId, preparado, { orderId });
   }
 
   /** Emite a NFC-e do fechamento de uma comanda de mesa. */
-  async emitForTableSession(companyId: string, tableSessionId: string, options: { customerDocument?: string } = {}) {
-    const existente = await this.db().fiscalDocument.findUnique({ where: { tableSessionId } });
+  async emitForTableSession(
+    companyId: string,
+    tableSessionId: string,
+    options: { customerDocument?: string; paymentMethod?: PaymentMethod } = {},
+  ) {
+    const existente = await this.db().fiscalDocument.findFirst({ where: { tableSessionId, companyId } });
     if (existente && existente.status !== FiscalDocumentStatus.REJEITADA) {
       return this.publicDocument(existente);
     }
 
     const session = await this.db().tableSession.findFirst({
-      where: { id: tableSessionId, companyId },
-      include: { orders: { include: { items: true } } },
+      where: { id: tableSessionId, companyId, status: TableSessionStatus.FECHADA },
+      include: {
+        // Apenas o que foi efetivamente servido entra no documento fiscal.
+        // Pedido cancelado nunca pode voltar como valor em uma NFC-e.
+        orders: {
+          where: { status: DiningOrderStatus.SERVIDO },
+          include: { items: true },
+        },
+      },
     });
-    if (!session) throw new NotFoundException("Comanda não encontrada.");
+    if (!session) throw new NotFoundException("Comanda fechada não encontrada.");
+
+    const paymentMethod = options.paymentMethod ?? session.paymentMethod;
+    if (!paymentMethod) {
+      throw new BadRequestException("Registre a forma de pagamento da mesa antes de emitir a NFC-e.");
+    }
+    const customerDocument = options.customerDocument ?? session.customerDocument ?? null;
+    // Quando a emissão manual completa um dado que faltava no fechamento,
+    // guardamos na própria comanda para que uma nova consulta/auditoria use o
+    // mesmo contexto, e não uma inferência posterior.
+    if (
+      paymentMethod !== session.paymentMethod
+      || customerDocument !== session.customerDocument
+      || !session.paidAt
+    ) {
+      await this.db().tableSession.updateMany({
+        where: { id: tableSessionId, companyId, status: TableSessionStatus.FECHADA },
+        data: {
+          paymentMethod,
+          customerDocument,
+          paidAt: session.paidAt ?? new Date(),
+        },
+      });
+    }
 
     const itens = session.orders.flatMap((pedido: any) => pedido.items.map((item: any) => ({
       productId: item.productId,
@@ -144,12 +190,96 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
     );
     const preparado = await this.prepare(companyId, {
       items: itens,
-      payments: [{ method: PaymentMethod.DINHEIRO, amountCents: totalCents }],
-      customerDocument: options.customerDocument ?? null,
-      customerName: null,
+      payments: [{ method: paymentMethod, amountCents: totalCents }],
+      customerDocument,
+      customerName: session.customerName ?? null,
     });
 
     return this.issue(companyId, preparado, { tableSessionId });
+  }
+
+  /**
+   * Vendas concluídas que ainda não receberam documento fiscal.
+   *
+   * A lista permite emissão manual tanto para delivery pago quanto para mesas
+   * já fechadas, inclusive se a emissão automática estiver desligada. Nunca
+   * retornamos fontes que já têm documento: a idempotência fica no servidor,
+   * não no botão da tela.
+   */
+  async listPendingEmissionSources(companyId: string) {
+    const [orders, sessions] = await Promise.all([
+      this.db().order.findMany({
+        where: {
+          companyId,
+          paymentStatus: PaymentStatus.PAGO,
+          status: { not: OrderStatus.CANCELADO },
+        },
+        select: {
+          id: true,
+          total: true,
+          paymentMethod: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 60,
+      }),
+      this.db().tableSession.findMany({
+        where: { companyId, status: TableSessionStatus.FECHADA },
+        select: {
+          id: true,
+          paymentMethod: true,
+          closedAt: true,
+          createdAt: true,
+          table: { select: { name: true } },
+          orders: {
+            where: { status: DiningOrderStatus.SERVIDO },
+            select: { subtotal: true },
+          },
+        },
+        orderBy: { closedAt: "desc" },
+        take: 60,
+      }),
+    ]);
+
+    const orderIds = orders.map((order: any) => order.id);
+    const tableSessionIds = sessions.map((session: any) => session.id);
+    const documents = (orderIds.length || tableSessionIds.length)
+      ? await this.db().fiscalDocument.findMany({
+        where: {
+          companyId,
+          OR: [
+            ...(orderIds.length ? [{ orderId: { in: orderIds } }] : []),
+            ...(tableSessionIds.length ? [{ tableSessionId: { in: tableSessionIds } }] : []),
+          ],
+        },
+        select: { orderId: true, tableSessionId: true },
+      })
+      : [];
+    const documentedOrderIds = new Set(documents.map((document: any) => document.orderId).filter(Boolean));
+    const documentedTableSessionIds = new Set(documents.map((document: any) => document.tableSessionId).filter(Boolean));
+
+    return {
+      orders: orders
+        .filter((order: any) => !documentedOrderIds.has(order.id))
+        .map((order: any) => ({
+          kind: "PEDIDO" as const,
+          id: order.id,
+          label: `Pedido ${order.id.slice(-6).toUpperCase()}`,
+          totalAmount: Number(order.total),
+          paymentMethod: order.paymentMethod,
+          completedAt: order.createdAt,
+        })),
+      tables: sessions
+        .map((session: any) => ({
+          kind: "MESA" as const,
+          id: session.id,
+          label: session.table.name,
+          totalAmount: session.orders.reduce((sum: number, order: any) => sum + Number(order.subtotal), 0),
+          paymentMethod: session.paymentMethod,
+          completedAt: session.closedAt ?? session.createdAt,
+        }))
+        .filter((session: any) => session.totalAmount > 0 && !documentedTableSessionIds.has(session.id)),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -1083,6 +1213,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
     return {
       id: documento.id,
       orderId: documento.orderId,
+      tableSessionId: documento.tableSessionId,
       status: documento.status,
       emissionType: documento.emissionType,
       environment: documento.environment,

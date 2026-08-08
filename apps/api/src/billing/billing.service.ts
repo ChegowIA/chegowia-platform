@@ -35,6 +35,7 @@ import { runsBackgroundJobs } from "../common/config/app-role";
 
 const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
+const FREE_TRIAL_DAYS = 7;
 
 @Injectable()
 export class BillingService implements OnModuleInit, OnModuleDestroy {
@@ -90,6 +91,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return {
       billingCycle: "mensal",
       variableUsageBilling: "O consumo é consolidado e lançado na próxima fatura.",
+      trial: {
+        days: FREE_TRIAL_DAYS,
+        description: "Durante os 7 dias de teste, IA e WhatsApp são medidos normalmente para transparência, mas ficam cobertos pela ChegowIA e não entram em uma fatura futura.",
+      },
       rates: rates.map((rate: any) => {
         const providerUnitCost = Number(rate.providerUnitCost);
         const markupPercent = Number(rate.markupPercent);
@@ -202,7 +207,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
      * sua. Confirmação por e-mail antes do cadastro é a evolução natural daqui.
      */
     const application = await this.db().clientApplication.create({ data });
-    return this.evaluateClient(application, plan);
+    return this.evaluateClient(application);
   }
 
   async createForReseller(userId: string, dto: ClientApplicationDto) {
@@ -552,6 +557,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   async companyBillingStatus(companyId: string) {
     const enforcementEnabled = process.env.BILLING_ENFORCEMENT === "true"
       || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
+    const now = new Date();
     const subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
       include: { plan: true, reseller: { include: { user: { select: { name: true } } } } },
@@ -565,11 +571,33 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         usage,
       };
     }
-    const usage = await this.usage.getBillingUsage(companyId, Number(subscription.plan.monthlyPrice));
+    const trialActive = this.isTrialActive(subscription, now);
+    const trialExpired = this.isTrialExpired(subscription, now);
+    // O valor base só compõe uma estimativa quando existe uma assinatura paga.
+    // No teste, inclusive depois do vencimento, nenhum dos consumos acumulados
+    // pode virar dívida: o cliente escolhe se começa uma nova assinatura.
+    const usage = await this.usage.getBillingUsage(
+      companyId,
+      subscription.status === SubscriptionStatus.ATIVA ? Number(subscription.plan.monthlyPrice) : 0,
+    );
     return {
       status: subscription.status,
       manageable: Boolean(subscription.stripeCustomerId),
-      accessRestricted: enforcementEnabled && subscription.status !== SubscriptionStatus.ATIVA,
+      accessRestricted: trialExpired || (enforcementEnabled && !trialActive && subscription.status !== SubscriptionStatus.ATIVA),
+      activationAvailable: trialExpired,
+      trial: subscription.trialStartedAt || subscription.trialEndsAt
+        ? {
+            days: FREE_TRIAL_DAYS,
+            startedAt: subscription.trialStartedAt,
+            endsAt: subscription.trialEndsAt,
+            current: subscription.status === SubscriptionStatus.EM_TESTE,
+            active: trialActive,
+            expired: trialExpired,
+            daysRemaining: subscription.trialEndsAt
+              ? Math.max(0, Math.ceil((subscription.trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)))
+              : 0,
+          }
+        : null,
       currentPeriodEnd: subscription.currentPeriodEnd,
       canceledAt: subscription.canceledAt,
       plan: {
@@ -605,6 +633,83 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         this.stripeErrorForUser(error, "Não foi possível abrir o portal da assinatura."),
       );
     }
+  }
+
+  /**
+   * Depois do fim do teste, o próprio administrador abre uma nova sessão de
+   * checkout. Não reutilizamos consumo nem período do teste: ele foi um custo
+   * assumido pela ChegowIA e a assinatura paga começa limpa a partir daqui.
+   */
+  async companyCheckout(companyId: string) {
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { companyId },
+      include: {
+        plan: true,
+        reseller: true,
+        company: { select: { name: true } },
+      },
+    });
+    if (!subscription) throw new NotFoundException("Assinatura não encontrada para esta empresa.");
+    if (!this.isTrialExpired(subscription)) {
+      throw new BadRequestException("A ativação paga fica disponível quando os 7 dias de teste terminarem.");
+    }
+    if (!this.stripe || !subscription.plan.stripePriceId) {
+      throw new BadRequestException("A cobrança ainda está sendo configurada. Tente novamente em alguns instantes.");
+    }
+    await this.assertStripePrice(subscription.plan.stripePriceId, {
+      monthlyPrice: Number(subscription.plan.monthlyPrice),
+      currency: subscription.plan.currency,
+    });
+
+    if (subscription.stripeCheckoutSessionId) {
+      try {
+        const existing = await this.stripe.checkout.sessions.retrieve(subscription.stripeCheckoutSessionId);
+        if (existing.status === "open" && existing.url) {
+          return { url: existing.url, reused: true };
+        }
+      } catch (error) {
+        if (!this.isMissingStripeResource(error)) throw error;
+      }
+    }
+
+    const admin = await this.db().user.findFirst({
+      where: { companyId, role: Role.ADMIN, isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { email: true },
+    });
+    if (!admin) throw new BadRequestException("Não foi possível localizar o administrador da empresa.");
+
+    const discounts: Stripe.Checkout.SessionCreateParams.Discount[] = [];
+    if (subscription.resellerId) discounts.push({ coupon: await this.referralCouponId() });
+    const session = await this.stripe.checkout.sessions.create({
+      mode: "subscription",
+      locale: "pt-BR",
+      ...(subscription.stripeCustomerId ? { customer: subscription.stripeCustomerId } : { customer_email: admin.email }),
+      line_items: [{ price: subscription.plan.stripePriceId, quantity: 1 }],
+      discounts,
+      success_url: `${this.publicAppUrl()}/contratar/sucesso?ativacao=1`,
+      cancel_url: `${this.publicAppUrl()}/painel/assinatura?pagamento=cancelado`,
+      metadata: {
+        companyId,
+        subscriptionId: subscription.id,
+        activation: "trial",
+      },
+      subscription_data: {
+        metadata: {
+          companyId,
+          subscriptionId: subscription.id,
+          activation: "trial",
+          resellerId: subscription.resellerId ?? "",
+          planId: subscription.planId,
+        },
+      },
+    }, { idempotencyKey: `trial-activation-${subscription.id}-${subscription.updatedAt.getTime()}` });
+    if (!session.url) throw new BadGatewayException("A Stripe não retornou o link para pagamento da ativação.");
+    await this.db().clientSubscription.update({
+      where: { id: subscription.id },
+      data: { stripeCheckoutSessionId: session.id },
+    });
+    return { url: session.url, reused: false };
   }
 
   listClientApplications() {
@@ -692,10 +797,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!application) throw new NotFoundException("Cadastro não encontrado.");
     await this.ensureClientIdentityAvailable(application);
     await this.db().clientApplication.update({ where: { id }, data: { status: ApplicationStatus.APROVADA } });
-    return this.checkout(id, application.plan);
+    return this.startTrial(id);
   }
 
-  private async evaluateClient(application: any, plan: any) {
+  private async evaluateClient(application: any) {
     let analysis: any;
     try {
       // Custo da plataforma: esta análise é do processo comercial da ChegowIA,
@@ -717,50 +822,154 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       return { applicationId: application.id, status: ApplicationStatus.REVISAO_HUMANA, feedback: analysis.feedback };
     }
     await this.db().clientApplication.update({ where: { id: application.id }, data: { status: ApplicationStatus.APROVADA, aiScore: analysis.score, aiFeedback: analysis.feedback, aiAnalysis: analysis } });
-    const checkout = await this.checkout(application.id, plan);
-    return { applicationId: application.id, status: ApplicationStatus.APROVADA, ...checkout };
+    const trial = await this.startTrial(application.id);
+    return { applicationId: application.id, status: ApplicationStatus.APROVADA, ...trial };
   }
 
-  async checkout(applicationId: string, providedPlan?: any) {
-    const application = await this.db().clientApplication.findUnique({ where: { id: applicationId }, include: { plan: true, reseller: true } });
-    if (!application || application.status !== ApplicationStatus.APROVADA) throw new BadRequestException("Cadastro ainda não aprovado.");
-    const plan = providedPlan ?? application.plan;
-    if (!this.stripe || !plan.stripePriceId) {
-      return { checkoutUrl: null, paymentPendingConfiguration: true, message: "Stripe ainda não configurado. O cadastro foi aprovado e aguarda geração da cobrança." };
-    }
-    await this.assertStripePrice(plan.stripePriceId, {
-      monthlyPrice: Number(plan.monthlyPrice),
-      currency: plan.currency,
+  /**
+   * Provisiona a empresa assim que o cadastro é aprovado. A senha já foi
+   * escolhida pelo empresário, mas o login continua protegido pela confirmação
+   * de e-mail enviada abaixo. Não há cliente nem assinatura Stripe neste ponto.
+   */
+  async startTrial(applicationId: string) {
+    const application = await this.db().clientApplication.findUnique({
+      where: { id: applicationId },
+      include: { plan: true, reseller: true },
     });
-    if (application.stripeSessionId) {
-      const existingSession = await this.stripe.checkout.sessions.retrieve(application.stripeSessionId);
-      if (existingSession.status === "open" && existingSession.url) {
-        return { checkoutUrl: existingSession.url, paymentPendingConfiguration: false, reused: true };
+    if (!application || application.status !== ApplicationStatus.APROVADA) throw new BadRequestException("Cadastro ainda não aprovado.");
+    if (application.companyId) {
+      const existing = await this.db().clientSubscription.findUnique({ where: { companyId: application.companyId } });
+      if (existing) {
+        return {
+          trialStarted: existing.status === SubscriptionStatus.EM_TESTE,
+          companyId: application.companyId,
+          trialEndsAt: existing.trialEndsAt,
+          trialDays: FREE_TRIAL_DAYS,
+          message: existing.status === SubscriptionStatus.EM_TESTE
+            ? "Seu teste gratuito já está ativo. Confirme o e-mail para entrar no painel."
+            : "Esta empresa já possui uma assinatura ativa.",
+        };
       }
     }
-    const discounts: Stripe.Checkout.SessionCreateParams.Discount[] = [];
-    if (application.resellerId) {
-      discounts.push({ coupon: await this.referralCouponId() });
-    }
-    const session = await this.stripe.checkout.sessions.create({
-      mode: "subscription",
-      locale: "pt-BR",
-      customer_email: application.email,
-      line_items: [{ price: plan.stripePriceId, quantity: 1 }],
-      discounts,
-      success_url: `${this.publicAppUrl()}/contratar/sucesso?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${this.publicAppUrl()}/planos?cancelado=1`,
-      metadata: { applicationId, resellerId: application.resellerId ?? "", planId: plan.id },
-      subscription_data: { metadata: { applicationId, resellerId: application.resellerId ?? "", planId: plan.id } },
-    }, { idempotencyKey: `client-application-${applicationId}-${application.updatedAt.getTime()}` });
-    await this.db().clientApplication.update({ where: { id: applicationId }, data: { stripeSessionId: session.id } });
-    if (application.sourceLeadId) {
-      await this.db().salesLead.updateMany({
-        where: { id: application.sourceLeadId, resellerId: application.resellerId, status: { in: [LeadStatus.EM_ATENDIMENTO, LeadStatus.PROPOSTA] } },
-        data: { status: LeadStatus.PROPOSTA },
+    await this.ensureClientIdentityAvailable(application);
+    const now = new Date();
+    const trialEndsAt = new Date(now.getTime() + FREE_TRIAL_DAYS * 24 * 60 * 60 * 1000);
+    const slug = await this.uniqueCompanySlug(application.tradeName || application.companyName);
+    const admin = await this.db().$transaction(async (tx: any) => {
+      const company = await tx.company.create({
+        data: {
+          name: application.tradeName || application.companyName,
+          slug,
+          cnpj: application.document,
+          phone: application.phone,
+          city: application.city,
+          state: application.state,
+          settings: { create: { plan: application.plan.slug } },
+        },
       });
+      await tx.identityDocument.create({
+        data: { value: application.document, ownerType: "COMPANY", ownerId: company.id },
+      });
+      const createdAdmin = await tx.user.create({
+        data: {
+          name: application.responsibleName,
+          email: application.email,
+          passwordHash: application.passwordHash,
+          role: Role.ADMIN,
+          companyId: company.id,
+          termsAcceptedAt: application.termsAcceptedAt,
+          privacyAcceptedAt: application.privacyAcceptedAt,
+          employeeProfile: { create: { companyId: company.id, position: "Administrador" } },
+        },
+      });
+      await tx.clientSubscription.create({
+        data: {
+          companyId: company.id,
+          planId: application.planId,
+          resellerId: application.resellerId,
+          status: SubscriptionStatus.EM_TESTE,
+          trialStartedAt: now,
+          trialEndsAt,
+          referralCode: application.resellerCode,
+          referralLockedAt: application.resellerId ? now : null,
+        },
+      });
+      await tx.clientApplication.update({ where: { id: application.id }, data: { companyId: company.id, stripeSessionId: null } });
+      if (application.sourceLeadId) {
+        await tx.salesLead.updateMany({
+          where: {
+            id: application.sourceLeadId,
+            resellerId: application.resellerId,
+            status: { in: [LeadStatus.EM_ATENDIMENTO, LeadStatus.PROPOSTA] },
+          },
+          data: { status: LeadStatus.PROPOSTA },
+        });
+      }
+      return { id: createdAdmin.id, companyId: company.id };
+    });
+    await this.auth.sendVerificationForUser(admin.id);
+    return {
+      trialStarted: true,
+      companyId: admin.companyId,
+      trialEndsAt,
+      trialDays: FREE_TRIAL_DAYS,
+      message: "Seu teste gratuito de 7 dias começou. Confirme seu e-mail para entrar e usar todos os recursos.",
+    };
+  }
+
+  /** Compatibilidade com links antigos: agora eles iniciam o teste, sem cobrança antecipada. */
+  async checkout(applicationId: string) {
+    return this.startTrial(applicationId);
+  }
+
+  private async completeTrialActivation(session: Stripe.Checkout.Session, fallbackCompanyId?: string) {
+    const companyId = session.metadata?.companyId ?? fallbackCompanyId;
+    if (!companyId) return;
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { companyId },
+      include: { reseller: true },
+    });
+    if (!subscription) return;
+    const stripeCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+    const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+    let currentPeriodEnd: Date | null = null;
+    if (this.stripe && stripeSubscriptionId) {
+      try {
+        currentPeriodEnd = this.subscriptionPeriodEnd(await this.stripe.subscriptions.retrieve(stripeSubscriptionId));
+      } catch (error) {
+        this.logger.warn(`Não foi possível consultar o período da nova assinatura ${stripeSubscriptionId}: ${this.stripeErrorForLog(error)}`);
+      }
     }
-    return { checkoutUrl: session.url, paymentPendingConfiguration: false };
+    const activationAt = new Date();
+    await this.db().$transaction(async (tx: any) => {
+      await tx.clientSubscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: SubscriptionStatus.ATIVA,
+          stripeCustomerId: stripeCustomerId ?? subscription.stripeCustomerId,
+          stripeSubscriptionId: stripeSubscriptionId ?? subscription.stripeSubscriptionId,
+          stripeCheckoutSessionId: null,
+          currentPeriodEnd,
+          canceledAt: null,
+          // O desconto por indicação começa com a assinatura paga, não no teste.
+          discountEndsAt: subscription.resellerId && !subscription.discountEndsAt
+            ? new Date(activationAt.getFullYear(), activationAt.getMonth() + 3, activationAt.getDate())
+            : subscription.discountEndsAt,
+        },
+      });
+      const application = await tx.clientApplication.findFirst({
+        where: { companyId },
+        select: { sourceLeadId: true, resellerId: true },
+        orderBy: { createdAt: "desc" },
+      });
+      if (application?.sourceLeadId) {
+        await tx.salesLead.updateMany({
+          where: { id: application.sourceLeadId, resellerId: application.resellerId },
+          data: { status: LeadStatus.CONVERTIDO, convertedAt: activationAt },
+        });
+      }
+    });
+    await this.recordCommissionForSubscription(stripeSubscriptionId);
   }
 
   async handleWebhook(
@@ -796,6 +1005,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
   private async completeCheckout(session: Stripe.Checkout.Session) {
     if (session.payment_status !== "paid" && session.payment_status !== "no_payment_required") return;
+    if (session.metadata?.companyId) {
+      await this.completeTrialActivation(session);
+      return;
+    }
     const applicationId = session.metadata?.applicationId;
     if (!applicationId) return;
     const application = await this.db().clientApplication.findUnique({ where: { id: applicationId }, include: { plan: true } });
@@ -807,12 +1020,19 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         orderBy: { createdAt: "asc" },
       });
       if (admin) await this.auth.sendVerificationForUser(admin.id);
-      // A comissão é registrada depois do commit da transação de provisionamento.
-      // Se o processo caísse nesse intervalo, o retry entraria por aqui (a
-      // empresa já existe) e a comissão do revendedor ficava perdida para
-      // sempre. `recordCommission` é idempotente — upsert por
-      // `stripeInvoiceId` —, então repetir não duplica nada.
-      await this.recordCommissionForSubscription(stripeSubscriptionId);
+      // Sessões antigas podem terminar depois que o cadastro migrou para o
+      // teste. Nesse caso, ativa a mesma empresa em vez de criar uma segunda.
+      const existingSubscription = await this.db().clientSubscription.findUnique({
+        where: { companyId: application.companyId },
+        select: { status: true },
+      });
+      if (existingSubscription?.status === SubscriptionStatus.EM_TESTE) {
+        await this.completeTrialActivation(session, application.companyId);
+      } else {
+        // Retry de checkout legado: a empresa já nasceu como paga. Mantemos a
+        // conciliação de comissão sem exigir os novos campos do teste.
+        await this.recordCommissionForSubscription(stripeSubscriptionId);
+      }
       return;
     }
     await this.ensureClientIdentityAvailable(application);
@@ -1180,7 +1400,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         const invoice = item.invoice;
         const stripeInvoiceId = typeof invoice === "string" ? invoice : invoice?.id ?? null;
         await this.db().usageLedger.updateMany({
-          where: { id: { in: ids }, status: UsageLedgerStatus.PENDENTE },
+          where: { id: { in: ids }, status: UsageLedgerStatus.PENDENTE, trialCoveredAt: null },
           data: {
             status: UsageLedgerStatus.SINCRONIZADO,
             stripeInvoiceItemId: item.id,
@@ -1330,6 +1550,16 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       .filter((value): value is number => typeof value === "number")
       .sort((a, b) => b - a)[0];
     return timestamp ? new Date(timestamp * 1000) : null;
+  }
+
+  private isTrialActive(subscription: { status: SubscriptionStatus; trialEndsAt?: Date | null }, at = new Date()) {
+    return subscription.status === SubscriptionStatus.EM_TESTE
+      && Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() > at.getTime());
+  }
+
+  private isTrialExpired(subscription: { status: SubscriptionStatus; trialEndsAt?: Date | null }, at = new Date()) {
+    return subscription.status === SubscriptionStatus.EM_TESTE
+      && Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() <= at.getTime());
   }
 
   private subscriptionIdFromInvoice(invoice: Stripe.Invoice) {

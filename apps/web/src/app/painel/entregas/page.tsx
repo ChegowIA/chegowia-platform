@@ -182,7 +182,7 @@ export default function EntregasPage() {
   }, [activeDeliveryIds, canEditDeliveries, isMotoboy, queryClient, trackingEnabled]);
 
   const columns: Column<Delivery>[] = [
-    { header: "Cliente", render: (d) => d.order.customer?.name ?? "-" },
+    { header: "Cliente", render: (d) => d.order.customer?.name ?? d.order.customerName ?? "-" },
     {
       header: isMotoboy ? "Destino" : "Bairro",
       render: (d) =>
@@ -360,7 +360,7 @@ export default function EntregasPage() {
                 <div className="space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-bold text-slate-900 dark:text-slate-100">{delivery.order.customer?.name ?? "Cliente"}</p>
+                      <p className="font-bold text-slate-900 dark:text-slate-100">{delivery.order.customer?.name ?? delivery.order.customerName ?? "Cliente"}</p>
                       <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                         {delivery.order.deliveryStreet}, {delivery.order.deliveryNumber}
                       </p>

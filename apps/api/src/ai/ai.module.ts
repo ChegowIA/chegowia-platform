@@ -13,6 +13,7 @@ import { PromotionsService } from "./promotions.service";
 import { PromotionsController, PublicPromotionsController } from "./promotions.controller";
 import { UsageModule } from "../usage/usage.module";
 import { SearchIntentService } from "./search/search-intent.service";
+import { OrdersModule } from "../orders/orders.module";
 
 /**
  * Troca de provedor de IA é configuração, não código: AI_PROVIDER=deepseek (padrão)
@@ -32,7 +33,7 @@ const aiProviderFactory = {
 };
 
 @Module({
-  imports: [UsageModule],
+  imports: [UsageModule, OrdersModule],
   controllers: [
     AiController,
     AiMotoboyController,

@@ -1,10 +1,41 @@
 # ChegowIA
 
+> Plataforma SaaS multiempresa para restaurantes e delivery: cardápio online,
+> pedidos, salão, entregas, WhatsApp oficial, cobrança por consumo e atendimento
+> inteligente em uma operação única.
+
+| Produto | Stack principal | Modelo |
+| --- | --- | --- |
+| Gestão de pedidos, delivery e salão | Next.js 16, NestJS, MySQL e Prisma | SaaS multiempresa |
+| Atendimento conversacional | WhatsApp Cloud API + DeepSeek | IA e humano trabalhando juntos |
+| Cobrança | Stripe Billing + consumo auditável | Plano base + uso de IA/WhatsApp |
+
+## O que torna o ChegowIA diferente
+
+- **Operação completa**: pedido online, salão com QR por mesa, cozinha, caixa,
+  entrega e acompanhamento do cliente no mesmo fluxo.
+- **IA útil e controlada**: cada assistente recebe só o contexto e as ferramentas
+  permitidas para sua função; ações sensíveis exigem confirmação explícita.
+- **WhatsApp sem configuração técnica para o empresário**: o Embedded Signup da
+  Meta conecta o número da empresa no próprio painel, com credenciais cifradas.
+- **Isolamento multiempresa por desenho**: tenant explícito em cada domínio e uma
+  segunda camada automática no Prisma para impedir cruzamento de dados.
+- **Descoberta orgânica**: páginas públicas, sitemap, dados estruturados e URLs
+  individuais de produtos são gerados automaticamente a partir do catálogo ativo.
+
+## Navegação
+
+- [Arquitetura e decisões](#stack-e-decisões-de-arquitetura)
+- [Atendimento com IA e WhatsApp](#whatsapp-business-oficial-e-atendimento-híbrido)
+- [Cobrança e consumo](#mensalidade-e-custos-variáveis)
+- [Segurança e isolamento](#isolamento-multiempresa)
+- [Como rodar localmente](#rodando-localmente)
+- [Testes e validação](#testes)
+- [Produção](docs/PRODUCAO.md)
+- [Revenda e Stripe Connect](docs/REVENDA_E_STRIPE.md)
+
 > Para publicação, segurança, Stripe, armazenamento local e backups, siga o
 > [guia de produção](docs/PRODUCAO.md).
-
-Plataforma SaaS multiempresa de gestão de pedidos/delivery, inspirada em sistemas como
-Anota AI, com foco em agente virtual de IA, gestão operacional e isolamento multiempresa.
 
 ## Stack e decisões de arquitetura
 
@@ -76,6 +107,24 @@ com GSAP.
 A taxonomia de tipos públicos vive em `apps/api/src/catalog/public-product-types.ts` e
 é a mesma consumida pela montagem do marketplace e pela interpretação da busca, para
 que as duas não divirjam. O painel flutuante de descoberta usa o mesmo motor.
+
+## SEO e descoberta orgânica
+
+O catálogo público não depende de cadastro manual de SEO por empresa. Quando uma loja
+ou produto está ativo, o sistema gera automaticamente:
+
+- uma página canônica para a loja em `/loja/[slug]`, com nome, cidade, horário,
+  cardápio e imagem da marca;
+- uma URL própria por item em `/loja/[slug]/produto/[id]`, com título, descrição,
+  preço e dados estruturados de produto;
+- `robots.txt`, `sitemap.xml`, Open Graph/Twitter cards e JSON-LD de organização,
+  negócio local, menu e produto;
+- exclusão explícita de painéis, checkout, pedidos, mesas e dados autenticados dos
+  mecanismos de busca.
+
+Em produção, defina `NEXT_PUBLIC_SITE_URL=https://chegowia.com.br` e envie
+`https://chegowia.com.br/sitemap.xml` no Google Search Console. A verificação do
+domínio pode ser configurada por `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`.
 
 ## WhatsApp Business oficial e atendimento híbrido
 

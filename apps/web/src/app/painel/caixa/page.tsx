@@ -7,7 +7,7 @@ import { api, apiErrorMessage } from "@/lib/api-client";
 import { CashHistoryResponse, CashRegister, CashSessionListItem, CashSessionReport } from "@/lib/types";
 import { formatCurrency } from "@/lib/format";
 import { parseCurrencyInput } from "@/lib/brazilian-format";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select, Textarea } from "@/components/ui/input";
 import { CurrencyInput } from "@/components/ui/brazil-fields";
@@ -197,10 +197,12 @@ export default function CaixaPage() {
                 <CurrencyInput value={openingAmount} onValueChange={setOpeningAmount} />
               </FormField>
             </div>
-            <Button onClick={() => open.mutate()} disabled={!registerId || open.isPending}>
+          </CardContent>
+          <CardActions>
+            <Button className="w-full sm:w-auto" onClick={() => open.mutate()} disabled={!registerId || open.isPending}>
               {open.isPending ? "Abrindo..." : "Abrir turno"}
             </Button>
-          </CardContent>
+          </CardActions>
         </Card>
       )}
 
@@ -236,14 +238,6 @@ export default function CaixaPage() {
                   />
                 </FormField>
               </div>
-              <Button
-                variant="outline"
-                onClick={() => addMovement.mutate()}
-                disabled={parseCurrencyInput(movement.amount) <= 0 || movement.reason.trim().length < 3}
-              >
-                Registrar movimentação
-              </Button>
-
               {report.movements.length > 0 && (
                 <ul className="space-y-1 text-sm">
                   {report.movements.map((mov) => (
@@ -257,6 +251,16 @@ export default function CaixaPage() {
                 </ul>
               )}
             </CardContent>
+            <CardActions>
+              <Button
+                className="w-full sm:w-auto"
+                variant="outline"
+                onClick={() => addMovement.mutate()}
+                disabled={parseCurrencyInput(movement.amount) <= 0 || movement.reason.trim().length < 3}
+              >
+                Registrar movimentação
+              </Button>
+            </CardActions>
           </Card>
 
           <Card>
@@ -279,10 +283,12 @@ export default function CaixaPage() {
               <FormField label="Observações">
                 <Textarea value={closingNotes} onChange={(e) => setClosingNotes(e.target.value)} />
               </FormField>
-              <Button onClick={() => close.mutate()} disabled={!countedAmount || close.isPending}>
+            </CardContent>
+            <CardActions>
+              <Button className="w-full sm:w-auto" onClick={() => close.mutate()} disabled={!countedAmount || close.isPending}>
                 {close.isPending ? "Fechando..." : "Fechar turno"}
               </Button>
-            </CardContent>
+            </CardActions>
           </Card>
         </>
       )}

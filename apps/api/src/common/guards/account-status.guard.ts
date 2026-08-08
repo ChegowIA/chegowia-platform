@@ -73,19 +73,25 @@ export class AccountStatusGuard implements CanActivate {
         where: { id: identity.companyId },
         select: {
           isActive: true,
-          subscription: { select: { status: true } },
+          subscription: { select: { status: true, trialEndsAt: true } },
         },
       });
       if (!company?.isActive) throw new ForbiddenException("Empresa inativa.");
       const enforce = process.env.BILLING_ENFORCEMENT === "true"
         || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
+      const trialActive = company.subscription?.status === SubscriptionStatus.EM_TESTE
+        && Boolean(company.subscription.trialEndsAt && company.subscription.trialEndsAt.getTime() > Date.now());
+      const trialExpired = company.subscription?.status === SubscriptionStatus.EM_TESTE
+        && Boolean(company.subscription.trialEndsAt && company.subscription.trialEndsAt.getTime() <= Date.now());
+      const subscriptionAllowsAccess = company.subscription?.status === SubscriptionStatus.ATIVA || trialActive;
       if (
-        enforce
-        && !allowInactiveSubscription
-        && (!company.subscription || company.subscription.status !== SubscriptionStatus.ATIVA)
+        !allowInactiveSubscription
+        && (trialExpired || (enforce && !subscriptionAllowsAccess))
       ) {
         throw new ForbiddenException(
-          company.subscription?.status === SubscriptionStatus.INADIMPLENTE
+          trialExpired
+            ? "Seu teste gratuito terminou. Pague a fatura de ativação para liberar todos os recursos."
+            : company.subscription?.status === SubscriptionStatus.INADIMPLENTE
             ? "Assinatura inadimplente. Regularize o pagamento para continuar."
             : "A assinatura da empresa não está ativa.",
         );

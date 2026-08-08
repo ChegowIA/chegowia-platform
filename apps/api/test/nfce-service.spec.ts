@@ -1,9 +1,13 @@
 import * as forge from "node-forge";
 import {
+  DiningOrderStatus,
   FiscalDocumentStatus,
   FiscalEmissionType,
   FiscalEnvironment,
+  OrderStatus,
   PaymentMethod,
+  PaymentStatus,
+  TableSessionStatus,
   TaxOrigin,
   TaxRegime,
 } from "@prisma/client";
@@ -108,6 +112,8 @@ describe("serviço de emissão", () => {
   const pedido = {
     id: "pedido-1",
     companyId: "empresa-1",
+    status: OrderStatus.CONFIRMADO,
+    paymentStatus: PaymentStatus.PAGO,
     paymentMethod: PaymentMethod.DINHEIRO,
     deliveryFee: 5,
     discount: 0,
@@ -132,7 +138,23 @@ describe("serviço de emissão", () => {
         }),
       },
       company: { findUnique: jest.fn().mockResolvedValue({ cnpj: "12345678000199", phone: null, name: "Loja" }) },
-      order: { findFirst: jest.fn().mockResolvedValue(overrides.order ?? pedido) },
+      order: {
+        findFirst: jest.fn().mockResolvedValue(overrides.order ?? pedido),
+        findMany: jest.fn().mockResolvedValue(overrides.ordersForEmission ?? []),
+      },
+      tableSession: {
+        findFirst: jest.fn().mockImplementation((args: any) => {
+          const session = overrides.tableSession ?? null;
+          const servedOnly = args?.include?.orders?.where?.status === DiningOrderStatus.SERVIDO;
+          return Promise.resolve(
+            session && servedOnly
+              ? { ...session, orders: session.orders.filter((order: any) => order.status === DiningOrderStatus.SERVIDO) }
+              : session,
+          );
+        }),
+        findMany: jest.fn().mockResolvedValue(overrides.tableSessionsForEmission ?? []),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       product: {
         findMany: jest.fn().mockResolvedValue(overrides.products ?? [{ id: "prod-1", ...tributacaoOk }]),
       },
@@ -140,12 +162,13 @@ describe("serviço de emissão", () => {
         findUnique: jest.fn().mockImplementation(({ where }: any) =>
           Promise.resolve(documentos.get(where.id ?? where.orderId) ?? null)),
         findFirst: jest.fn().mockImplementation(({ where }: any) =>
-          Promise.resolve(documentos.get(where.id) ?? null)),
-        findMany: jest.fn().mockResolvedValue([]),
+          Promise.resolve(documentos.get(where.id ?? where.orderId ?? where.tableSessionId) ?? null)),
+        findMany: jest.fn().mockResolvedValue(overrides.fiscalDocuments ?? []),
         create: jest.fn().mockImplementation(({ data }: any) => {
           const doc = { id: "doc-1", attempts: 0, createdAt: new Date(), ...data };
           documentos.set("doc-1", doc);
           if (data.orderId) documentos.set(data.orderId, doc);
+          if (data.tableSessionId) documentos.set(data.tableSessionId, doc);
           return Promise.resolve(doc);
         }),
         update: jest.fn().mockImplementation(({ where, data }: any) => {
@@ -197,11 +220,19 @@ describe("serviço de emissão", () => {
   }
 
   it("emite, assina e autoriza um pedido", async () => {
-    const { service, sefaz } = build();
+    const { service, sefaz, prisma } = build();
 
     const resultado: any = await service.emitForOrder("empresa-1", "pedido-1");
 
     expect(sefaz.sendAuthorization).toHaveBeenCalled();
+    expect(prisma.order.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: "pedido-1",
+        companyId: "empresa-1",
+        paymentStatus: PaymentStatus.PAGO,
+        status: { not: OrderStatus.CANCELADO },
+      }),
+    }));
     expect(resultado.status).toBe(FiscalDocumentStatus.AUTORIZADA);
     expect(resultado.protocolNumber).toBe("131260000123456");
     expect(resultado.accessKey).toHaveLength(44);
@@ -224,6 +255,89 @@ describe("serviço de emissão", () => {
     await service.emitForOrder("empresa-1", "pedido-1");
 
     expect(sefaz.sendAuthorization).toHaveBeenCalledTimes(1);
+  });
+
+  it("emite a comanda fechada com a forma de pagamento real e ignora pedidos cancelados", async () => {
+    const mesaFechada = {
+      id: "sessao-mesa-1",
+      companyId: "empresa-1",
+      status: TableSessionStatus.FECHADA,
+      paymentMethod: PaymentMethod.PIX_MANUAL,
+      paidAt: new Date(),
+      customerDocument: "12345678901",
+      customerName: "Cliente da mesa",
+      orders: [
+        {
+          status: DiningOrderStatus.SERVIDO,
+          subtotal: 30,
+          items: [{ productId: "prod-1", productName: "Prato servido", quantity: 2, totalPrice: 30 }],
+        },
+        {
+          status: DiningOrderStatus.CANCELADO,
+          subtotal: 99,
+          items: [{ productId: "produto-cancelado", productName: "Item cancelado", quantity: 1, totalPrice: 99 }],
+        },
+      ],
+    };
+    const { service, sefaz } = build({ tableSession: mesaFechada });
+
+    const resultado: any = await service.emitForTableSession("empresa-1", "sessao-mesa-1");
+
+    const [, xml] = (sefaz.sendAuthorization as jest.Mock).mock.calls[0];
+    expect(resultado.status).toBe(FiscalDocumentStatus.AUTORIZADA);
+    expect(xml).toContain("<tPag>17</tPag>");
+    expect(xml).toContain("Prato servido");
+    expect(xml).not.toContain("Item cancelado");
+    expect(xml).toContain("<vNF>30.00</vNF>");
+  });
+
+  it("permite completar o pagamento de uma comanda antiga na emissão manual", async () => {
+    const mesaFechada = {
+      id: "sessao-antiga",
+      companyId: "empresa-1",
+      status: TableSessionStatus.FECHADA,
+      paymentMethod: null,
+      paidAt: null,
+      customerDocument: null,
+      customerName: null,
+      orders: [{
+        status: DiningOrderStatus.SERVIDO,
+        subtotal: 15,
+        items: [{ productId: "prod-1", productName: "Prato", quantity: 1, totalPrice: 15 }],
+      }],
+    };
+    const { service, prisma, sefaz } = build({ tableSession: mesaFechada });
+
+    await service.emitForTableSession("empresa-1", "sessao-antiga", {
+      paymentMethod: PaymentMethod.CARTAO_ENTREGA,
+      customerDocument: "12345678901",
+    });
+
+    expect(prisma.tableSession.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: "sessao-antiga", companyId: "empresa-1" }),
+      data: expect.objectContaining({ paymentMethod: PaymentMethod.CARTAO_ENTREGA, customerDocument: "12345678901" }),
+    }));
+    const [, xml] = (sefaz.sendAuthorization as jest.Mock).mock.calls[0];
+    expect(xml).toContain("<tPag>03</tPag>");
+  });
+
+  it("lista delivery pago e mesa fechada sem documento para emissão manual", async () => {
+    const { service } = build({
+      ordersForEmission: [{
+        id: "pedido-pago", total: 41, paymentMethod: PaymentMethod.DINHEIRO, createdAt: new Date("2026-08-07T12:00:00Z"),
+        paymentStatus: PaymentStatus.PAGO, status: OrderStatus.CONFIRMADO,
+      }],
+      tableSessionsForEmission: [{
+        id: "mesa-pendente", paymentMethod: null, closedAt: new Date("2026-08-07T13:00:00Z"), createdAt: new Date(),
+        table: { name: "Mesa 8" },
+        orders: [{ subtotal: 32.5 }],
+      }],
+    });
+
+    const pendentes: any = await service.listPendingEmissionSources("empresa-1");
+
+    expect(pendentes.orders).toEqual([expect.objectContaining({ id: "pedido-pago", totalAmount: 41 })]);
+    expect(pendentes.tables).toEqual([expect.objectContaining({ id: "mesa-pendente", label: "Mesa 8", totalAmount: 32.5 })]);
   });
 
   it("SEFAZ indisponível vira contingência offline, não erro para o caixa", async () => {

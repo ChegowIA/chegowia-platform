@@ -26,6 +26,7 @@ const TENANT_MODELS = new Set([
   "MessagingChannel",
   "WhatsAppConversation",
   "WhatsAppMessage",
+  "WhatsAppOrderDraft",
   "UsageLedger",
   "RestaurantTable",
   "TableSession",

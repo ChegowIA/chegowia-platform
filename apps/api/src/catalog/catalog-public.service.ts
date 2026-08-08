@@ -33,6 +33,29 @@ export class CatalogPublicService {
     return this.prisma as any;
   }
 
+  /**
+   * Conteúdo mínimo para o sitemap. A consulta já filtra empresas, categorias
+   * e produtos inativos para que uma URL desativada não continue sendo
+   * descoberta por mecanismos de busca.
+   */
+  async getSitemapEntries() {
+    const companies = await this.db().company.findMany({
+      where: { isActive: true },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        slug: true,
+        updatedAt: true,
+        products: {
+          where: { isActive: true, category: { is: { isActive: true } } },
+          orderBy: { updatedAt: "desc" },
+          select: { id: true, updatedAt: true },
+        },
+      },
+    });
+
+    return { companies };
+  }
+
   /** Cardápio público de uma empresa pelo slug — usado na loja `/loja/[slug]`. */
   async getMenuBySlug(slug: string) {
     const company = await this.db().company.findFirst({ where: { slug, isActive: true } });
@@ -50,6 +73,84 @@ export class CatalogPublicService {
         },
       });
       return { company: { id: company.id, name: company.name, slug: company.slug }, categories };
+    });
+  }
+
+  /**
+   * Produto público por loja. A busca nasce da empresa ativa e a query do
+   * produto roda no tenant dela: mesmo conhecendo um ID válido, ninguém
+   * consegue usar esta rota para atravessar o catálogo de outra empresa.
+   */
+  async getProductBySlugAndId(slug: string, productId: string) {
+    const company = await this.db().company.findFirst({
+      where: { slug, isActive: true },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        addressLine: true,
+        city: true,
+        state: true,
+        logoUrl: true,
+        deliveryFeeBase: true,
+        deliveryRadiusKm: true,
+        avgDeliveryTimeMinutes: true,
+        settings: { select: { openingHours: true } },
+      },
+    });
+    if (!company) throw new NotFoundException("Loja não encontrada.");
+
+    return tenantContext.runAsCompany(company.id, async () => {
+      const product = await this.db().product.findFirst({
+        where: {
+          id: productId,
+          companyId: company.id,
+          isActive: true,
+          category: { is: { isActive: true } },
+        },
+        select: {
+          id: true,
+          categoryId: true,
+          name: true,
+          description: true,
+          price: true,
+          imageUrl: true,
+          isActive: true,
+          isFeatured: true,
+          updatedAt: true,
+          category: { select: { id: true, name: true, description: true } },
+          variations: {
+            where: { isActive: true },
+            select: { id: true, name: true, priceDelta: true, isActive: true },
+          },
+          addons: {
+            where: { isActive: true },
+            select: { id: true, name: true, price: true, isActive: true },
+          },
+        },
+      });
+      if (!product) throw new NotFoundException("Produto não encontrado.");
+
+      return {
+        company: {
+          ...company,
+          deliveryFeeBase: Number(company.deliveryFeeBase),
+          deliveryRadiusKm: Number(company.deliveryRadiusKm),
+        },
+        category: product.category,
+        product: {
+          ...product,
+          price: Number(product.price),
+          variations: product.variations.map((variation: any) => ({
+            ...variation,
+            priceDelta: Number(variation.priceDelta),
+          })),
+          addons: product.addons.map((addon: any) => ({
+            ...addon,
+            price: Number(addon.price),
+          })),
+        },
+      };
     });
   }
 

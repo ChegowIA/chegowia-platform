@@ -1,4 +1,5 @@
-import { IsBoolean, IsOptional, IsString, MinLength } from "class-validator";
+import { IsBoolean, IsIn, IsOptional, IsString, MinLength } from "class-validator";
+import { INTERNAL_ROLES } from "./create-employee.dto";
 
 export class UpdateEmployeeDto {
   @IsOptional()
@@ -9,6 +10,10 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @IsString()
   position?: string;
+
+  @IsOptional()
+  @IsIn(INTERNAL_ROLES)
+  role?: (typeof INTERNAL_ROLES)[number];
 
   @IsOptional()
   @IsBoolean()

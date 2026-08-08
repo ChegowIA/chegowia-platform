@@ -36,14 +36,13 @@ export default function FuncionariosPage() {
     password: "",
     confirmPassword: "",
     role: Role.FUNCIONARIO as string,
-    position: "",
   });
   const [createPermissions, setCreatePermissions] = useState<string[]>(
     DEFAULT_PERMISSIONS_BY_ROLE[Role.FUNCIONARIO] ?? [],
   );
 
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", position: "", isActive: true });
+  const [editForm, setEditForm] = useState({ name: "", role: Role.FUNCIONARIO as string, isActive: true });
 
   const [permissionsEmployee, setPermissionsEmployee] = useState<Employee | null>(null);
   const [permissionsDraft, setPermissionsDraft] = useState<string[]>([]);
@@ -65,7 +64,7 @@ export default function FuncionariosPage() {
   });
 
   function openCreateModal() {
-    setCreateForm({ name: "", email: "", password: "", confirmPassword: "", role: Role.FUNCIONARIO, position: "" });
+    setCreateForm({ name: "", email: "", password: "", confirmPassword: "", role: Role.FUNCIONARIO });
     setCreatePermissions(DEFAULT_PERMISSIONS_BY_ROLE[Role.FUNCIONARIO] ?? []);
     setCreateModalOpen(true);
   }
@@ -87,7 +86,6 @@ export default function FuncionariosPage() {
         password: createForm.password,
         confirmPassword: createForm.confirmPassword,
         role: createForm.role,
-        position: createForm.position || undefined,
         permissionKeys: createPermissions,
       });
       return data;
@@ -102,7 +100,7 @@ export default function FuncionariosPage() {
 
   function openEditModal(employee: Employee) {
     setEditingEmployee(employee);
-    setEditForm({ name: employee.user.name, position: employee.position ?? "", isActive: employee.user.isActive });
+    setEditForm({ name: employee.user.name, role: employee.user.role, isActive: employee.user.isActive });
   }
 
   const saveEdit = useMutation({
@@ -157,8 +155,7 @@ export default function FuncionariosPage() {
             columns={[
               { header: "Nome", render: (e: Employee) => e.user.name },
               { header: "E-mail", render: (e: Employee) => e.user.email },
-              { header: "Cargo", render: (e: Employee) => e.position ?? "-" },
-              { header: "Papel", render: (e: Employee) => ROLE_LABELS[e.user.role] ?? e.user.role },
+              { header: "Cargo", render: (e: Employee) => ROLE_LABELS[e.user.role] ?? e.user.role },
               {
                 header: "Acessos",
                 render: (e: Employee) => (
@@ -228,7 +225,7 @@ export default function FuncionariosPage() {
             />
             {createForm.confirmPassword && createForm.password !== createForm.confirmPassword && <p className="text-xs font-bold text-rose-600 dark:text-rose-400">As senhas não coincidem.</p>}
           </FormField>
-          <FormField label="Papel">
+          <FormField label="Cargo">
             <Select value={createForm.role} onChange={(e) => handleRoleChange(e.target.value)}>
               {INTERNAL_ROLES.map((r) => (
                 <option key={r} value={r}>
@@ -237,14 +234,8 @@ export default function FuncionariosPage() {
               ))}
             </Select>
           </FormField>
-          <FormField label="Cargo (opcional)">
-            <Input
-              value={createForm.position}
-              onChange={(e) => setCreateForm((f) => ({ ...f, position: e.target.value }))}
-            />
-          </FormField>
           <div className="rounded-2xl border border-brand-100 bg-brand-50/60 p-3 text-xs leading-5 text-slate-600 dark:border-brand-900/60 dark:bg-brand-950/30 dark:text-slate-300">
-            Selecionamos os acessos mais usados para <b>{ROLE_LABELS[createForm.role as Role] ?? "este papel"}</b>. Ajuste abaixo se quiser liberar mais ferramentas; o que não estiver marcado fica bloqueado no painel e na API.
+            Selecionamos os acessos mais usados para <b>{ROLE_LABELS[createForm.role as Role] ?? "este cargo"}</b>. Ajuste abaixo se quiser liberar mais ferramentas; o que não estiver marcado fica bloqueado no painel e na API.
           </div>
           <AccessSelector
             permissionCatalog={permissionCatalog}
@@ -268,11 +259,13 @@ export default function FuncionariosPage() {
             <Input value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
           </FormField>
           <FormField label="Cargo">
-            <Input
-              value={editForm.position}
-              onChange={(e) => setEditForm((f) => ({ ...f, position: e.target.value }))}
-            />
+            <Select value={editForm.role} onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}>
+              {INTERNAL_ROLES.map((role) => (
+                <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+              ))}
+            </Select>
           </FormField>
+          <p className="-mt-2 rounded-xl bg-brand-50 px-3 py-2 text-xs leading-5 text-brand-900 dark:bg-brand-950/30 dark:text-brand-200">Ao trocar o cargo, os acessos voltam ao padrão dele. Depois, use <b>Liberar acessos</b> na listagem para habilitar somente as ações extras que esta pessoa precisar.</p>
           <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"

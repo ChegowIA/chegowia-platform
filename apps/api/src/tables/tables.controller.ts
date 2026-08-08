@@ -7,6 +7,7 @@ import { RequirePermission } from "../common/decorators/require-permission.decor
 import { Roles } from "../common/decorators/roles.decorator";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { CreateDiningOrderDto } from "./dto/create-dining-order.dto";
+import { CloseTableDto } from "./dto/close-table.dto";
 import { CreateTableDto } from "./dto/create-table.dto";
 import { OpenTableDto } from "./dto/open-table.dto";
 import { UpdateDiningOrderStatusDto } from "./dto/update-dining-order-status.dto";
@@ -54,6 +55,25 @@ export class TablesController {
     return this.tables.addOrder(id, dto, user.sub, user.companyId!);
   }
 
+  @Post(":id/assume")
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
+  @RequirePermission(PermissionKey.MESAS_OPERAR)
+  assume(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.tables.assume(id, user.sub, user.companyId!);
+  }
+
+  @Post(":id/qr/rotate")
+  @Roles(Role.ADMIN)
+  rotateQr(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.tables.rotateQrToken(id, user.companyId!);
+  }
+
+  @Get(":id/qr")
+  @Roles(Role.ADMIN)
+  qr(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
+    return this.tables.getQrToken(id, user.companyId!);
+  }
+
   @Patch("orders/:orderId/status")
   @RequirePermission(PermissionKey.MESAS_OPERAR)
   updateOrderStatus(
@@ -67,7 +87,7 @@ export class TablesController {
   @Post(":id/close")
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
   @RequirePermission(PermissionKey.MESAS_OPERAR)
-  close(@Param("id") id: string, @CurrentUser() user: JwtPayload) {
-    return this.tables.close(id, user.sub, user.companyId!);
+  close(@Param("id") id: string, @Body() dto: CloseTableDto, @CurrentUser() user: JwtPayload) {
+    return this.tables.close(id, user.sub, user.companyId!, dto);
   }
 }

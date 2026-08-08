@@ -12,6 +12,7 @@ import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { AccountAccessLink } from "@/components/layout/public-access-actions";
 
 const EMPTY_FORM = {
   resellerCode: "",
@@ -54,6 +55,7 @@ type PublicRate = {
 type PublicPricing = {
   billingCycle: "mensal";
   variableUsageBilling: string;
+  trial?: { days: number; description: string };
   rates: PublicRate[];
 };
 
@@ -103,6 +105,10 @@ export default function PlansPage() {
     },
     onSuccess: (application) => {
       setResult(application);
+      if (application.trialStarted) {
+        localStorage.removeItem(PENDING_CHECKOUT_KEY);
+        setPendingCheckout(null);
+      }
       if (!application.checkoutUrl) return;
       const pending = {
         url: application.checkoutUrl,
@@ -133,14 +139,14 @@ export default function PlansPage() {
         <Link href="/software"><BrandLogo adaptive className="h-10 w-44" /></Link>
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          <Link href="/login"><Button variant="outline">Entrar</Button></Link>
+          <AccountAccessLink />
         </div>
       </header>
 
       <section className="mx-auto max-w-6xl px-5 py-14 text-center sm:py-16">
         <p className="text-xs font-black uppercase tracking-[.18em] text-brand-700 dark:text-brand-300">Plano simples, operação completa</p>
         <h1 className="mt-4 text-4xl font-black tracking-tight text-slate-950 sm:text-5xl dark:text-slate-100">Comece com tudo que precisa.</h1>
-        <p className="mx-auto mt-4 max-w-2xl text-slate-600 dark:text-slate-400">Um único plano para a operação inteira. Você acompanha separadamente qualquer uso adicional de IA e WhatsApp.</p>
+        <p className="mx-auto mt-4 max-w-2xl text-slate-600 dark:text-slate-400">Um único plano para a operação inteira, com 7 dias para testar tudo. Você acompanha separadamente qualquer uso de IA e WhatsApp.</p>
 
         {pendingCheckout && (
           <aside className="relative mx-auto mt-8 max-w-xl overflow-hidden rounded-[28px] bg-slate-950 p-5 text-left text-white shadow-2xl">
@@ -165,11 +171,11 @@ export default function PlansPage() {
             <article key={plan.id} className="relative overflow-hidden rounded-[34px] border-2 border-brand-300 bg-white p-7 text-left shadow-2xl dark:bg-slate-900">
               <div className="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-brand-100/70 blur-3xl dark:bg-brand-500/10" />
               <div className="relative">
-                <span className="rounded-full bg-brand-100 px-3 py-1 text-xs font-black text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">MAIS COMPLETO</span>
+                <div className="flex flex-wrap gap-2"><span className="rounded-full bg-brand-100 px-3 py-1 text-xs font-black text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">MAIS COMPLETO</span><span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">7 DIAS GRÁTIS</span></div>
                 <h2 className="mt-5 text-2xl font-black text-slate-950 dark:text-slate-100">{plan.name}</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{plan.description}</p>
                 <p className="mt-6 text-4xl font-black text-slate-950 dark:text-slate-100">{formatCurrency(Number(plan.monthlyPrice))}<span className="text-sm font-bold text-slate-400">/mês</span></p>
-                <p className="mt-2 text-[11px] font-medium leading-5 text-slate-500 dark:text-slate-400">IA e WhatsApp são cobrados somente quando houver consumo. Sem uso adicional, você paga apenas a mensalidade.</p>
+                <p className="mt-2 text-[11px] font-medium leading-5 text-slate-500 dark:text-slate-400">Durante o teste, IA e WhatsApp são medidos normalmente, mas ficam por conta da ChegowIA. Só haverá cobrança se você decidir continuar depois.</p>
 
                 <button
                   type="button"
@@ -182,8 +188,8 @@ export default function PlansPage() {
                 <div className="my-7 space-y-3">
                   {plan.features.map((feature) => <p key={feature} className="text-sm font-semibold text-slate-700 dark:text-slate-300">✓ {feature}</p>)}
                 </div>
-                <Button className="w-full" size="lg" onClick={() => startContract(plan)}>Contratar ChegowIA</Button>
-                <p className="mt-3 text-center text-xs text-slate-400">Código de parceiro: 15% de desconto por 3 meses</p>
+                <Button className="w-full" size="lg" onClick={() => startContract(plan)}>Começar teste grátis de 7 dias</Button>
+                <p className="mt-3 text-center text-xs text-slate-400">Sem cartão agora · código de parceiro dá 15% de desconto por 3 meses após a ativação</p>
               </div>
             </article>
           ))}
@@ -194,11 +200,12 @@ export default function PlansPage() {
         <PricingBreakdown plan={featuredPlan} pricing={pricing} loading={pricingLoading} />
       </Modal>
 
-      <Modal open={Boolean(selectedPlan)} onClose={() => setSelectedPlan(null)} title={`Contratar ${selectedPlan?.name ?? ""}`}>
+      <Modal open={Boolean(selectedPlan)} onClose={() => setSelectedPlan(null)} title={`Teste grátis do ${selectedPlan?.name ?? ""}`}>
         {result && !result.checkoutUrl ? (
-          <div className="rounded-2xl bg-amber-50 p-5 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-            <p className="font-black">{result.status === ApplicationStatus.REVISAO_HUMANA ? "Cadastro em revisão" : "Cadastro aprovado"}</p>
+          <div className={`rounded-2xl p-5 ${result.trialStarted ? "bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200" : "bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200"}`}>
+            <p className="font-black">{result.trialStarted ? "Seu teste gratuito começou" : result.status === ApplicationStatus.REVISAO_HUMANA ? "Cadastro em revisão" : "Cadastro aprovado"}</p>
             <p className="mt-2 text-sm">{result.feedback || result.message}</p>
+            {result.trialStarted && <><p className="mt-3 text-sm leading-6">Confirme o e-mail informado para acessar a empresa. Até o fim do teste, todos os recursos ficam liberados; os usos de IA e WhatsApp aparecerão no painel como consumo coberto.</p><Link href="/acesso" className="mt-5 inline-flex min-h-11 items-center justify-center rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-black text-white transition hover:bg-brand-700">Ir para acessar minha conta</Link></>}
           </div>
         ) : (
           <div className="space-y-4">
@@ -249,9 +256,9 @@ export default function PlansPage() {
               isLoading={apply.isPending}
               onClick={() => apply.mutate()}
             >
-              Validar cadastro e ir ao pagamento
+              Criar empresa e iniciar teste grátis
             </Button>
-            <p className="text-center text-[11px] leading-5 text-slate-400">Sua conta só é criada após validação e confirmação do pagamento pelo Stripe.</p>
+            <p className="text-center text-[11px] leading-5 text-slate-400">Não pedimos pagamento agora. Ao fim dos 7 dias, o acesso é pausado e você escolhe se quer ativar o plano pagando a fatura. O consumo do teste é detalhado, mas coberto pela ChegowIA.</p>
           </div>
         )}
       </Modal>
@@ -270,9 +277,9 @@ function ContractSummary({ plan, open, onToggle, pricing, loading }: {
     <section className="overflow-hidden rounded-2xl border border-brand-200 bg-gradient-to-br from-brand-50 via-white to-accent-50 dark:border-brand-900/70 dark:from-brand-950/35 dark:via-slate-900 dark:to-accent-950/20">
       <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-700 dark:text-brand-300">Resumo antes do pagamento</p>
-          <p className="mt-1 text-sm font-bold text-slate-800 dark:text-slate-200"><span className="text-lg font-black">{formatCurrency(Number(plan.monthlyPrice))}/mês</span> + uso opcional</p>
-          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">O adicional só existe se sua empresa usar IA ou enviar mensagens cobradas no WhatsApp.</p>
+          <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-700 dark:text-brand-300">Começo sem pagamento</p>
+          <p className="mt-1 text-sm font-bold text-slate-800 dark:text-slate-200"><span className="text-lg font-black">7 dias grátis</span> para testar a operação completa</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Depois, você decide ativar por {formatCurrency(Number(plan.monthlyPrice))}/mês + uso novo de IA e WhatsApp.</p>
         </div>
         <button type="button" onClick={onToggle} aria-expanded={open} className="shrink-0 rounded-xl border border-brand-200 bg-white px-3 py-2 text-xs font-black text-brand-800 transition hover:border-brand-400 hover:bg-brand-50 dark:border-brand-800 dark:bg-slate-900 dark:text-brand-200 dark:hover:bg-brand-950/50">
           {open ? "Ocultar detalhes" : "Ver detalhes"}
@@ -293,20 +300,26 @@ function PricingBreakdown({ plan, pricing, loading, compact = false }: {
   const aiRates = rates.filter((rate) => rate.metric.startsWith("IA_"));
   const whatsappRates = rates.filter((rate) => rate.metric.startsWith("WHATSAPP_"));
   const basePrice = Number(plan?.monthlyPrice ?? 159.9);
+  const trialDays = pricing?.trial?.days ?? 7;
 
   return (
     <div className={compact ? "space-y-4" : "space-y-5"}>
       {!compact && (
         <div>
           <p className="text-sm font-black text-slate-950 dark:text-slate-100">Uma cobrança que você consegue prever</p>
-          <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">Mostramos a mensalidade separada do uso variável. Assim, você sabe exatamente de onde vem cada valor da fatura.</p>
+          <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">Mostramos a mensalidade separada do uso variável. Assim, você sabe exatamente de onde vem cada valor — e o que fica coberto durante o teste.</p>
         </div>
       )}
 
       <div className="rounded-2xl bg-slate-950 p-4 text-white shadow-lg">
-        <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-300">Fórmula da sua fatura</p>
+        <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-300">Depois do teste</p>
         <p className="mt-2 text-base font-black leading-6">{formatCurrency(basePrice)} mensal + IA utilizada + mensagens WhatsApp cobradas</p>
         <p className="mt-2 text-xs leading-5 text-slate-300">Se não houver consumo adicional no período, a fatura fica em {formatCurrency(basePrice)}.</p>
+      </div>
+
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
+        <p className="font-black">{trialDays} dias de teste, sem cobrança</p>
+        <p className="mt-1">Você pode usar recursos, IA e WhatsApp no período de teste. Os eventos continuam sendo medidos e exibidos no painel, mas seus custos são cobertos pela ChegowIA e não são adicionados à sua futura fatura. Ao fim do prazo, o acesso é pausado até você optar por ativar o plano.</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -323,7 +336,7 @@ function PricingBreakdown({ plan, pricing, loading, compact = false }: {
 
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-600 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-300">
         <p className="font-black text-slate-800 dark:text-slate-100">Como a cobrança é protegida</p>
-        <p className="mt-1">Cada evento guarda a tarifa vigente no momento em que aconteceu. Alterações futuras não mudam um consumo já registrado, e os adicionais são consolidados separadamente na próxima fatura.</p>
+        <p className="mt-1">Cada evento guarda a tarifa vigente no momento em que aconteceu. Alterações futuras não mudam um consumo já registrado. Apenas o uso posterior à ativação é consolidado na próxima fatura; o que ocorrer no teste fica marcado como coberto.</p>
       </div>
     </div>
   );

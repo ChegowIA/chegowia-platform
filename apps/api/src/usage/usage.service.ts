@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { UsageLedgerStatus, UsageMetric, UsageSource } from "@prisma/client";
+import { SubscriptionStatus, UsageLedgerStatus, UsageMetric, UsageSource } from "@prisma/client";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { UpdateUsageRateDto } from "./dto/update-usage-rate.dto";
@@ -85,6 +85,8 @@ export class UsageService {
     const markupPercent = rate?.isActive ? Number(rate.markupPercent) : 0;
     const providerAmount = roundMoneyPrecision((quantity / Math.max(unitSize, 0.000001)) * providerUnitCost);
     const billableAmount = roundMoneyPrecision(providerAmount * (1 + markupPercent / 100));
+    const occurredAt = input.createdAt ?? new Date();
+    const trialCoveredAt = await this.trialCoverageAt(input.companyId, occurredAt);
 
     try {
       return await this.db().usageLedger.create({
@@ -98,7 +100,8 @@ export class UsageService {
           providerAmount,
           billableAmount,
           externalReference: input.externalReference ?? null,
-          createdAt: input.createdAt,
+          trialCoveredAt,
+          createdAt: occurredAt,
         },
       });
     } catch (error) {
@@ -216,20 +219,63 @@ export class UsageService {
       include: { usageRate: true },
       orderBy: { createdAt: "desc" },
     });
-    const grouped = new Map<UsageMetric, { quantity: number; providerAmount: number; billableAmount: number; unpriced: number }>();
-    const bySource = new Map<UsageSource, { quantity: number; providerAmount: number; billableAmount: number }>();
+    const grouped = new Map<UsageMetric, {
+      quantity: number;
+      providerAmount: number;
+      billableAmount: number;
+      trialQuantity: number;
+      trialProviderAmount: number;
+      trialCoveredAmount: number;
+      unpriced: number;
+    }>();
+    const bySource = new Map<UsageSource, {
+      quantity: number;
+      providerAmount: number;
+      billableAmount: number;
+      trialQuantity: number;
+      trialProviderAmount: number;
+      trialCoveredAmount: number;
+    }>();
 
     for (const item of entries) {
-      const sourceTotals = bySource.get(item.source) ?? { quantity: 0, providerAmount: 0, billableAmount: 0 };
+      const coveredByTrial = Boolean(item.trialCoveredAt);
+      const sourceTotals = bySource.get(item.source) ?? {
+        quantity: 0,
+        providerAmount: 0,
+        billableAmount: 0,
+        trialQuantity: 0,
+        trialProviderAmount: 0,
+        trialCoveredAmount: 0,
+      };
       sourceTotals.quantity += Number(item.quantity);
       sourceTotals.providerAmount += Number(item.providerAmount);
-      sourceTotals.billableAmount += Number(item.billableAmount);
+      if (coveredByTrial) {
+        sourceTotals.trialQuantity += Number(item.quantity);
+        sourceTotals.trialProviderAmount += Number(item.providerAmount);
+        sourceTotals.trialCoveredAmount += Number(item.billableAmount);
+      } else {
+        sourceTotals.billableAmount += Number(item.billableAmount);
+      }
       bySource.set(item.source, sourceTotals);
 
-      const current = grouped.get(item.metric) ?? { quantity: 0, providerAmount: 0, billableAmount: 0, unpriced: 0 };
+      const current = grouped.get(item.metric) ?? {
+        quantity: 0,
+        providerAmount: 0,
+        billableAmount: 0,
+        trialQuantity: 0,
+        trialProviderAmount: 0,
+        trialCoveredAmount: 0,
+        unpriced: 0,
+      };
       current.quantity += Number(item.quantity);
       current.providerAmount += Number(item.providerAmount);
-      current.billableAmount += Number(item.billableAmount);
+      if (coveredByTrial) {
+        current.trialQuantity += Number(item.quantity);
+        current.trialProviderAmount += Number(item.providerAmount);
+        current.trialCoveredAmount += Number(item.billableAmount);
+      } else {
+        current.billableAmount += Number(item.billableAmount);
+      }
       if (!item.usageRateId || !item.usageRate?.isActive) current.unpriced += 1;
       grouped.set(item.metric, current);
     }
@@ -253,9 +299,14 @@ export class UsageService {
       ...values,
       providerAmount: roundMoneyPrecision(values.providerAmount),
       billableAmount: roundMoneyPrecision(values.billableAmount),
+      trialProviderAmount: roundMoneyPrecision(values.trialProviderAmount),
+      trialCoveredAmount: roundMoneyPrecision(values.trialCoveredAmount),
     }));
     const providerTotal = roundMoneyPrecision(items.reduce((sum, item) => sum + item.providerAmount, 0));
     const variableTotal = roundMoneyPrecision(items.reduce((sum, item) => sum + item.billableAmount, 0));
+    const trialProviderTotal = roundMoneyPrecision(items.reduce((sum, item) => sum + item.trialProviderAmount, 0));
+    const trialCoveredTotal = roundMoneyPrecision(items.reduce((sum, item) => sum + item.trialCoveredAmount, 0));
+    const trialCoveredEntries = entries.filter((item: any) => item.trialCoveredAt).length;
     // A fatura é em centavos; o resíduo abaixo disso continua acumulando no
     // razão e entra quando o total passar de um centavo.
     const variableTotalCharged = roundToCents(variableTotal);
@@ -269,6 +320,11 @@ export class UsageService {
       variableTotal,
       variableTotalCharged,
       estimatedTotal: roundToCents(baseMonthlyPrice + variableTotalCharged),
+      trialCovered: {
+        entries: trialCoveredEntries,
+        providerTotal: trialProviderTotal,
+        nominalAmount: trialCoveredTotal,
+      },
       unpricedEvents: items.reduce((sum, item) => sum + item.unpriced, 0),
       items,
       /**
@@ -277,13 +333,23 @@ export class UsageService {
        * qual dos dois está puxando a conta.
        */
       sources: Object.values(UsageSource).map((source) => {
-        const totals = bySource.get(source) ?? { quantity: 0, providerAmount: 0, billableAmount: 0 };
+        const totals = bySource.get(source) ?? {
+          quantity: 0,
+          providerAmount: 0,
+          billableAmount: 0,
+          trialQuantity: 0,
+          trialProviderAmount: 0,
+          trialCoveredAmount: 0,
+        };
         return {
           source,
           label: SOURCE_LABELS[source],
           quantity: totals.quantity,
           providerAmount: roundMoneyPrecision(totals.providerAmount),
           billableAmount: roundMoneyPrecision(totals.billableAmount),
+          trialQuantity: totals.trialQuantity,
+          trialProviderAmount: roundMoneyPrecision(totals.trialProviderAmount),
+          trialCoveredAmount: roundMoneyPrecision(totals.trialCoveredAmount),
         };
       }),
     };
@@ -309,6 +375,7 @@ export class UsageService {
         ...(companyId ? { companyId } : {}),
         status: UsageLedgerStatus.PENDENTE,
         billableAmount: { gt: 0 },
+        trialCoveredAt: null,
       },
       orderBy: { createdAt: "asc" },
     });
@@ -326,6 +393,30 @@ export class UsageService {
       where: { stripeInvoiceId, status: UsageLedgerStatus.SINCRONIZADO },
       data: { status: UsageLedgerStatus.FATURADO },
     });
+  }
+
+  /**
+   * A tarifa é calculada e registrada durante o teste para auditoria, mas a
+   * marca de cobertura é aplicada no instante do evento. Assim, uma empresa
+   * que ative o plano depois não recebe na fatura nenhum uso dos sete dias.
+   */
+  private async trialCoverageAt(companyId: string, occurredAt: Date) {
+    // O client Prisma sempre expõe este modelo; a guarda também mantém os
+    // testes unitários de precificação independentes de um mock de assinatura.
+    if (!this.db().clientSubscription?.findUnique) return null;
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { companyId },
+      select: { status: true, trialStartedAt: true, trialEndsAt: true },
+    });
+    if (
+      subscription?.status !== SubscriptionStatus.EM_TESTE
+      || !subscription.trialEndsAt
+      || subscription.trialEndsAt <= occurredAt
+      || (subscription.trialStartedAt && subscription.trialStartedAt > occurredAt)
+    ) {
+      return null;
+    }
+    return occurredAt;
   }
 }
 

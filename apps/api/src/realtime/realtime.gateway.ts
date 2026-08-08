@@ -8,7 +8,7 @@ import {
 } from "@nestjs/websockets";
 import { Server, Socket } from "socket.io";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { Role } from "@prisma/client";
+import { Role, SubscriptionStatus } from "@prisma/client";
 import { PermissionKey } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
@@ -46,6 +46,20 @@ const COMPANY_ROLES = new Set<Role>([
   Role.MOTOBOY,
   Role.GARCOM,
 ]);
+
+function isTrialActive(subscription: { status?: SubscriptionStatus; trialEndsAt?: Date | null } | null | undefined) {
+  return subscription?.status === SubscriptionStatus.EM_TESTE
+    && Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() > Date.now());
+}
+
+function isTrialExpired(subscription: { status?: SubscriptionStatus; trialEndsAt?: Date | null } | null | undefined) {
+  return subscription?.status === SubscriptionStatus.EM_TESTE
+    && Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() <= Date.now());
+}
+
+function subscriptionAllowsAccess(subscription: { status?: SubscriptionStatus; trialEndsAt?: Date | null } | null | undefined) {
+  return subscription?.status === SubscriptionStatus.ATIVA || isTrialActive(subscription);
+}
 
 /**
  * Um socket por usuário logado no painel. Cada conexão entra na sala pessoal
@@ -93,7 +107,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
           company: {
             select: {
               isActive: true,
-              subscription: { select: { status: true } },
+              subscription: { select: { status: true, trialEndsAt: true } },
             },
           },
           resellerProfile: { select: { isActive: true } },
@@ -119,9 +133,11 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const enforceBilling = process.env.BILLING_ENFORCEMENT === "true"
         || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
       if (
-        enforceBilling
-        && COMPANY_ROLES.has(payload.role)
-        && user.company?.subscription?.status !== "ATIVA"
+        COMPANY_ROLES.has(payload.role)
+        && (
+          isTrialExpired(user.company?.subscription)
+          || (enforceBilling && !subscriptionAllowsAccess(user.company?.subscription))
+        )
       ) {
         throw new Error("Assinatura inativa.");
       }
@@ -178,12 +194,29 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const user = await (this.prisma as any).user
         .findUnique({
           where: { id: payload.sub },
-          select: { isActive: true, role: true, companyId: true },
+          select: {
+            isActive: true,
+            role: true,
+            companyId: true,
+            emailVerifiedAt: true,
+            company: { select: { isActive: true, subscription: { select: { status: true, trialEndsAt: true } } } },
+          },
         })
         .catch(() => null);
+      const enforceBilling = process.env.BILLING_ENFORCEMENT === "true"
+        || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
+      const companyRole = COMPANY_ROLES.has(payload.role);
+      const billingAllowed = !companyRole
+        || (
+          !isTrialExpired(user?.company?.subscription)
+          && (!enforceBilling || subscriptionAllowsAccess(user?.company?.subscription))
+        );
       const aindaValido = user?.isActive
+        && user.emailVerifiedAt
         && user.role === payload.role
-        && user.companyId === payload.companyId;
+        && user.companyId === payload.companyId
+        && (!companyRole || user.company?.isActive)
+        && billingAllowed;
       if (!aindaValido) {
         client.emit("session.revoked", { reason: "acesso revalidado e negado" });
         client.disconnect(true);

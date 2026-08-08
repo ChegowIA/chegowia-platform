@@ -2,6 +2,49 @@ import { UsageMetric, UsageSource } from "@prisma/client";
 import { UsageService } from "../src/usage/usage.service";
 
 describe("razão de consumo variável", () => {
+  it("marca o uso do teste como coberto sem apagar a tarifa registrada", async () => {
+    const occurredAt = new Date("2026-08-06T12:00:00.000Z");
+    const prisma = {
+      clientSubscription: {
+        findUnique: jest.fn().mockResolvedValue({
+          status: "EM_TESTE",
+          trialStartedAt: new Date("2026-08-01T12:00:00.000Z"),
+          trialEndsAt: new Date("2026-08-08T12:00:00.000Z"),
+        }),
+      },
+      usageRate: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "rate-ai-output",
+          unitSize: 1_000,
+          providerUnitCost: 0.5,
+          markupPercent: 20,
+          isActive: true,
+        }),
+      },
+      usageLedger: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockImplementation(({ data }) => Promise.resolve(data)),
+      },
+    };
+    const service = new UsageService(prisma as never);
+
+    await service.record({
+      companyId: "empresa-teste",
+      source: UsageSource.IA,
+      metric: UsageMetric.IA_TOKENS_SAIDA,
+      quantity: 1_000,
+      createdAt: occurredAt,
+    });
+
+    expect(prisma.usageLedger.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        providerAmount: 0.5,
+        billableAmount: 0.6,
+        trialCoveredAt: occurredAt,
+      }),
+    }));
+  });
+
   it("fotografa custo do provedor e margem no momento do evento", async () => {
     const prisma = {
       usageRate: {
@@ -160,6 +203,29 @@ describe("resumo mensal para a tela de assinatura", () => {
 
     expect(summary.variableTotal).toBeCloseTo(0.2, 2);
     expect(summary.estimatedTotal).toBeCloseTo(160.1, 2);
+  });
+
+  it("mostra o consumo do teste, mas o exclui do total que será faturado", async () => {
+    const service = serviceWithEntries([
+      {
+        source: UsageSource.WHATSAPP,
+        metric: UsageMetric.WHATSAPP_TEMPLATE_MARKETING,
+        quantity: 4,
+        providerAmount: 1.2,
+        billableAmount: 1.56,
+        trialCoveredAt: new Date("2026-08-04T10:00:00.000Z"),
+        usageRateId: "r-teste",
+        usageRate: rate,
+      },
+    ]);
+
+    const summary = await service.getMonthlySummary("empresa-teste", { baseMonthlyPrice: 0 });
+
+    expect(summary.providerTotal).toBe(1.2);
+    expect(summary.variableTotal).toBe(0);
+    expect(summary.estimatedTotal).toBe(0);
+    expect(summary.trialCovered).toEqual({ entries: 1, providerTotal: 1.2, nominalAmount: 1.56 });
+    expect(summary.items[0]).toMatchObject({ billableAmount: 0, trialQuantity: 4, trialCoveredAmount: 1.56 });
   });
 
   describe("consumo abaixo de um centavo", () => {

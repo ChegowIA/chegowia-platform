@@ -58,6 +58,26 @@ export class CatalogPublicController {
     return this.catalogPublicService.getMarketplace({ search, city, categoryId });
   }
 
+  /**
+   * Fonte exclusiva do sitemap do site público. Só devolve identificadores e
+   * datas de conteúdo que já é público — sem cadastro, pedidos ou dados de
+   * clientes. O limite baixo protege o banco caso um crawler abuse da rota.
+   */
+  @Public()
+  @Throttle({ default: { limit: 12, ttl: 60_000 } })
+  @Get("sitemap")
+  getSitemap() {
+    return this.catalogPublicService.getSitemapEntries();
+  }
+
+  /** Página pública individual: dá URL canônica e conteúdo verificável a
+   * cada item do cardápio, sempre dentro do slug da empresa solicitada. */
+  @Public()
+  @Get(":slug/products/:productId")
+  getProduct(@Param("slug") slug: string, @Param("productId") productId: string) {
+    return this.catalogPublicService.getProductBySlugAndId(slug, productId);
+  }
+
   @Public()
   @Get(":slug")
   getMenu(@Param("slug") slug: string) {

@@ -8,7 +8,7 @@ import { api, apiErrorMessage } from "@/lib/api-client";
 import { Employee, Order } from "@/lib/types";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth-store";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
 import { OrderStatusBadge } from "@/components/ui/badge";
@@ -158,8 +158,8 @@ export default function PedidoDetalhePage() {
               <CardTitle>Cliente</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-sm">
-              <p className="font-medium text-slate-900 dark:text-slate-100">{order.customer?.name ?? "-"}</p>
-              <p className="text-slate-500 dark:text-slate-400">{order.customer?.email ?? "-"}</p>
+              <p className="font-medium text-slate-900 dark:text-slate-100">{order.customer?.name ?? order.customerName ?? "-"}</p>
+              <p className="text-slate-500 dark:text-slate-400">{order.customer?.email ?? order.customerPhone ?? "-"}</p>
             </CardContent>
           </Card>
 
@@ -201,12 +201,14 @@ export default function PedidoDetalhePage() {
               <p>
                 Método: {order.paymentMethod.replaceAll("_", " ")} · Status: <strong>{order.paymentStatus}</strong>
               </p>
-              {order.paymentStatus !== "PAGO" && (
-                <Button size="sm" variant="outline" isLoading={markPaid.isPending} onClick={() => markPaid.mutate()}>
+            </CardContent>
+            {order.paymentStatus !== "PAGO" && (
+              <CardActions>
+                <Button className="w-full sm:w-auto" variant="outline" isLoading={markPaid.isPending} onClick={() => markPaid.mutate()}>
                   Marcar pagamento como pago
                 </Button>
-              )}
-            </CardContent>
+              </CardActions>
+            )}
           </Card>
 
           {statusOptions.length > 0 && (
@@ -223,16 +225,17 @@ export default function PedidoDetalhePage() {
                     </option>
                   ))}
                 </Select>
+              </CardContent>
+              <CardActions>
                 <Button
-                  size="sm"
-                  className="w-full"
+                  className="w-full sm:w-auto"
                   disabled={!nextStatus}
                   isLoading={updateStatus.isPending}
                   onClick={() => updateStatus.mutate(nextStatus)}
                 >
                   Atualizar
                 </Button>
-              </CardContent>
+              </CardActions>
             </Card>
           )}
 
@@ -250,32 +253,36 @@ export default function PedidoDetalhePage() {
                     </option>
                   ))}
                 </Select>
+              </CardContent>
+              <CardActions>
                 <Button
-                  size="sm"
-                  className="w-full"
+                  className="w-full sm:w-auto"
                   disabled={!motoboyId}
                   isLoading={assignMotoboy.isPending}
                   onClick={() => assignMotoboy.mutate()}
                 >
                   Atribuir
                 </Button>
-              </CardContent>
+              </CardActions>
             </Card>
           )}
 
           <Card>
-            <CardContent className="space-y-2 pt-4">
+            <CardContent className="pt-4">
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {whatsappInfo?.summary ?? "Gere um link para continuar o atendimento deste pedido pelo WhatsApp."}
+              </p>
+            </CardContent>
+            <CardActions>
               <Button
                 variant="secondary"
-                size="sm"
-                className="w-full"
+                className="w-full sm:w-auto"
                 isLoading={fetchWhatsapp.isPending}
                 onClick={() => fetchWhatsapp.mutate()}
               >
                 Link WhatsApp
               </Button>
-              {whatsappInfo && <p className="text-xs text-slate-500 dark:text-slate-400">{whatsappInfo.summary}</p>}
-            </CardContent>
+            </CardActions>
           </Card>
         </div>
       </div>

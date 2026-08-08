@@ -1,5 +1,6 @@
 import { Transform } from "class-transformer";
-import { IsInt, IsOptional, IsString, Length, Matches, Min, ValidateIf } from "class-validator";
+import { IsEnum, IsInt, IsOptional, IsString, Length, Matches, Min, ValidateIf } from "class-validator";
+import { PaymentMethod } from "@prisma/client";
 
 const onlyDigits = ({ value }: { value: unknown }) =>
   typeof value === "string" ? value.replace(/\D/g, "") : value;
@@ -20,6 +21,11 @@ export class EmitDocumentDto {
   @IsString()
   @Matches(/^(\d{11}|\d{14})$/, { message: "Informe um CPF ou CNPJ válido." })
   customerDocument?: string;
+
+  /** Só é necessário para comandas antigas que foram fechadas sem recebimento registrado. */
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
 }
 
 export class CancelDocumentDto {

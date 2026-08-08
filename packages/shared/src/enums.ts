@@ -67,6 +67,11 @@ export enum PaymentStatus {
   CANCELADO = "CANCELADO",
 }
 
+export enum OrderSource {
+  SITE = "SITE",
+  WHATSAPP = "WHATSAPP",
+}
+
 export enum PromotionStatus {
   RASCUNHO = "RASCUNHO",
   PENDENTE_CONFIRMACAO = "PENDENTE_CONFIRMACAO",
@@ -192,6 +197,13 @@ export enum WhatsAppMessageStatus {
   FALHOU = "FALHOU",
 }
 
+export enum WhatsAppOrderDraftStatus {
+  MONTANDO = "MONTANDO",
+  AGUARDANDO_CONFIRMACAO = "AGUARDANDO_CONFIRMACAO",
+  CONCLUIDO = "CONCLUIDO",
+  CANCELADO = "CANCELADO",
+}
+
 export enum UsageSource {
   IA = "IA",
   WHATSAPP = "WHATSAPP",
@@ -235,6 +247,11 @@ export enum DiningOrderStatus {
   CANCELADO = "CANCELADO",
 }
 
+export enum DiningOrderSource {
+  EQUIPE = "EQUIPE",
+  QR_MESA = "QR_MESA",
+}
+
 export enum ApplicationStatus {
   EM_ANALISE_IA = "EM_ANALISE_IA",
   RECUSADA_IA = "RECUSADA_IA",
@@ -245,6 +262,7 @@ export enum ApplicationStatus {
 
 export enum SubscriptionStatus {
   PENDENTE = "PENDENTE",
+  EM_TESTE = "EM_TESTE",
   ATIVA = "ATIVA",
   INADIMPLENTE = "INADIMPLENTE",
   CANCELADA = "CANCELADA",

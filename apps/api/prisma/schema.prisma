@@ -62,6 +62,13 @@ enum PaymentStatus {
   CANCELADO
 }
 
+// A origem fica fotografada no pedido para que operação, relatórios e suporte
+// distingam uma compra feita pelo site de uma compra assistida no WhatsApp.
+enum OrderSource {
+  SITE
+  WHATSAPP
+}
+
 enum PromotionStatus {
   RASCUNHO
   PENDENTE_CONFIRMACAO
@@ -120,6 +127,16 @@ enum WhatsAppMessageStatus {
   FALHOU
 }
 
+// Carrinho persistente do atendimento automatizado. O pedido só é criado após
+// a confirmação explícita do cliente; até lá, endereço, itens e orçamento
+// permanecem neste rascunho isolado pela empresa e pela conversa.
+enum WhatsAppOrderDraftStatus {
+  MONTANDO
+  AGUARDANDO_CONFIRMACAO
+  CONCLUIDO
+  CANCELADO
+}
+
 enum UsageSource {
   IA
   WHATSAPP
@@ -163,6 +180,13 @@ enum DiningOrderStatus {
   CANCELADO
 }
 
+// Origem da rodada lançada na comanda. Mantemos esse contexto para a equipe
+// identificar imediatamente o que foi pedido pelo QR da própria mesa.
+enum DiningOrderSource {
+  EQUIPE
+  QR_MESA
+}
+
 enum ApplicationStatus {
   EM_ANALISE_IA
   RECUSADA_IA
@@ -173,6 +197,7 @@ enum ApplicationStatus {
 
 enum SubscriptionStatus {
   PENDENTE
+  EM_TESTE
   ATIVA
   INADIMPLENTE
   CANCELADA
@@ -335,6 +360,7 @@ model User {
   whatsappConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignedTo")
   whatsappMessagesSent          WhatsAppMessage[]      @relation("WhatsAppMessageSentBy")
   tableSessionsOpened           TableSession[]         @relation("TableSessionOpenedBy")
+  tableSessionsAttending        TableSession[]         @relation("TableSessionAttendant")
   tableSessionsClosed           TableSession[]         @relation("TableSessionClosedBy")
   diningOrdersCreated           DiningOrder[]          @relation("DiningOrderCreatedBy")
   resellerProfile               ResellerProfile?
@@ -420,6 +446,7 @@ model Company {
   messagingChannels     MessagingChannel[]
   whatsappConversations WhatsAppConversation[]
   whatsappMessages      WhatsAppMessage[]
+  whatsappOrderDrafts   WhatsAppOrderDraft[]
   usageLedgers          UsageLedger[]
   aiConversations       AIConversation[]
   aiActionLogs          AIActionLog[]
@@ -472,8 +499,9 @@ model CompanyFiscalProfile {
   // Série e próximo número da NFC-e. A numeração é por empresa e por série.
   nfceSeries            Int               @default(1)
   nfceNextNumber        Int               @default(1)
-  // Emissão automática ao marcar o pedido como pago. Desligada por padrão:
-  // ligar antes de homologar na SEFAZ produziria rejeição a cada venda.
+  // Emissão automática ao marcar pedido como pago ou fechar comanda de mesa.
+  // Desligada por padrão: ligar antes de homologar na SEFAZ produziria
+  // rejeição a cada venda.
   autoEmit              Boolean           @default(false)
   // Identificador do CSC (token do QR Code) fornecido pela SEFAZ.
   cscId                 String?           @db.VarChar(6)
@@ -556,9 +584,13 @@ model FiscalDocument {
 
   company Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   order   Order?                @relation(fields: [orderId], references: [id])
+  // FK composta: documento de uma empresa não pode apontar para a comanda de
+  // outra, mesmo que uma escrita externa ao serviço erre os IDs.
+  tableSession TableSession?    @relation("FiscalDocumentTableSession", fields: [tableSessionId, companyId], references: [id, companyId], onDelete: Restrict)
   events  FiscalDocumentEvent[]
 
   @@unique([companyId, environment, series, number])
+  @@unique([tableSessionId, companyId])
   @@index([companyId, status, createdAt])
   @@index([status, nextAttemptAt])
 }
@@ -895,9 +927,17 @@ model ProductAddon {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id         String @id @default(cuid())
-  companyId  String
-  customerId String
+  id            String @id @default(cuid())
+  companyId     String
+  // Pedidos pelo site sempre têm conta. Pedidos do WhatsApp não exigem login,
+  // então guardam nome/telefone no próprio documento sem criar credenciais
+  // artificiais para o consumidor.
+  customerId    String?
+  customerName  String?
+  customerPhone String? @db.VarChar(20)
+  source        OrderSource @default(SITE)
+  whatsappConversationId String?
+  whatsappOrderDraftId   String? @unique
 
   addressId            String?
   deliveryStreet       String
@@ -924,8 +964,12 @@ model Order {
   updatedAt DateTime @updatedAt
 
   company  Company  @relation(fields: [companyId], references: [id])
-  customer User     @relation("OrderCustomer", fields: [customerId], references: [id])
+  customer User?    @relation("OrderCustomer", fields: [customerId], references: [id])
   address  Address? @relation(fields: [addressId], references: [id])
+  // FKs compostas: mesmo uma escrita externa não consegue ligar um pedido à
+  // conversa ou ao rascunho de outra empresa.
+  whatsappConversation WhatsAppConversation? @relation("WhatsAppConversationOrders", fields: [whatsappConversationId, companyId], references: [id, companyId], onDelete: Restrict)
+  whatsappOrderDraft   WhatsAppOrderDraft?   @relation("WhatsAppOrderDraftOrder", fields: [whatsappOrderDraftId, companyId], references: [id, companyId], onDelete: Restrict)
 
   items          OrderItem[]
   statusHistory  OrderStatusHistory[]
@@ -935,6 +979,9 @@ model Order {
 
   @@index([companyId, status])
   @@index([customerId])
+  @@index([companyId, customerPhone])
+  @@index([whatsappConversationId, companyId])
+  @@unique([whatsappOrderDraftId, companyId])
   // Os relatórios filtram por faixa de createdAt dentro da empresa; sem este
   // índice a consulta varria todos os pedidos da empresa para depois descartar.
   @@index([companyId, createdAt])
@@ -987,6 +1034,9 @@ model RestaurantTable {
   seats     Int         @default(4)
   area      String?
   status    TableStatus @default(LIVRE)
+  // Token opaco usado somente no QR público. Nunca expomos o id interno da
+  // mesa na URL, e o token pode ser rotacionado pelo administrador.
+  qrToken   String      @unique
   sortOrder Int         @default(0)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
@@ -995,6 +1045,9 @@ model RestaurantTable {
   sessions TableSession[]
 
   @@unique([companyId, name])
+  // Dá ao banco uma chave composta para garantir que uma comanda só consiga
+  // referenciar uma mesa da mesma empresa.
+  @@unique([id, companyId])
   @@index([companyId, status])
 }
 
@@ -1005,30 +1058,49 @@ model TableSession {
   status         TableSessionStatus @default(ABERTA)
   customerName   String?
   customerPhone  String?
+  // Preenchidos no fechamento pela equipe e usados pela NFC-e da própria
+  // comanda. A emissão nunca supõe uma forma de pagamento.
+  customerDocument String?          @db.VarChar(14)
+  paymentMethod   PaymentMethod?
+  paidAt          DateTime?
   guestCount     Int                @default(1)
   notes          String?            @db.Text
-  openedByUserId String
+  // Quando a própria pessoa abre a mesa pelo QR não há um usuário interno
+  // responsável ainda. O atendente é assumido depois por alguém da equipe.
+  openedByUserId String?
+  attendantUserId String?
   closedByUserId String?
+  openedFromQr   Boolean            @default(false)
   openedAt       DateTime           @default(now())
   closedAt       DateTime?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
 
   company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  table    RestaurantTable @relation(fields: [tableId], references: [id])
-  openedBy User            @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id])
+  // A empresa faz parte da FK: uma sessão nunca pode ser ligada a uma mesa de
+  // outra empresa, mesmo em uma escrita acidental fora do service.
+  table    RestaurantTable @relation(fields: [tableId, companyId], references: [id, companyId], onDelete: Restrict)
+  // Mantém a regra histórica da auditoria: não remove um usuário que abriu
+  // uma comanda sem antes tratar o vínculo explicitamente.
+  openedBy User?           @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id], onDelete: Restrict)
+  attendant User?          @relation("TableSessionAttendant", fields: [attendantUserId], references: [id])
   closedBy User?           @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
   orders   DiningOrder[]
+  fiscalDocument FiscalDocument? @relation("FiscalDocumentTableSession")
 
   @@index([companyId, status])
   @@index([tableId, status])
+  @@index([tableId, companyId])
+  @@unique([id, companyId])
+  @@index([companyId, attendantUserId, status])
 }
 
 model DiningOrder {
   id              String            @id @default(cuid())
   companyId       String
   tableSessionId  String
-  createdByUserId String
+  createdByUserId String?
+  source          DiningOrderSource @default(EQUIPE)
   status          DiningOrderStatus @default(RECEBIDO)
   subtotal        Decimal           @db.Decimal(10, 2)
   notes           String?           @db.Text
@@ -1037,12 +1109,15 @@ model DiningOrder {
   updatedAt       DateTime          @updatedAt
 
   company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  session   TableSession      @relation(fields: [tableSessionId], references: [id], onDelete: Cascade)
-  createdBy User              @relation("DiningOrderCreatedBy", fields: [createdByUserId], references: [id])
+  // A rodada compartilha a mesma empresa da comanda por uma FK composta. Isso
+  // impede que um pedido seja gravado na sessão de outra operação.
+  session   TableSession      @relation(fields: [tableSessionId, companyId], references: [id, companyId], onDelete: Cascade)
+  createdBy User?             @relation("DiningOrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   items     DiningOrderItem[]
 
   @@index([companyId, status])
   @@index([tableSessionId])
+  @@index([tableSessionId, companyId])
 }
 
 model DiningOrderItem {
@@ -1268,20 +1343,23 @@ model ClientApplication {
 }
 
 model ClientSubscription {
-  id                   String             @id @default(cuid())
-  companyId            String             @unique
-  planId               String
-  resellerId           String?
-  status               SubscriptionStatus @default(PENDENTE)
-  stripeCustomerId     String?            @unique
-  stripeSubscriptionId String?            @unique
-  referralCode         String?
-  referralLockedAt     DateTime?
-  discountEndsAt       DateTime?
-  currentPeriodEnd     DateTime?
-  canceledAt           DateTime?
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  id                      String             @id @default(cuid())
+  companyId               String             @unique
+  planId                  String
+  resellerId              String?
+  status                  SubscriptionStatus @default(PENDENTE)
+  trialStartedAt          DateTime?
+  trialEndsAt             DateTime?
+  stripeCustomerId        String?            @unique
+  stripeSubscriptionId    String?            @unique
+  stripeCheckoutSessionId String?            @unique
+  referralCode            String?
+  referralLockedAt        DateTime?
+  discountEndsAt          DateTime?
+  currentPeriodEnd        DateTime?
+  canceledAt              DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
   company     Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
   plan        SoftwarePlan       @relation(fields: [planId], references: [id])
@@ -1289,6 +1367,7 @@ model ClientSubscription {
   commissions CommissionLedger[]
 
   @@index([resellerId, status])
+  @@index([status, trialEndsAt])
 }
 
 model CommissionLedger {
@@ -1522,10 +1601,60 @@ model WhatsAppConversation {
   aiConversation AIConversation?   @relation(fields: [aiConversationId], references: [id], onDelete: SetNull)
   assignedTo     User?             @relation("WhatsAppConversationAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
   messages       WhatsAppMessage[]
+  orderDrafts    WhatsAppOrderDraft[]
+  orders         Order[]           @relation("WhatsAppConversationOrders")
 
   @@unique([channelId, customerPhone])
+  // Serve de destino para FKs compostas que materializam o isolamento de
+  // pedidos pelo WhatsApp no banco.
+  @@unique([id, companyId])
   @@index([companyId, status, lastMessageAt])
   @@index([assignedToUserId])
+}
+
+model WhatsAppOrderDraft {
+  id             String                    @id @default(cuid())
+  companyId      String
+  conversationId String
+  // Chave única só enquanto o carrinho está aberto. Ao concluir/cancelar ela
+  // vira nula, preservando o histórico e permitindo o próximo pedido do mesmo
+  // número sem reutilizar o rascunho que já gerou uma venda.
+  activeKey      String?                   @unique
+  status         WhatsAppOrderDraftStatus  @default(MONTANDO)
+  // Linhas escolhidas pelo cliente (IDs e quantidades), nunca preços vindos
+  // do modelo. Os preços são sempre re-resolvidos no servidor antes de criar.
+  cart           Json?
+  customerName   String?
+  addressStreet       String?
+  addressNumber       String?
+  addressComplement   String?
+  addressNeighborhood String?
+  addressCity         String?
+  addressState        String? @db.VarChar(2)
+  addressZipCode      String? @db.VarChar(8)
+  addressReference    String?
+  addressLatitude     Decimal? @db.Decimal(10, 7)
+  addressLongitude    Decimal? @db.Decimal(10, 7)
+  paymentMethod       PaymentMethod?
+  notes               String? @db.Text
+  // Foto calculada pelo servidor (itens, rota, frete e total) apresentada ao
+  // cliente antes de ele confirmar. O hash impede confirmar valor alterado.
+  quoteSnapshot       Json?
+  quoteFingerprint    String? @db.VarChar(64)
+  confirmationRequestedAt DateTime?
+  confirmedAt         DateTime?
+  completedAt         DateTime?
+  lastError           String? @db.Text
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  company      Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation WhatsAppConversation  @relation(fields: [conversationId, companyId], references: [id, companyId], onDelete: Cascade)
+  order        Order?                @relation("WhatsAppOrderDraftOrder")
+
+  @@unique([id, companyId])
+  @@index([companyId, status, updatedAt])
+  @@index([conversationId, companyId, status, updatedAt])
 }
 
 model WhatsAppMessage {
@@ -1585,6 +1714,9 @@ model UsageLedger {
   billableAmount      Decimal           @default(0) @db.Decimal(16, 6)
   currency            String            @default("brl")
   externalReference   String?           @unique
+  // Consumo ocorrido durante o teste gratuito. Ele mantém custo e tarifa
+  // auditáveis, mas nunca é enviado como item de fatura ao cliente.
+  trialCoveredAt      DateTime?
   status              UsageLedgerStatus @default(PENDENTE)
   stripeInvoiceItemId String?
   stripeInvoiceId     String?
@@ -1597,6 +1729,7 @@ model UsageLedger {
 
   @@index([companyId, createdAt])
   @@index([companyId, status])
+  @@index([companyId, trialCoveredAt, status])
   @@index([stripeInvoiceItemId])
   @@index([stripeInvoiceId])
 }

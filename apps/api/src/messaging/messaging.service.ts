@@ -10,6 +10,7 @@ import {
 import {
   MessagingChannelStatus,
   MessagingChannelType,
+  SubscriptionStatus,
   WhatsAppConversationMode,
   WhatsAppConversationStatus,
   WhatsAppMessageDirection,
@@ -328,7 +329,7 @@ export class MessagingService {
   }
 
   async listWhatsAppConversations(companyId: string) {
-    return this.db().whatsAppConversation.findMany({
+    const conversations = await this.db().whatsAppConversation.findMany({
       where: { companyId },
       orderBy: { lastMessageAt: "desc" },
       include: {
@@ -342,9 +343,29 @@ export class MessagingService {
             status: true,
           },
         },
+        orderDrafts: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: {
+            status: true,
+            customerName: true,
+            paymentMethod: true,
+            addressStreet: true,
+            addressNumber: true,
+            addressNeighborhood: true,
+            addressCity: true,
+            addressState: true,
+            quoteSnapshot: true,
+            updatedAt: true,
+          },
+        },
         _count: { select: { messages: true } },
       },
     });
+    return conversations.map(({ orderDrafts, ...conversation }: any) => ({
+      ...conversation,
+      orderDraft: orderDrafts[0] ?? null,
+    }));
   }
 
   async getWhatsAppConversation(companyId: string, id: string) {
@@ -386,10 +407,27 @@ export class MessagingService {
           take: 300,
           include: { sentBy: { select: { id: true, name: true } } },
         },
+        orderDrafts: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: {
+            status: true,
+            customerName: true,
+            paymentMethod: true,
+            addressStreet: true,
+            addressNumber: true,
+            addressNeighborhood: true,
+            addressCity: true,
+            addressState: true,
+            quoteSnapshot: true,
+            updatedAt: true,
+          },
+        },
       },
     });
     if (!conversation) throw new NotFoundException("Conversa de WhatsApp não encontrada.");
-    return conversation;
+    const { orderDrafts, ...rest } = conversation as any;
+    return { ...rest, orderDraft: orderDrafts[0] ?? null };
   }
 
   async updateWhatsAppConversation(companyId: string, id: string, dto: UpdateWhatsAppConversationDto) {
@@ -432,7 +470,16 @@ export class MessagingService {
     if (!phoneNumberId) return;
     const channel = await this.db().messagingChannel.findUnique({
       where: { metaPhoneNumberId: String(phoneNumberId) },
-      include: { company: { select: { id: true, name: true, settings: { select: { aiEnabled: true } } } } },
+      include: {
+        company: {
+          select: {
+            id: true,
+            name: true,
+            settings: { select: { aiEnabled: true } },
+            subscription: { select: { status: true, trialEndsAt: true } },
+          },
+        },
+      },
     });
     if (!channel || channel.status !== MessagingChannelStatus.ATIVO) {
       this.logger.warn(`Webhook WhatsApp ignorado: número Meta não vinculado (${String(phoneNumberId)}).`);
@@ -501,7 +548,8 @@ export class MessagingService {
     const existing = await this.db().whatsAppConversation.findUnique({
       where: { channelId_customerPhone: { channelId: channel.id, customerPhone } },
     });
-    const initialMode = channel.automationEnabled && channel.company.settings?.aiEnabled !== false
+    const automationAllowed = this.canRunWhatsAppAutomation(channel);
+    const initialMode = automationAllowed && channel.automationEnabled && channel.company.settings?.aiEnabled !== false
       ? WhatsAppConversationMode.VIRTUAL
       : WhatsAppConversationMode.HUMANO;
     const conversation = await this.db().whatsAppConversation.upsert({
@@ -546,6 +594,15 @@ export class MessagingService {
     }
     this.realtime.emitToCompany(channel.companyId, "whatsapp.message.received", { conversationId: conversation.id });
     this.realtime.emitToCompany(channel.companyId, "whatsapp.conversation.updated", conversation);
+
+    // O webhook continua registrando a mensagem recebida para não perder o
+    // histórico, mas depois do teste não envia menu, resposta humana ou IA.
+    // Assim o número não gera novas despesas de Meta/DeepSeek enquanto o
+    // acesso do empresário está bloqueado aguardando ativação paga.
+    if (!automationAllowed) {
+      this.logger.log(`Automação WhatsApp pausada para a empresa ${channel.companyId}: assinatura sem acesso.`);
+      return;
+    }
 
     const requestedMode = selectionFromIncoming(parsed);
     if (requestedMode === WhatsAppConversationMode.HUMANO) {
@@ -743,6 +800,18 @@ export class MessagingService {
       throw new BadRequestException("Este canal não está conectado à WhatsApp Cloud API.");
     }
     return this.secrets.decrypt(channel.metaAccessTokenEncrypted);
+  }
+
+  private canRunWhatsAppAutomation(channel: any) {
+    const subscription = channel.company?.subscription;
+    const trialActive = subscription?.status === SubscriptionStatus.EM_TESTE
+      && Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() > Date.now());
+    const trialExpired = subscription?.status === SubscriptionStatus.EM_TESTE
+      && Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() <= Date.now());
+    if (trialExpired) return false;
+    const enforceBilling = process.env.BILLING_ENFORCEMENT === "true"
+      || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
+    return !enforceBilling || subscription?.status === SubscriptionStatus.ATIVA || trialActive;
   }
 
   private channelSummary(channel: any) {

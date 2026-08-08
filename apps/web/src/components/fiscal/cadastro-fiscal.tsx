@@ -16,7 +16,7 @@ import {
 } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { FiscalStatus, ProductTaxStatusResponse } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select } from "@/components/ui/input";
 import { BrazilStateSelect, FileUpload, MaskedInput } from "@/components/ui/brazil-fields";
@@ -245,13 +245,16 @@ export function CadastroFiscal() {
             certificado substitui o atual, mantendo o anterior no histórico das notas já emitidas.
           </p>
 
+        </CardContent>
+        <CardActions>
           <Button
+            className="w-full sm:w-auto"
             onClick={() => uploadCertificate.mutate()}
             disabled={!certificateFile || !certificatePassword || uploadCertificate.isPending}
           >
             {uploadCertificate.isPending ? "Enviando..." : certificate ? "Substituir certificado" : "Enviar certificado"}
           </Button>
-        </CardContent>
+        </CardActions>
       </Card>
 
       <Card>
@@ -382,7 +385,7 @@ export function CadastroFiscal() {
           </div>
           <label className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 dark:border-slate-800 dark:text-slate-300">
             <span>
-              Emitir automaticamente ao marcar o pedido como pago
+              Emitir automaticamente ao confirmar um pedido pago ou fechar uma mesa
               <span className="mt-0.5 block text-xs font-normal text-slate-400">
                 Ligue só depois de testar em homologação — antes disso cada venda vira uma rejeição.
               </span>
@@ -505,9 +508,18 @@ export function CadastroFiscal() {
         </CardContent>
       </Card>
 
-      <Button onClick={() => saveProfile.mutate()} disabled={saveProfile.isPending}>
-        {saveProfile.isPending ? "Salvando..." : "Salvar cadastro fiscal"}
-      </Button>
+      <Card>
+        <CardContent>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Revise os dados do emitente, endereço, emissão e tributação antes de salvar o cadastro fiscal completo.
+          </p>
+        </CardContent>
+        <CardActions>
+          <Button className="w-full sm:w-auto" onClick={() => saveProfile.mutate()} disabled={saveProfile.isPending}>
+            {saveProfile.isPending ? "Salvando..." : "Salvar cadastro fiscal"}
+          </Button>
+        </CardActions>
+      </Card>
 
       <PendingProductsCard data={produtos} />
     </div>

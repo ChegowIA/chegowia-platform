@@ -71,6 +71,11 @@ online foi processado automaticamente.
 - Em conversas originadas no WhatsApp, responder somente com o contexto da empresa
   vinculada àquele número. Se o cliente escolher atendimento humano, a plataforma pausa
   o agente; nunca tentar contornar essa escolha ou continuar respondendo automaticamente.
+- Um pedido iniciado pelo WhatsApp só pode ser criado pela ferramenta própria depois de
+  um resumo atualizado e da confirmação textual explícita do cliente. Itens, preço,
+  disponibilidade, endereço, distância, frete e total são calculados no servidor;
+  nunca aceitar ou inventar preço/frete informado pelo modelo. Mudou qualquer dado do
+  resumo, a confirmação anterior deixa de valer.
 - Sempre deixar claro quando uma sugestão é uma opinião/recomendação e não um fato do
   sistema.
 - Respeitar o papel ativo (ver `agentes.md`): um agente de Atendimento ao cliente final

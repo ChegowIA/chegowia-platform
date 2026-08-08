@@ -2,7 +2,7 @@ import { InputHTMLAttributes, LabelHTMLAttributes, TextareaHTMLAttributes, forwa
 import clsx from "clsx";
 
 export const FIELD_CLASSES =
-  "min-h-12 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-950 shadow-[0_1px_2px_rgba(15,23,42,.03)] outline-none placeholder:font-normal placeholder:text-slate-400 transition duration-200 hover:border-slate-300 focus:border-brand-400 focus:ring-4 focus:ring-brand-500/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 dark:hover:border-slate-600 dark:disabled:bg-slate-800 dark:disabled:text-slate-400";
+  "min-h-12 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-950 shadow-[0_1px_2px_rgba(15,23,42,.03)] outline-none placeholder:font-normal placeholder:text-slate-400 transition duration-200 hover:border-slate-300 focus:border-brand-400 focus:ring-4 focus:ring-brand-500/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:hover:border-slate-600 dark:disabled:bg-slate-800 dark:disabled:text-slate-400";
 
 const EMAIL_PATTERN = String.raw`[^\s@]+@[^\s@]+\.[^\s@]{2,}`;
 

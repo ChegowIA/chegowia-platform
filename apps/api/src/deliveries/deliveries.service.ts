@@ -136,7 +136,7 @@ export class DeliveriesService {
         });
       });
       this.realtime.emitToCompany(updated.order.companyId ?? delivery.companyId, "delivery.updated", updated);
-      this.realtime.emitToUser(updated.order.customerId, "delivery.problem_reported", updated);
+      if (updated.order.customerId) this.realtime.emitToUser(updated.order.customerId, "delivery.problem_reported", updated);
       return updated;
     }
 
@@ -176,7 +176,7 @@ export class DeliveriesService {
       });
     });
     this.realtime.emitToCompany(updated.order.companyId ?? delivery.companyId, "delivery.updated", updated);
-    this.realtime.emitToUser(updated.order.customerId, "delivery.updated", updated);
+    if (updated.order.customerId) this.realtime.emitToUser(updated.order.customerId, "delivery.updated", updated);
     return updated;
   }
 

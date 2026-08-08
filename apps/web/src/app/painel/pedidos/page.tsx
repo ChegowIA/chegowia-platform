@@ -433,7 +433,8 @@ function OrderCard({
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-[10px] font-black uppercase tracking-wider text-brand-600">#{order.id.slice(0, 7)}</p>
-          <h3 className="mt-1 line-clamp-1 font-black text-slate-950 dark:text-slate-100">{order.customer?.name ?? "Cliente"}</h3>
+          <h3 className="mt-1 line-clamp-1 font-black text-slate-950 dark:text-slate-100">{order.customer?.name ?? order.customerName ?? "Cliente"}</h3>
+          {order.source === "WHATSAPP" && <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">WhatsApp IA</span>}
         </div>
         {draggable && <span className="select-none text-lg leading-none text-slate-300 group-hover:text-slate-500" title="Arrastar">⠿</span>}
       </div>

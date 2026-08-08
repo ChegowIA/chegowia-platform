@@ -3,17 +3,18 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { DiningOrderStatus, PermissionKey, Role, TableStatus } from "@chegowia/shared";
+import { DiningOrderSource, DiningOrderStatus, PaymentMethod, PermissionKey, Role, TableStatus } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { connectSocket } from "@/lib/socket-client";
 import { formatCurrency } from "@/lib/format";
 import { useAuthStore } from "@/lib/auth-store";
 import { Paginated, Product } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { FormField, Input, Textarea } from "@/components/ui/input";
+import { FormField, Input, Select, Textarea } from "@/components/ui/input";
 import { MaskedInput } from "@/components/ui/brazil-fields";
 import { Modal } from "@/components/ui/modal";
 import { WaiterAssistant } from "@/components/ai/waiter-assistant";
+import { TableQrCode } from "@/components/tables/table-qr-code";
 
 interface DiningOrder {
   id: string;
@@ -22,7 +23,8 @@ interface DiningOrder {
   notes?: string | null;
   createdAt: string;
   updatedAt: string;
-  createdBy: { id: string; name: string };
+  source: DiningOrderSource;
+  createdBy?: { id: string; name: string } | null;
   items: Array<{ id: string; productName: string; quantity: number; totalPrice: number; notes?: string | null }>;
 }
 
@@ -33,7 +35,10 @@ interface TableSession {
   guestCount: number;
   notes?: string | null;
   openedAt: string;
-  openedBy: { id: string; name: string };
+  openedFromQr: boolean;
+  openedBy?: { id: string; name: string } | null;
+  attendantUserId?: string | null;
+  attendant?: { id: string; name: string } | null;
   orders: DiningOrder[];
 }
 
@@ -81,6 +86,12 @@ const ORDER_LABEL: Record<DiningOrderStatus, string> = {
   CANCELADO: "Cancelado",
 };
 
+const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  [PaymentMethod.DINHEIRO]: "Dinheiro",
+  [PaymentMethod.CARTAO_ENTREGA]: "Cartão",
+  [PaymentMethod.PIX_MANUAL]: "Pix",
+};
+
 export default function MesasPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
@@ -88,12 +99,16 @@ export default function MesasPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [orderOpen, setOrderOpen] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [origin, setOrigin] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [tableForm, setTableForm] = useState({ name: "", seats: "4", area: "Salão principal" });
   const [openForm, setOpenForm] = useState({ customerName: "", customerPhone: "", guestCount: "2", notes: "" });
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
   const [orderNotes, setOrderNotes] = useState("");
+  const [closeForm, setCloseForm] = useState({ paymentMethod: PaymentMethod.DINHEIRO, customerDocument: "" });
 
   const { data: tables = [], isLoading } = useQuery({
     queryKey: ["tables-overview"],
@@ -117,17 +132,23 @@ export default function MesasPage() {
     queryFn: async () => (await api.get<Paginated<Product>>("/catalog/products", { params: { pageSize: 100 } })).data,
     enabled: canReadMenu,
   });
+  const { data: qrData, isLoading: isLoadingQr } = useQuery({
+    queryKey: ["table-qr", selectedId],
+    queryFn: async () => (await api.get<{ id: string; name: string; qrToken: string }>(`/tables/${selectedId}/qr`)).data,
+    enabled: Boolean(qrOpen && selectedId && user?.role === Role.ADMIN),
+  });
   const products = productsData?.items.filter((product) => product.isActive) ?? [];
   const selected = tables.find((table) => table.id === selectedId) ?? null;
 
   useEffect(() => {
+    setOrigin(window.location.origin);
     const socket = connectSocket();
     const refresh = () => queryClient.invalidateQueries({ queryKey: ["tables-overview"] });
-    ["table.changed", "table.opened", "table.closed", "table.order_created", "table.order_status_changed"].forEach((event) =>
+    ["table.changed", "table.opened", "table.attendant_assigned", "table.closed", "table.order_created", "table.order_status_changed"].forEach((event) =>
       socket.on(event, refresh),
     );
     return () => {
-      ["table.changed", "table.opened", "table.closed", "table.order_created", "table.order_status_changed"].forEach((event) =>
+      ["table.changed", "table.opened", "table.attendant_assigned", "table.closed", "table.order_created", "table.order_status_changed"].forEach((event) =>
         socket.off(event, refresh),
       );
     };
@@ -152,7 +173,23 @@ export default function MesasPage() {
     setError,
     () => setOpenForm({ customerName: "", customerPhone: "", guestCount: "2", notes: "" }),
   );
-  const closeTable = useTableAction(() => api.post(`/tables/${selectedId}/close`), setError);
+  const closeTable = useTableAction(
+    () => api.post(`/tables/${selectedId}/close`, {
+      paymentMethod: closeForm.paymentMethod,
+      customerDocument: closeForm.customerDocument.trim() || undefined,
+    }),
+    setError,
+    () => {
+      setCloseOpen(false);
+      setCloseForm({ paymentMethod: PaymentMethod.DINHEIRO, customerDocument: "" });
+    },
+  );
+  const assumeTable = useTableAction(() => api.post(`/tables/${selectedId}/assume`), setError);
+  const rotateQr = useTableAction(
+    () => api.post(`/tables/${selectedId}/qr/rotate`),
+    setError,
+    () => queryClient.invalidateQueries({ queryKey: ["table-qr", selectedId] }),
+  );
   const changeTable = useTableAction(
     () => api.patch(`/tables/${selectedId}`, { status: selected?.status === TableStatus.INATIVA ? TableStatus.LIVRE : TableStatus.INATIVA }),
     setError,
@@ -194,6 +231,8 @@ export default function MesasPage() {
     const product = products.find((item) => item.id === id);
     return sum + (product ? Number(product.price) * quantity : 0);
   }, 0);
+  const canCloseSelected = Boolean(canOpenOrOrder && selected?.session?.attendantUserId === user?.id);
+  const qrUrl = qrData?.qrToken && origin ? `${origin}/mesa/${qrData.qrToken}` : "";
 
   return (
     <div className="space-y-6">
@@ -263,6 +302,12 @@ export default function MesasPage() {
       <Modal open={Boolean(selected)} onClose={() => setSelectedId(null)} title={selected ? `${selected.name} · ${tableStatusLabel(selected.status)}` : "Mesa"}>
         {selected && (
           <div className="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
+            {user?.role === Role.ADMIN && (
+              <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-800/50">
+                <div><p className="text-sm font-black text-slate-900 dark:text-slate-100">QR de pedido da mesa</p><p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Cardápio restrito à {selected.name}, sem acesso ao painel.</p></div>
+                <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setQrOpen(true)}>Ver QR</Button>
+              </div>
+            )}
             {selected.status === TableStatus.LIVRE || selected.status === TableStatus.RESERVADA ? (
               canOpenOrOrder ? <>
                 <div className="rounded-2xl bg-emerald-50 p-4 dark:bg-emerald-950/30">
@@ -285,6 +330,9 @@ export default function MesasPage() {
                   <Info label="Aberta há" value={humanMinutes(selected.metrics?.occupiedMinutes ?? 0)} />
                   <Info label="Comanda" value={formatCurrency(selected.metrics?.total ?? 0)} />
                 </div>
+                <div className={clsx("rounded-2xl border p-3", selected.session.attendant ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/30" : "border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30")}>
+                  {selected.session.attendant ? <><p className="text-xs font-black uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Atendimento assumido</p><p className="mt-1 text-sm font-bold text-emerald-950 dark:text-emerald-100">{selected.session.attendant.name} é quem pode encerrar esta mesa.</p></> : <><p className="text-xs font-black uppercase tracking-wide text-amber-700 dark:text-amber-300">Aguardando equipe</p><p className="mt-1 text-sm font-bold text-amber-950 dark:text-amber-100">Esta comanda foi aberta pelo QR. Assuma o atendimento antes de fechar.</p>{canOpenOrOrder && <Button size="sm" className="mt-3" isLoading={assumeTable.isPending} onClick={() => assumeTable.mutate()}>Assumir atendimento</Button>}</>}
+                </div>
                 {canOpenOrOrder && canReadMenu && <Button className="w-full" onClick={() => setOrderOpen(true)}>+ Lançar nova rodada</Button>}
                 <div className="space-y-3">
                   {selected.session.orders.map((order) => (
@@ -297,7 +345,7 @@ export default function MesasPage() {
                   ))}
                   {!selected.session.orders.length && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800 dark:bg-amber-950/30 dark:border-amber-900/60 dark:text-amber-300">A mesa ainda não fez nenhum pedido.</div>}
                 </div>
-                {canOpenOrOrder && <Button variant="outline" className="w-full" isLoading={closeTable.isPending} onClick={() => closeTable.mutate()}>Fechar mesa e liberar</Button>}
+                {canCloseSelected ? <Button variant="outline" className="w-full" onClick={() => setCloseOpen(true)}>Fechar mesa e registrar pagamento</Button> : canOpenOrOrder && selected.session.attendant && <p className="rounded-2xl bg-slate-100 p-3 text-center text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">Somente {selected.session.attendant.name} pode fechar esta mesa.</p>}
               </>
             ) : (
               <div className="space-y-3">
@@ -310,6 +358,29 @@ export default function MesasPage() {
             )}
           </div>
         )}
+      </Modal>
+
+      <Modal open={closeOpen} onClose={() => setCloseOpen(false)} title={`Finalizar atendimento · ${selected?.name ?? "Mesa"}`}>
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/30">
+            <p className="text-sm font-black text-brand-950 dark:text-brand-100">Comanda de {formatCurrency(selected?.metrics?.total ?? 0)}</p>
+            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">Registre o recebimento real. Essa informação segue para a NFC-e da mesa e evita que o sistema suponha uma forma de pagamento.</p>
+          </div>
+          <FormField label="Forma de pagamento">
+            <Select value={closeForm.paymentMethod} onChange={(event) => setCloseForm({ ...closeForm, paymentMethod: event.target.value as PaymentMethod })}>
+              {Object.entries(PAYMENT_METHOD_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </Select>
+          </FormField>
+          <FormField label="CPF/CNPJ na nota (opcional)">
+            <Input inputMode="numeric" placeholder="Somente se o cliente solicitar identificação" value={closeForm.customerDocument} onChange={(event) => setCloseForm({ ...closeForm, customerDocument: event.target.value })} />
+          </FormField>
+          <p className="rounded-2xl bg-slate-100 p-3 text-xs leading-5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">Se a emissão automática estiver ativa, a NFC-e é solicitada após liberar a mesa. Em homologação, o cupom sai identificado como <b>sem valor fiscal</b>; em produção, segue para a SEFAZ.</p>
+          <Button className="w-full" isLoading={closeTable.isPending} onClick={() => closeTable.mutate()}>Confirmar pagamento e fechar mesa</Button>
+        </div>
+      </Modal>
+
+      <Modal open={qrOpen} onClose={() => setQrOpen(false)} title={`QR Code · ${selected?.name ?? "Mesa"}`}>
+        {selected && (isLoadingQr || !qrUrl ? <div className="rounded-2xl bg-slate-100 p-8 text-center text-sm font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">Preparando QR Code…</div> : <div className="space-y-4"><TableQrCode url={qrUrl} tableName={selected.name} /><div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">Se uma impressão for perdida ou substituída, gere um QR novo. O anterior deixa de funcionar imediatamente.</div><Button type="button" variant="outline" className="w-full" isLoading={rotateQr.isPending} onClick={() => rotateQr.mutate()}>Gerar um novo QR e invalidar o anterior</Button></div>)}
       </Modal>
 
       <Modal open={orderOpen} onClose={() => setOrderOpen(false)} title={`Novo pedido · ${selected?.name ?? ""}`}>
@@ -396,10 +467,10 @@ function OrderRow({
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:bg-slate-900 dark:border-slate-800">
       <div className="flex items-center justify-between gap-3">
-        <div><p className="text-xs font-black uppercase tracking-wide text-brand-700 dark:text-brand-300">{ORDER_LABEL[order.status]}</p><p className="text-xs text-slate-400">{timeAgo(order.createdAt)} · por {order.createdBy.name}</p></div>
+        <div><p className="text-xs font-black uppercase tracking-wide text-brand-700 dark:text-brand-300">{ORDER_LABEL[order.status]}</p><p className="text-xs text-slate-400">{timeAgo(order.createdAt)} · {order.source === DiningOrderSource.QR_MESA ? "pedido pelo QR da mesa" : `por ${order.createdBy?.name ?? "equipe"}`}</p></div>
         <p className="font-black">{formatCurrency(Number(order.subtotal))}</p>
       </div>
-      <div className="my-3 space-y-1">{order.items.map((item) => <p key={item.id} className="text-sm text-slate-700 dark:text-slate-300"><b>{item.quantity}×</b> {item.productName}</p>)}</div>
+      <div className="my-3 space-y-1">{order.items.map((item) => <p key={item.id} className="text-sm text-slate-700 dark:text-slate-300"><b>{item.quantity}×</b> {item.productName}{item.notes && <span className="block pl-5 text-xs text-slate-400">{item.notes}</span>}</p>)}</div>
       {next && canAdvance(next) && <Button size="sm" className="w-full" onClick={() => onStatus(next)}>Marcar como {ORDER_LABEL[next].toLowerCase()}</Button>}
     </div>
   );

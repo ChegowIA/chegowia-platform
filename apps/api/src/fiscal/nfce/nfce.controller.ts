@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   ForbiddenException,
   Get,
@@ -38,6 +39,13 @@ export class NfceController {
     });
   }
 
+  /** Vendas concluídas que ainda podem receber NFC-e por ação manual. */
+  @RequirePermission(PermissionKey.FISCAL_VISUALIZAR)
+  @Get("pendentes-emissao")
+  pendingEmissionSources(@CurrentUser("companyId") companyId: string) {
+    return this.nfce.listPendingEmissionSources(this.assertCompany(companyId));
+  }
+
   @RequirePermission(PermissionKey.FISCAL_VISUALIZAR)
   @Get(":id")
   findById(@CurrentUser("companyId") companyId: string, @Param("id") id: string) {
@@ -53,8 +61,14 @@ export class NfceController {
   @Post("emitir")
   emit(@CurrentUser("companyId") companyId: string, @Body() dto: EmitDocumentDto) {
     const empresa = this.assertCompany(companyId);
+    if (Boolean(dto.orderId) === Boolean(dto.tableSessionId)) {
+      throw new BadRequestException("Informe somente um pedido ou uma comanda para emitir a NFC-e.");
+    }
     if (dto.orderId) return this.nfce.emitForOrder(empresa, dto.orderId, { customerDocument: dto.customerDocument });
-    return this.nfce.emitForTableSession(empresa, dto.tableSessionId!, { customerDocument: dto.customerDocument });
+    return this.nfce.emitForTableSession(empresa, dto.tableSessionId!, {
+      customerDocument: dto.customerDocument,
+      paymentMethod: dto.paymentMethod,
+    });
   }
 
   /** Reenvio manual do que ficou em contingência. */

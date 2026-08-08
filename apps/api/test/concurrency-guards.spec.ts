@@ -18,6 +18,7 @@ describe("guardas de concorrência", () => {
       return {
         restaurantTable: {
           findUnique: jest.fn().mockResolvedValue({ id: "mesa-1", status, companyId: "empresa-1" }),
+          findFirst: jest.fn().mockResolvedValue({ id: "mesa-1", status, companyId: "empresa-1" }),
           updateMany: jest.fn().mockImplementation(({ where }: any) => {
             const disponivel = where.status.in.includes(status);
             if (claimed || !disponivel) return Promise.resolve({ count: 0 });

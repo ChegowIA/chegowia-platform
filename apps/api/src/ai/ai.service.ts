@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import {
   AIAgentRole,
   AIChannel,
@@ -14,12 +14,13 @@ import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { AI_PROVIDER, AIChatMessage, AIProvider } from "./providers/ai-provider.interface";
 import { PromptBuilderService } from "./prompt-builder.service";
 import { ToolsService } from "./tools/tools.service";
-import { ATENDIMENTO_TOOLS, ONBOARDING_TOOLS, OPERATIONAL_TOOLS } from "./tools/tool-definitions";
+import { ATENDIMENTO_TOOLS, ONBOARDING_TOOLS, OPERATIONAL_TOOLS, WHATSAPP_ORDER_TOOLS } from "./tools/tool-definitions";
 import { PublicDiscoveryDto } from "./dto/public-discovery.dto";
 import { UsageService } from "../usage/usage.service";
 import { SearchIntentService } from "./search/search-intent.service";
 
 const SENSITIVE_TOOLS = new Set(["createPromotionDraft"]);
+const WHATSAPP_ORDER_TOOL_NAMES = new Set(WHATSAPP_ORDER_TOOLS.map((tool) => tool.name));
 const MAX_TOOL_ITERATIONS = 3;
 const MOTOBOY_ASSISTANT_TITLE = "Assistente do motoboy";
 const GARCOM_ASSISTANT_TITLE = "Assistente do garçom";
@@ -54,7 +55,7 @@ export class AiService {
     return this.prisma as any;
   }
 
-  private toolsForRole(role: AIAgentRole) {
+  private toolsForRole(role: AIAgentRole, channel: AIChannel) {
     switch (role) {
       case AIAgentRole.OPERACIONAL:
         return OPERATIONAL_TOOLS;
@@ -62,11 +63,26 @@ export class AiService {
         return ONBOARDING_TOOLS;
       case AIAgentRole.ATENDIMENTO:
       default:
-        return ATENDIMENTO_TOOLS;
+        return channel === AIChannel.WHATSAPP
+          ? [...ATENDIMENTO_TOOLS, ...WHATSAPP_ORDER_TOOLS]
+          : ATENDIMENTO_TOOLS;
     }
   }
 
-  private executeTool(name: string, companyId: string, args: any): Promise<unknown> {
+  private executeTool(
+    name: string,
+    conversation: { id: string; companyId: string; agentRole: AIAgentRole; channel: AIChannel },
+    args: any,
+    customerMessage: string,
+  ): Promise<unknown> {
+    const companyId = conversation.companyId;
+    // Defense in depth: o provedor nunca recebe as tools de pedido fora do
+    // WhatsApp, mas uma tool call forjada também não consegue furar o canal.
+    if (WHATSAPP_ORDER_TOOL_NAMES.has(name) && (
+      conversation.agentRole !== AIAgentRole.ATENDIMENTO || conversation.channel !== AIChannel.WHATSAPP
+    )) {
+      return Promise.resolve({ error: "Ferramenta de pedido disponível apenas no WhatsApp oficial." });
+    }
     switch (name) {
       case "getTodayOrders":
         return this.toolsService.getTodayOrders(companyId);
@@ -86,6 +102,22 @@ export class AiService {
         return this.toolsService.searchCatalog(companyId, args);
       case "getStoreInfo":
         return this.toolsService.getStoreInfo(companyId);
+      case "getWhatsAppOrderDraft":
+        return this.toolsService.getWhatsAppOrderDraft(companyId, conversation.id);
+      case "updateWhatsAppCart":
+        return this.toolsService.updateWhatsAppCart(companyId, conversation.id, args);
+      case "setWhatsAppCustomerName":
+        return this.toolsService.setWhatsAppCustomerName(companyId, conversation.id, args);
+      case "setWhatsAppDeliveryAddress":
+        return this.toolsService.setWhatsAppDeliveryAddress(companyId, conversation.id, args);
+      case "setWhatsAppPaymentMethod":
+        return this.toolsService.setWhatsAppPaymentMethod(companyId, conversation.id, args);
+      case "setWhatsAppOrderNotes":
+        return this.toolsService.setWhatsAppOrderNotes(companyId, conversation.id, args);
+      case "prepareWhatsAppOrderConfirmation":
+        return this.toolsService.prepareWhatsAppOrderConfirmation(companyId, conversation.id);
+      case "confirmWhatsAppOrder":
+        return this.toolsService.confirmWhatsAppOrder(companyId, conversation.id, customerMessage);
       default:
         return Promise.resolve({ error: `Ferramenta desconhecida: ${name}` });
     }
@@ -203,6 +235,13 @@ export class AiService {
       data: { conversationId, role: AIMessageRole.USER, content },
     });
 
+    // A confirmação é uma etapa crítica demais para depender de o provedor
+    // decidir chamar uma tool. Quando a pessoa responde a palavra combinada,
+    // tentamos o caminho determinístico: o próprio serviço ainda verifica
+    // resumo vigente, fingerprint e idempotência antes de criar qualquer coisa.
+    const automaticConfirmation = await this.tryAutomaticWhatsAppConfirmation(conversation, content);
+    if (automaticConfirmation) return automaticConfirmation;
+
     const history = await this.db().aIMessage.findMany({
       where: { conversationId },
       orderBy: { createdAt: "asc" },
@@ -224,7 +263,7 @@ export class AiService {
       })),
     ];
 
-    const tools = this.toolsForRole(conversation.agentRole);
+    const tools = this.toolsForRole(conversation.agentRole, conversation.channel);
     let result = await this.aiProvider.chat(messages, tools);
     await this.recordAiUsage(conversation.companyId, result);
     let iterations = 0;
@@ -237,7 +276,15 @@ export class AiService {
 
       for (const call of result.toolCalls) {
         const requiresConfirmation = SENSITIVE_TOOLS.has(call.name);
-        const toolResult = await this.executeTool(call.name, conversation.companyId, call.arguments);
+        let toolResult: unknown;
+        try {
+          toolResult = await this.executeTool(call.name, conversation, call.arguments, content);
+        } catch (error) {
+          // Erros de dados (endereço incompleto, produto indisponível etc.)
+          // voltam ao modelo como orientação de atendimento, em vez de
+          // transferir automaticamente cada ajuste simples para um humano.
+          toolResult = { error: true, message: publicToolError(error) };
+        }
 
         await this.db().aIActionLog.create({
           data: {
@@ -338,6 +385,38 @@ export class AiService {
       outputTokens: result.usage.outputTokens,
       requestId: result.requestId,
     });
+  }
+
+  private async tryAutomaticWhatsAppConfirmation(
+    conversation: { id: string; companyId: string; agentRole: AIAgentRole; channel: AIChannel },
+    content: string,
+  ) {
+    if (
+      conversation.channel !== AIChannel.WHATSAPP
+      || conversation.agentRole !== AIAgentRole.ATENDIMENTO
+      || !looksLikeExplicitOrderConfirmation(content)
+    ) {
+      return null;
+    }
+    try {
+      const result: any = await this.toolsService.confirmWhatsAppOrder(conversation.companyId, conversation.id, content);
+      // Sem proposta vigente, a IA responde normalmente e guia o cliente; não
+      // tratamos um "confirmar" solto como erro ou pedido criado.
+      if (!result?.confirmed && !result?.requiresNewConfirmation) return null;
+      const assistantMessage = await this.db().aIMessage.create({
+        data: {
+          conversationId: conversation.id,
+          role: AIMessageRole.ASSISTANT,
+          content: automaticConfirmationText(result),
+        },
+      });
+      await this.db().aIConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
+      return { conversationId: conversation.id, message: assistantMessage };
+    } catch {
+      // Falhas de validação ou infraestrutura seguem pelo agente normal. O
+      // atendimento continua humano/IA, e nada é criado sem a trava do serviço.
+      return null;
+    }
   }
 
   private companyContext(company: any) {
@@ -473,7 +552,7 @@ export class AiService {
         return [
           `${index + 1}. Entrega ${delivery.id}`,
           `Pedido: ${order.id}`,
-          `Cliente: ${order.customer?.name ?? "não informado"}`,
+          `Cliente: ${order.customer?.name ?? order.customerName ?? "não informado"}`,
           `Status da entrega: ${delivery.status}`,
           `Endereço: ${order.deliveryStreet}, ${order.deliveryNumber}${order.deliveryComplement ? ` - ${order.deliveryComplement}` : ""} - ${order.deliveryNeighborhood} - ${order.deliveryCity}/${order.deliveryState}`,
           order.deliveryReference ? `Referência: ${order.deliveryReference}` : null,
@@ -531,7 +610,7 @@ export class AiService {
 
     if (normalized.includes("status")) {
       return deliveries
-        .map((delivery: any, index: number) => `${index + 1}. ${delivery.order.customer?.name ?? "Cliente"} - ${delivery.status} - ${delivery.order.deliveryNeighborhood}`)
+        .map((delivery: any, index: number) => `${index + 1}. ${delivery.order.customer?.name ?? delivery.order.customerName ?? "Cliente"} - ${delivery.status} - ${delivery.order.deliveryNeighborhood}`)
         .join("\n");
     }
 
@@ -542,7 +621,7 @@ export class AiService {
     if (!next) return "Não encontrei uma próxima entrega para você agora.";
 
     const address = `${next.order.deliveryStreet}, ${next.order.deliveryNumber} - ${next.order.deliveryNeighborhood} - ${next.order.deliveryCity}/${next.order.deliveryState}`;
-    return `Sua próxima referência de entrega é:\nCliente: ${next.order.customer?.name ?? "Cliente"}\nEndereço: ${address}\nStatus: ${next.status}\n\nUse o botão de rota do app para abrir a navegação.`;
+    return `Sua próxima referência de entrega é:\nCliente: ${next.order.customer?.name ?? next.order.customerName ?? "Cliente"}\nEndereço: ${address}\nStatus: ${next.status}\n\nUse o botão de rota do app para abrir a navegação.`;
   }
 
   // -------------------------------------------------------------------------
@@ -628,18 +707,17 @@ export class AiService {
       where: {
         companyId,
         status: TableSessionStatus.ABERTA,
-        OR: [
-          { openedByUserId: userId },
-          { orders: { some: { createdByUserId: userId } } },
-        ],
+        // A sessão pertence ao garçom que assumiu o atendimento. Isso cobre
+        // tanto mesas abertas pela equipe quanto comandas iniciadas pelo QR,
+        // sem misturar o contexto privado de outro garçom no assistente.
+        attendantUserId: userId,
       },
       include: {
         table: { select: { id: true, name: true, area: true, status: true } },
-        // A conversa recebe apenas as rodadas lançadas pelo próprio garçom.
-        // Isso evita que uma comanda compartilhada vire uma janela para o
-        // trabalho ou os dados de outro membro da equipe.
+        // Esta é uma mesa assumida pelo próprio garçom, portanto ele pode ver
+        // todas as rodadas necessárias para servir — inclusive as enviadas
+        // pelo cliente no QR da mesa.
         orders: {
-          where: { createdByUserId: userId },
           include: { items: true },
           orderBy: { createdAt: "desc" },
         },
@@ -652,7 +730,7 @@ export class AiService {
     return [
       `Você é o assistente privado de salão da ChegowIA para um GARÇOM da empresa "${companyName}".`,
       "Responda em português do Brasil, de forma objetiva, cordial e útil durante o atendimento no salão.",
-      "Escopo absoluto: ajude apenas com as mesas e rodadas lançadas pelo próprio garçom, status de preparo/serviço, organização de atendimento, observações do pedido e orientação de salão.",
+      "Escopo absoluto: ajude apenas com as mesas assumidas pelo próprio garçom e as rodadas dessas mesas, inclusive pedidos enviados pelo QR da mesa; informe status de preparo/serviço, organização de atendimento e observações do pedido.",
       "Nunca revele ou procure dados de outros garçons, outras mesas, administração, finanças, entregas, funcionários ou conversas. Se perguntarem algo fora desse escopo, explique brevemente que este é um assistente privado do salão.",
       "Use somente o contexto abaixo. Não invente disponibilidade, preço, tempo de preparo, pagamento ou informação de cliente.",
       "Não execute ações, não altere pedidos e não prometa que algo foi feito. Oriente o garçom a usar os controles do painel quando precisar agir.",
@@ -676,13 +754,13 @@ export class AiService {
             order.notes ? `Observação: ${order.notes}` : null,
             `Lançado em: ${order.createdAt?.toISOString?.() ?? order.createdAt}`,
           ].filter(Boolean).join(" · ")).join("\n")
-          : "Nenhuma rodada lançada por você nesta mesa.";
+          : "Nenhuma rodada nesta mesa.";
         return [
           `${index + 1}. ${session.table.name}${session.table.area ? ` (${session.table.area})` : ""}`,
           `Cliente: ${session.customerName ?? "Consumidor local"}`,
           `Pessoas: ${session.guestCount}`,
           `Aberta em: ${session.openedAt?.toISOString?.() ?? session.openedAt}`,
-          `Suas rodadas:\n${orders}`,
+          `Rodadas da mesa:\n${orders}`,
         ].join("\n");
       })
       .join("\n\n");
@@ -963,4 +1041,51 @@ export class AiService {
       data: { confirmed: true, confirmedByUserId, confirmedAt: new Date() },
     });
   }
+}
+
+function publicToolError(error: unknown) {
+  if (error instanceof BadRequestException || error instanceof ConflictException || error instanceof NotFoundException) {
+    const response = error.getResponse();
+    if (typeof response === "string") return response;
+    if (response && typeof response === "object" && "message" in response) {
+      const message = (response as { message?: unknown }).message;
+      return Array.isArray(message) ? message.join(" ") : String(message ?? "Não foi possível concluir essa etapa.");
+    }
+  }
+  return "Não foi possível concluir essa etapa agora. Peça os dados novamente ou ofereça atendimento humano.";
+}
+
+function looksLikeExplicitOrderConfirmation(value: string) {
+  const normalized = String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/[.!]/g, "")
+    .replace(/\s+/g, " ");
+  return /^(?:SIM,? )?(?:PODE )?(?:CONFIRMAR|CONFIRMO)(?: (?:O )?(?:PEDIDO|COMPRA))?$/.test(normalized);
+}
+
+function automaticConfirmationText(result: any) {
+  if (result.confirmed && result.order) {
+    const order = result.order;
+    return [
+      `Pedido #${order.shortCode ?? String(order.id).slice(-6).toUpperCase()} confirmado!`,
+      ...((order.items ?? []).map((item: any) => `• ${item.quantity}x ${item.name} — R$ ${Number(item.totalPrice).toFixed(2)}`)),
+      `Frete: R$ ${Number(order.deliveryFee ?? 0).toFixed(2)}`,
+      `Total: R$ ${Number(order.total ?? 0).toFixed(2)}`,
+      "Já enviei para a equipe preparar. Obrigado pelo pedido!",
+    ].join("\n");
+  }
+  const summary = result.summary;
+  if (summary) {
+    return [
+      result.message ?? "O valor foi atualizado.",
+      ...((summary.items ?? []).map((item: any) => `• ${item.quantity}x ${item.name} — R$ ${Number(item.totalPrice).toFixed(2)}`)),
+      `Frete: R$ ${Number(summary.deliveryFee ?? 0).toFixed(2)}`,
+      `Total: R$ ${Number(summary.total ?? 0).toFixed(2)}`,
+      "Se estiver de acordo, responda CONFIRMAR.",
+    ].join("\n");
+  }
+  return result.message ?? "Revise o resumo do pedido antes de confirmar.";
 }

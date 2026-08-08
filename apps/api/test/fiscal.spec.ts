@@ -72,7 +72,10 @@ describe("cifragem dos segredos fiscais", () => {
     const secrets = new FiscalSecretsService();
     const cifrado = secrets.encrypt("token-do-csc");
     const [v, iv, tag, dados] = cifrado.split(".");
-    const adulterado = [v, iv, tag, dados.slice(0, -2) + "AA"].join(".");
+    // Altera um caractere significativo do ciphertext. Trocar apenas o fim
+    // do Base64URL pode manter os mesmos bits úteis de um bloco incompleto.
+    const primeiroCaractereAlterado = dados.startsWith("A") ? "B" : "A";
+    const adulterado = [v, iv, tag, primeiroCaractereAlterado + dados.slice(1)].join(".");
 
     expect(() => secrets.decrypt(adulterado)).toThrow();
   });

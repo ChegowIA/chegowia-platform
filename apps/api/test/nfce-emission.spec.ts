@@ -291,8 +291,16 @@ describe("XML da NFC-e", () => {
     expect(xml).not.toContain("Fulano de Tal");
   });
 
-  it("sem CPF informado não há destinatário", () => {
-    expect(montar()).not.toContain("<dest>");
+  it("em homologação identifica o destinatário de teste mesmo sem CPF", () => {
+    const xml = montar();
+
+    expect(xml).toContain("<dest>");
+    expect(xml).toContain("NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL");
+    expect(xml).not.toContain("<CPF>");
+  });
+
+  it("em produção, sem CPF/CNPJ, mantém o consumidor não identificado", () => {
+    expect(montar({ environment: FiscalEnvironment.PRODUCAO })).not.toContain("<dest>");
   });
 
   it("contingência inclui data e justificativa", () => {

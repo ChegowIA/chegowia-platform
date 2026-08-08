@@ -77,10 +77,12 @@ export default function AtendimentoPage() {
     socket.on("whatsapp.message.received", refreshSelected);
     socket.on("whatsapp.message.sent", refreshSelected);
     socket.on("whatsapp.conversation.updated", refreshSelected);
+    socket.on("whatsapp.order_draft_updated", refreshSelected);
     return () => {
       socket.off("whatsapp.message.received", refreshSelected);
       socket.off("whatsapp.message.sent", refreshSelected);
       socket.off("whatsapp.conversation.updated", refreshSelected);
+      socket.off("whatsapp.order_draft_updated", refreshSelected);
     };
   }, [queryClient, selectedId]);
 
@@ -210,7 +212,25 @@ function CompanyContext({ conversation }: { conversation?: WhatsAppConversationD
   if (!conversation) return <Card className="hidden xl:block"><CardContent className="p-5"><p className="text-sm font-black text-slate-900 dark:text-slate-100">Informações da empresa</p><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Selecione uma conversa para ver os dados que orientam esse atendimento.</p></CardContent></Card>;
   const company = conversation.company;
   const paymentMethods = company.settings?.paymentMethodsEnabled?.map((item) => item.replaceAll("_", " ")).join(", ") || "Não informado";
-  return <Card className="hidden xl:block"><CardContent className="space-y-5 p-5"><div><p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Contexto do atendimento</p><p className="mt-1 text-lg font-black text-slate-900 dark:text-slate-100">{company.name}</p><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Esses são os dados disponíveis ao atendente virtual desta empresa.</p></div><Info label="Contato" value={company.whatsapp || company.phone || "Não informado"} /><Info label="Endereço" value={[company.addressLine, company.city, company.state].filter(Boolean).join(" · ") || "Não informado"} /><Info label="Entrega" value={`${formatCurrency(Number(company.deliveryFeeBase))} base · ${company.avgDeliveryTimeMinutes} min em média`} /><Info label="Pagamento" value={paymentMethods} /><Info label="Horários" value={formatHours(company.settings?.openingHours)} /><div className="rounded-2xl bg-slate-950 p-4 text-white"><p className="text-xs font-black uppercase tracking-wide text-emerald-300">Modo atual</p><p className="mt-1 text-sm font-black">{MODE_LABEL[conversation.mode]}</p><p className="mt-1 text-xs leading-5 text-slate-300">{conversation.mode === "HUMANO" ? "A equipe tem prioridade e a IA permanece pausada." : "A IA usa o treinamento e os dados acima para responder."}</p></div></CardContent></Card>;
+  return <Card className="hidden xl:block"><CardContent className="space-y-5 p-5"><div><p className="text-xs font-black uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-300">Contexto do atendimento</p><p className="mt-1 text-lg font-black text-slate-900 dark:text-slate-100">{company.name}</p><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Esses são os dados disponíveis ao atendente virtual desta empresa.</p></div><Info label="Contato" value={company.whatsapp || company.phone || "Não informado"} /><Info label="Endereço" value={[company.addressLine, company.city, company.state].filter(Boolean).join(" · ") || "Não informado"} /><Info label="Entrega" value={`${formatCurrency(Number(company.deliveryFeeBase))} base · ${company.avgDeliveryTimeMinutes} min em média`} /><Info label="Pagamento" value={paymentMethods} /><Info label="Horários" value={formatHours(company.settings?.openingHours)} /><WhatsAppOrderProgress draft={conversation.orderDraft} /><div className="rounded-2xl bg-slate-950 p-4 text-white"><p className="text-xs font-black uppercase tracking-wide text-emerald-300">Modo atual</p><p className="mt-1 text-sm font-black">{MODE_LABEL[conversation.mode]}</p><p className="mt-1 text-xs leading-5 text-slate-300">{conversation.mode === "HUMANO" ? "A equipe tem prioridade e a IA permanece pausada." : "A IA usa o treinamento e os dados acima para responder."}</p></div></CardContent></Card>;
+}
+
+function WhatsAppOrderProgress({ draft }: { draft?: WhatsAppConversationDetail["orderDraft"] }) {
+  if (!draft) return null;
+  const checkout = draft.quoteSnapshot?.checkout;
+  const estimate = checkout?.delivery ?? draft.quoteSnapshot?.delivery;
+  const labels = {
+    MONTANDO: "Montando pedido",
+    AGUARDANDO_CONFIRMACAO: "Aguardando confirmação",
+    CONCLUIDO: "Pedido criado",
+    CANCELADO: "Pedido cancelado",
+  } as const;
+  const tone = draft.status === "CONCLUIDO"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100"
+    : draft.status === "AGUARDANDO_CONFIRMACAO"
+      ? "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"
+      : "border-sky-200 bg-sky-50 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100";
+  return <div className={`rounded-2xl border p-4 ${tone}`}><p className="text-[11px] font-black uppercase tracking-wide opacity-70">Pedido pelo WhatsApp</p><p className="mt-1 text-sm font-black">{labels[draft.status]}</p>{draft.customerName && <p className="mt-2 text-xs">Cliente: {draft.customerName}</p>}{draft.addressStreet && <p className="mt-1 text-xs leading-5">{draft.addressStreet}, {draft.addressNumber} · {draft.addressNeighborhood}, {draft.addressCity}/{draft.addressState}</p>}{estimate && <p className="mt-2 text-xs font-bold">Frete {formatCurrency(Number(estimate.deliveryFee ?? 0))} · {Number(estimate.distanceKm ?? 0).toFixed(1)} km</p>}{checkout?.total !== undefined && <p className="mt-1 text-sm font-black">Total {formatCurrency(Number(checkout.total))}</p>}{draft.status === "AGUARDANDO_CONFIRMACAO" && <p className="mt-2 text-xs leading-5">A IA só finalizará quando o cliente responder <strong>CONFIRMAR</strong>.</p>}</div>;
 }
 
 function EmptyConversation({ connected, canConfigure }: { connected: boolean; canConfigure: boolean }) {
