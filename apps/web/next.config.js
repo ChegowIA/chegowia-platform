@@ -2,6 +2,37 @@
 const path = require("node:path");
 const development = process.env.NODE_ENV !== "production";
 
+/**
+ * CSP precisa conhecer a origem externa da API no momento do build. Não usamos
+ * `ws:`/`wss:` amplos: isso permitiria conexões em tempo real para qualquer
+ * host. Em vez disso, liberamos apenas a origem HTTP configurada e sua
+ * contraparte WebSocket.
+ */
+function configuredOrigin(value) {
+  if (!value) return null;
+
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function websocketOrigin(origin) {
+  if (!origin) return null;
+  if (origin.startsWith("https://")) return origin.replace("https://", "wss://");
+  if (origin.startsWith("http://")) return origin.replace("http://", "ws://");
+  return null;
+}
+
+const apiOrigin = configuredOrigin(process.env.NEXT_PUBLIC_API_URL);
+const apiSocketOrigin = websocketOrigin(apiOrigin);
+const apiConnectSources = [apiOrigin, apiSocketOrigin].filter(Boolean);
+const developmentConnectSources = development
+  ? ["http://localhost:3001", "ws://localhost:3001"]
+  : [];
+
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -21,7 +52,14 @@ const securityHeaders = [
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       `script-src 'self' 'unsafe-inline' https://connect.facebook.net${development ? " 'unsafe-eval'" : ""}`,
-      `connect-src 'self' ws: wss: https://www.facebook.com https://graph.facebook.com https://connect.facebook.net${development ? " http://localhost:3001 ws://localhost:3001" : ""}`,
+      [
+        "connect-src 'self'",
+        ...apiConnectSources,
+        "https://www.facebook.com",
+        "https://graph.facebook.com",
+        "https://connect.facebook.net",
+        ...developmentConnectSources,
+      ].join(" "),
       "frame-src 'self' https://www.openstreetmap.org https://www.facebook.com https://web.facebook.com",
       "worker-src 'self' blob:",
       ...(development ? [] : ["upgrade-insecure-requests"]),
