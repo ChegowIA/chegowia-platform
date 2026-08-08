@@ -21,6 +21,10 @@ export const metadata: Metadata = {
     default: "ChegowIA — Pedidos, delivery e gestão para restaurantes",
     template: "%s | ChegowIA",
   },
+  // A raiz é a URL preferida da marca. Sem este sinal explícito, o Google
+  // precisa escolher sozinho entre o domínio principal, parâmetros e URLs
+  // alternativas que venha a encontrar.
+  alternates: { canonical: "/" },
   description: "ChegowIA conecta cardápio online, pedidos, delivery, salão, equipe e atendimento inteligente em uma só operação.",
   applicationName: "ChegowIA",
   category: "Tecnologia para restaurantes e delivery",
@@ -69,9 +73,15 @@ export const metadata: Metadata = {
     ? { google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION }
     : undefined,
   icons: {
-    icon: "/brand/chegowia-favicon.png",
-    shortcut: "/brand/chegowia-favicon.png",
-    apple: "/brand/chegowia-favicon.png",
+    // Mantemos a versão PNG grande para Google, navegadores atuais e PWA e
+    // disponibilizamos também /favicon.ico para clientes legados que procuram
+    // o caminho convencional diretamente.
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/brand/chegowia-favicon.png", type: "image/png", sizes: "512x512" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: [{ url: "/brand/chegowia-favicon.png", type: "image/png", sizes: "512x512" }],
   },
 };
 
