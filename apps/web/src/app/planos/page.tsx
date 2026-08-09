@@ -84,7 +84,12 @@ export default function PlansPage() {
     }
   }, []);
 
-  const { data: plans = [] } = useQuery({
+  const {
+    data: plans = [],
+    isPending: plansLoading,
+    isError: plansError,
+    refetch: refetchPlans,
+  } = useQuery({
     queryKey: ["software-plans"],
     queryFn: async () => (await api.get<SoftwarePlan[]>("/billing/plans")).data,
   });
@@ -167,6 +172,25 @@ export default function PlansPage() {
         )}
 
         <div className="mx-auto mt-10 max-w-xl">
+          {plansLoading && (
+            <article className="overflow-hidden rounded-[34px] border-2 border-slate-200 bg-white p-7 text-left shadow-xl dark:border-slate-800 dark:bg-slate-900">
+              <div className="h-5 w-36 animate-pulse rounded-full bg-slate-200 dark:bg-slate-800" />
+              <div className="mt-5 h-8 w-2/3 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+              <div className="mt-4 h-4 w-full animate-pulse rounded bg-slate-100 dark:bg-slate-800/70" />
+              <div className="mt-2 h-4 w-4/5 animate-pulse rounded bg-slate-100 dark:bg-slate-800/70" />
+              <div className="mt-8 h-14 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+            </article>
+          )}
+
+          {!plansLoading && (plansError || plans.length === 0) && (
+            <article className="rounded-[30px] border border-amber-200 bg-amber-50 p-7 text-left shadow-lg dark:border-amber-900/60 dark:bg-amber-950/20">
+              <p className="text-xs font-black uppercase tracking-[.16em] text-amber-800 dark:text-amber-300">Contratação temporariamente indisponível</p>
+              <h2 className="mt-3 text-xl font-black text-slate-950 dark:text-slate-100">Estamos preparando o plano para você.</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">Atualize a página em instantes. Se o problema continuar, tente carregar os planos novamente.</p>
+              <Button className="mt-5" variant="outline" onClick={() => void refetchPlans()}>Tentar novamente</Button>
+            </article>
+          )}
+
           {plans.map((plan) => (
             <article key={plan.id} className="relative overflow-hidden rounded-[34px] border-2 border-brand-300 bg-white p-7 text-left shadow-2xl dark:bg-slate-900">
               <div className="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-brand-100/70 blur-3xl dark:bg-brand-500/10" />
