@@ -1,6 +1,10 @@
 import { ForbiddenException } from "@nestjs/common";
 import { Role } from "@prisma/client";
-import { TemporaryTestModeService, normalizeIp } from "../src/common/test-mode/test-mode.service";
+import {
+  clientIpFromTrustedEdge,
+  TemporaryTestModeService,
+  normalizeIp,
+} from "../src/common/test-mode/test-mode.service";
 
 describe("modo temporário de homologação", () => {
   const original = {
@@ -29,6 +33,19 @@ describe("modo temporário de homologação", () => {
     expect(() => service.assertCreationAllowed({ ip: "203.0.113.8" } as never, "empresa")).not.toThrow();
     expect(() => service.assertCreationAllowed({ ip: "203.0.113.9" } as never, "revendedor"))
       .toThrow(ForbiddenException);
+  });
+
+  it("usa o IP real encaminhado pela borda Cloudflare do Render", () => {
+    process.env.TEMP_TEST_MODE_ENABLED = "true";
+    process.env.TEMP_TEST_ALLOWED_CREATION_IPS = "203.0.113.8";
+    const service = new TemporaryTestModeService({ user: { findFirst: jest.fn() } } as never);
+    const request = {
+      ip: "10.0.0.7",
+      headers: { "cf-connecting-ip": "203.0.113.8" },
+    } as never;
+
+    expect(clientIpFromTrustedEdge(request)).toBe("203.0.113.8");
+    expect(() => service.assertCreationAllowed(request, "empresa")).not.toThrow();
   });
 
   it("só expõe empresas de teste ao CLIENTE autorizado no banco", async () => {

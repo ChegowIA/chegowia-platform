@@ -11,8 +11,11 @@ import { ExtendedPrismaClient } from "../prisma/prisma-client.factory";
  * abrir o cadastro ou o catálogo de teste para o público. Ela é desligada por
  * configuração, sem precisar publicar outro build para voltar ao fluxo normal.
  *
- * Nunca use cabeçalhos enviados pelo navegador diretamente para decidir IP:
- * `request.ip` respeita a cadeia de proxy configurada em `main.ts`.
+ * Em produção no Render, todo tráfego público passa pela borda Cloudflare.
+ * Ela acrescenta `CF-Connecting-IP` com o endereço do visitante real; usar
+ * apenas `request.ip` pode devolver o IP de um proxy interno e bloquear até o
+ * próprio administrador. Em desenvolvimento, onde essa borda não existe,
+ * mantemos o fallback para `request.ip` configurado pelo Express.
  */
 @Injectable()
 export class TemporaryTestModeService {
@@ -39,7 +42,7 @@ export class TemporaryTestModeService {
   assertCreationAllowed(request: Request, resource: "empresa" | "revendedor") {
     if (!this.isEnabled()) return;
 
-    const ip = normalizeIp(request.ip ?? "");
+    const ip = clientIpFromTrustedEdge(request);
     if (ip && this.allowedCreationIps().has(ip)) return;
 
     throw new ForbiddenException(
@@ -102,6 +105,20 @@ export function normalizeIp(value: string) {
     ? withoutZone.slice("::ffff:".length)
     : withoutZone;
   return isIP(normalized) ? normalized : "";
+}
+
+/**
+ * Render encaminha todas as conexões públicas por Cloudflare. O header é
+ * escrito pela borda, não pelo browser, e contém apenas um IP consistente.
+ * Não usamos X-Forwarded-For manualmente: ele pode carregar uma cadeia criada
+ * por proxies intermediários e não é apropriado para uma decisão de acesso.
+ */
+export function clientIpFromTrustedEdge(request: Pick<Request, "ip" | "headers">) {
+  const cloudflareValue = request.headers?.["cf-connecting-ip"];
+  const cloudflareIp = normalizeIp(
+    Array.isArray(cloudflareValue) ? cloudflareValue[0] ?? "" : cloudflareValue ?? "",
+  );
+  return cloudflareIp || normalizeIp(request.ip ?? "");
 }
 
 function normalizedConfiguredEmail() {
