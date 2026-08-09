@@ -1,10 +1,12 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { Role } from "@prisma/client";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { OptionalJwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { AiService } from "./ai.service";
 import { SendMessageDto } from "./dto/send-message.dto";
 import { PublicDiscoveryDto } from "./dto/public-discovery.dto";
@@ -37,12 +39,13 @@ export class AiPublicController {
 @ApiTags("ai-public")
 @Public()
 @Controller("ai/public-discovery")
+@UseGuards(OptionalJwtAuthGuard)
 export class AiPublicDiscoveryController {
   constructor(private readonly aiService: AiService) {}
 
   @Post("search")
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  search(@Body() dto: PublicDiscoveryDto) {
-    return this.aiService.searchPublicCatalog(dto);
+  search(@Body() dto: PublicDiscoveryDto, @CurrentUser() viewer?: JwtPayload) {
+    return this.aiService.searchPublicCatalog(dto, viewer);
   }
 }

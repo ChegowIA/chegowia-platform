@@ -18,6 +18,8 @@ import { ATENDIMENTO_TOOLS, ONBOARDING_TOOLS, OPERATIONAL_TOOLS, WHATSAPP_ORDER_
 import { PublicDiscoveryDto } from "./dto/public-discovery.dto";
 import { UsageService } from "../usage/usage.service";
 import { SearchIntentService } from "./search/search-intent.service";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 const SENSITIVE_TOOLS = new Set(["createPromotionDraft"]);
 const WHATSAPP_ORDER_TOOL_NAMES = new Set(WHATSAPP_ORDER_TOOLS.map((tool) => tool.name));
@@ -49,6 +51,7 @@ export class AiService {
     private readonly toolsService: ToolsService,
     private readonly usage: UsageService,
     private readonly searchIntent: SearchIntentService,
+    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -132,9 +135,9 @@ export class AiService {
    * busca do topo para que as duas entradas concordem sobre o que o texto
    * significa — o painel fica com a conversa, a busca fica com a listagem.
    */
-  async searchPublicCatalog(dto: PublicDiscoveryDto) {
+  async searchPublicCatalog(dto: PublicDiscoveryDto, viewer?: JwtPayload) {
     const intent = await this.searchIntent.resolve(dto.message);
-    const result = await this.toolsService.searchPublicCatalog({ ...dto, terms: intent.terms });
+    const result = await this.toolsService.searchPublicCatalog({ ...dto, terms: intent.terms }, viewer);
     return { ...result, summary: intent.explanation || result.summary };
   }
 
@@ -330,7 +333,13 @@ export class AiService {
   // -------------------------------------------------------------------------
 
   async startOrGetCustomerConversation(companySlug: string, userId: string) {
-    const company = await this.db().company.findFirst({ where: { slug: companySlug, isActive: true } });
+    const company = await this.db().company.findFirst({
+      where: {
+        slug: companySlug,
+        isActive: true,
+        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhereForUserId(userId)) ?? {}),
+      },
+    });
     if (!company) throw new NotFoundException("Loja não encontrada.");
 
     const existing = await this.db().aIConversation.findFirst({

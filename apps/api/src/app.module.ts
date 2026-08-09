@@ -35,6 +35,7 @@ import { FiscalModule } from "./fiscal/fiscal.module";
 import { CashModule } from "./cash/cash.module";
 import { ObservabilityModule } from "./common/observability/observability.module";
 import { MetricsInterceptor } from "./common/observability/metrics.interceptor";
+import { TemporaryTestModeModule } from "./common/test-mode/test-mode.module";
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { MetricsInterceptor } from "./common/observability/metrics.interceptor";
       },
     ]),
     PrismaModule,
+    TemporaryTestModeModule,
     MailModule,
     ObservabilityModule,
     LocalStorageModule,

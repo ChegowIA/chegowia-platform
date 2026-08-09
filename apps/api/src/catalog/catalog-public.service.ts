@@ -3,6 +3,8 @@ import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { PUBLIC_PRODUCT_TYPES, inferPublicProductType } from "./public-product-types";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 /** Teto do varrimento da home. Ver o comentário de `getMarketplace`. */
 const MARKETPLACE_SCAN_LIMIT = 600;
@@ -27,10 +29,20 @@ const MARKETPLACE_PRODUCT_INCLUDE = {
 
 @Injectable()
 export class CatalogPublicService {
-  constructor(@Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient) {}
+  constructor(
+    @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
+    private readonly temporaryTestMode?: TemporaryTestModeService,
+  ) {}
 
   private db() {
     return this.prisma as any;
+  }
+
+  private async publicCompanyWhere(viewer?: JwtPayload) {
+    return {
+      isActive: true,
+      ...((await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer)) ?? {}),
+    };
   }
 
   /**
@@ -38,9 +50,9 @@ export class CatalogPublicService {
    * e produtos inativos para que uma URL desativada não continue sendo
    * descoberta por mecanismos de busca.
    */
-  async getSitemapEntries() {
+  async getSitemapEntries(viewer?: JwtPayload) {
     const companies = await this.db().company.findMany({
-      where: { isActive: true },
+      where: await this.publicCompanyWhere(viewer),
       orderBy: { updatedAt: "desc" },
       select: {
         slug: true,
@@ -57,8 +69,10 @@ export class CatalogPublicService {
   }
 
   /** Cardápio público de uma empresa pelo slug — usado na loja `/loja/[slug]`. */
-  async getMenuBySlug(slug: string) {
-    const company = await this.db().company.findFirst({ where: { slug, isActive: true } });
+  async getMenuBySlug(slug: string, viewer?: JwtPayload) {
+    const company = await this.db().company.findFirst({
+      where: { slug, ...(await this.publicCompanyWhere(viewer)) },
+    });
     if (!company) throw new NotFoundException("Loja não encontrada.");
 
     return tenantContext.runAsCompany(company.id, async () => {
@@ -81,9 +95,9 @@ export class CatalogPublicService {
    * produto roda no tenant dela: mesmo conhecendo um ID válido, ninguém
    * consegue usar esta rota para atravessar o catálogo de outra empresa.
    */
-  async getProductBySlugAndId(slug: string, productId: string) {
+  async getProductBySlugAndId(slug: string, productId: string, viewer?: JwtPayload) {
     const company = await this.db().company.findFirst({
-      where: { slug, isActive: true },
+      where: { slug, ...(await this.publicCompanyWhere(viewer)) },
       select: {
         id: true,
         name: true,
@@ -168,12 +182,16 @@ export class CatalogPublicService {
    * as no máximo 8 seções × 8 produtos que a página exibe. Busca de verdade é
    * `searchPublic`, paginada em SQL.
    */
-  async getMarketplace(params: { search?: string; city?: string; categoryId?: string }) {
+  async getMarketplace(
+    params: { search?: string; city?: string; categoryId?: string },
+    viewer?: JwtPayload,
+  ) {
     const search = params.search?.trim();
     const city = params.city?.trim();
     const publicTypeId = params.categoryId?.trim();
 
-    const companyFilter = city ? { isActive: true, city: { contains: city } } : { isActive: true };
+    const companyFilter: any = await this.publicCompanyWhere(viewer);
+    if (city) companyFilter.city = { contains: city };
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },
@@ -299,7 +317,7 @@ export class CatalogPublicService {
     city?: string;
     page?: number;
     pageSize?: number;
-  }) {
+  }, viewer?: JwtPayload) {
     const page = Math.max(1, Math.trunc(params.page ?? 1));
     const pageSize = Math.min(48, Math.max(1, Math.trunc(params.pageSize ?? 24)));
     const city = params.city?.trim();
@@ -309,7 +327,8 @@ export class CatalogPublicService {
     );
     const terms = Array.from(new Set([...params.terms, ...typeKeywords].filter((t) => t && t.length >= 3))).slice(0, 40);
 
-    const companyFilter = city ? { isActive: true, city: { contains: city } } : { isActive: true };
+    const companyFilter: any = await this.publicCompanyWhere(viewer);
+    if (city) companyFilter.city = { contains: city };
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },

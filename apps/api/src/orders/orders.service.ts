@@ -21,6 +21,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { NfceService } from "../fiscal/nfce/nfce.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { DeliveryQuoteDto } from "./dto/delivery-quote.dto";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 const ORDER_INCLUDE = {
   items: true,
@@ -136,6 +137,7 @@ export class OrdersService {
     private readonly realtime: RealtimeGateway,
     private readonly geography: GeographyService,
     private readonly nfce: NfceService,
+    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -148,7 +150,11 @@ export class OrdersService {
 
   async createForCustomer(customerId: string, dto: CreateOrderDto) {
     const company = await this.db().company.findFirst({
-      where: { slug: dto.companySlug, isActive: true },
+      where: {
+        slug: dto.companySlug,
+        isActive: true,
+        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhereForUserId(customerId)) ?? {}),
+      },
       include: { settings: true },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");
@@ -252,7 +258,11 @@ export class OrdersService {
 
   async quoteForCustomer(customerId: string, dto: DeliveryQuoteDto): Promise<DeliveryQuote> {
     const company = await this.db().company.findFirst({
-      where: { slug: dto.companySlug, isActive: true },
+      where: {
+        slug: dto.companySlug,
+        isActive: true,
+        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhereForUserId(customerId)) ?? {}),
+      },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");
     const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });

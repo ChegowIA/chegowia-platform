@@ -9,11 +9,15 @@ import { Roles } from "../common/decorators/roles.decorator";
 import { BillingService } from "./billing.service";
 import { ClientApplicationDto } from "./dto/client-application.dto";
 import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 @ApiTags("billing")
 @Controller("billing")
 export class BillingController {
-  constructor(private readonly billing: BillingService) {}
+  constructor(
+    private readonly billing: BillingService,
+    private readonly temporaryTestMode: TemporaryTestModeService,
+  ) {}
 
   @Public()
   @Get("plans")
@@ -46,16 +50,27 @@ export class BillingController {
   @Public()
   @Post("applications")
   @Throttle({ default: { limit: 3, ttl: 60 * 60_000 } })
-  apply(@Body() dto: ClientApplicationDto) { return this.billing.apply(dto); }
+  apply(@Body() dto: ClientApplicationDto, @Req() request: Request) {
+    this.temporaryTestMode.assertCreationAllowed(request, "empresa");
+    return this.billing.apply(dto);
+  }
 
   @Public()
   @Post("applications/:id/checkout")
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  checkout(@Param("id") id: string) { return this.billing.checkout(id); }
+  checkout(@Param("id") id: string, @Req() request: Request) {
+    this.temporaryTestMode.assertCreationAllowed(request, "empresa");
+    return this.billing.checkout(id);
+  }
 
   @Roles(Role.REVENDEDOR)
   @Post("reseller/payment-links")
-  resellerPaymentLink(@CurrentUser("sub") userId: string, @Body() dto: ClientApplicationDto) {
+  resellerPaymentLink(
+    @CurrentUser("sub") userId: string,
+    @Body() dto: ClientApplicationDto,
+    @Req() request: Request,
+  ) {
+    this.temporaryTestMode.assertCreationAllowed(request, "empresa");
     return this.billing.createForReseller(userId, dto);
   }
 
@@ -107,7 +122,10 @@ export class BillingController {
 
   @Roles(Role.SUPER_ADMIN)
   @Post("admin/applications/:id/approve")
-  approve(@Param("id") id: string) { return this.billing.approveClientApplication(id); }
+  approve(@Param("id") id: string, @Req() request: Request) {
+    this.temporaryTestMode.assertCreationAllowed(request, "empresa");
+    return this.billing.approveClientApplication(id);
+  }
 
   @Public()
   @Post("stripe/webhook")

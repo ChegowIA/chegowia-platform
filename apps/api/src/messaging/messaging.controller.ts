@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query, Req, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { Role } from "@prisma/client";
@@ -14,6 +14,8 @@ import { SendWhatsAppMessageDto } from "./dto/send-whatsapp-message.dto";
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
 import { MessagingService } from "./messaging.service";
+import { OptionalJwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 
 @ApiTags("messaging")
 @Controller("messaging")
@@ -130,9 +132,10 @@ export class MessagingController {
   }
 
   @Public()
+  @UseGuards(OptionalJwtAuthGuard)
   @Get("public/:slug/whatsapp-link")
-  storeLink(@Param("slug") slug: string) {
-    return this.messagingService.buildStoreContactLink(slug);
+  storeLink(@Param("slug") slug: string, @CurrentUser() viewer?: JwtPayload) {
+    return this.messagingService.buildStoreContactLink(slug, viewer);
   }
 
   @Roles(Role.CLIENTE)

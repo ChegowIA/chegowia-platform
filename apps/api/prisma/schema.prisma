@@ -429,6 +429,10 @@ model Company {
   avgDeliveryTimeMinutes Int      @default(40)
   logoUrl                String?
   isActive               Boolean  @default(true)
+  // Empresas criadas durante a homologação ficam fora da vitrine pública até
+  // o modo temporário ser desligado. Não substitui isActive: a operação segue
+  // funcionando normalmente para o administrador da própria empresa.
+  isTestOnly             Boolean  @default(false)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
@@ -462,6 +466,7 @@ model Company {
   cashSessions          CashSession[]
 
   @@index([city, state])
+  @@index([isActive, isTestOnly, city, state])
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,6 +1329,13 @@ model ClientApplication {
   termsAcceptedAt             DateTime?
   privacyAcceptedAt           DateTime?
   automatedAnalysisAcceptedAt DateTime?
+  // Mantém a origem da candidatura caso o provisionamento ocorra depois (por
+  // revisão humana ou webhook legado), quando o request/IP original já não
+  // existe mais.
+  isTestOnly                 Boolean           @default(false)
+  // Preserva o valor de homologação mesmo se a aprovação acontecer depois
+  // de o modo temporário ser desligado.
+  monthlyPriceSnapshot       Decimal?          @db.Decimal(10, 2)
   status                      ApplicationStatus @default(EM_ANALISE_IA)
   aiScore                     Int?
   aiFeedback                  String?           @db.Text
@@ -1346,6 +1358,9 @@ model ClientSubscription {
   id                      String             @id @default(cuid())
   companyId               String             @unique
   planId                  String
+  // Congela o preço escolhido na entrada do teste. Assim um preço temporário
+  // de homologação não muda quando a configuração volta ao valor comercial.
+  monthlyPriceSnapshot    Decimal?           @db.Decimal(10, 2)
   resellerId              String?
   status                  SubscriptionStatus @default(PENDENTE)
   trialStartedAt          DateTime?

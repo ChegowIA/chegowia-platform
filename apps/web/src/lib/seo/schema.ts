@@ -101,6 +101,8 @@ export function platformSchema() {
         "@type": "Organization",
         "@id": `${homepage}#organization`,
         name: "ChegowIA",
+        alternateName: ["Chegow IA", "Chegowia"],
+        description: "Plataforma brasileira para pedidos, delivery, salão, cardápio online e atendimento com inteligência artificial.",
         url: homepage,
         logo,
       },
@@ -109,6 +111,8 @@ export function platformSchema() {
         "@id": `${homepage}#website`,
         url: homepage,
         name: "ChegowIA",
+        alternateName: ["Chegow IA", "Chegowia"],
+        description: "Software de pedidos, delivery, salão e gestão para restaurantes.",
         inLanguage: "pt-BR",
         publisher: { "@id": `${homepage}#organization` },
         potentialAction: {

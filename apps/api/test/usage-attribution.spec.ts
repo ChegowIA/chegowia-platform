@@ -163,7 +163,9 @@ describe("atribuição de consumo à empresa", () => {
       const trecho = fonte.slice(fonte.indexOf("async startOrGetCustomerConversation"));
       const corpo = trecho.slice(0, trecho.indexOf("\n  }"));
 
-      expect(corpo).toContain("where: { slug: companySlug, isActive: true }");
+      expect(corpo).toContain("slug: companySlug");
+      expect(corpo).toContain("isActive: true");
+      expect(corpo).toContain("publicCompanyVisibilityWhereForUserId(userId)");
       expect(corpo).toContain("companyId: company.id");
     });
   });

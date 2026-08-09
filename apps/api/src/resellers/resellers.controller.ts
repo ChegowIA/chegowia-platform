@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, StreamableFile, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, Req, StreamableFile, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApplicationStatus, Role } from "@prisma/client";
 import { ApiTags } from "@nestjs/swagger";
@@ -13,17 +13,23 @@ import { ReviewApplicationDto } from "./dto/review-application.dto";
 import { UpdateLeadStatusDto } from "./dto/update-lead-status.dto";
 import { ResellerAssistantDto } from "./dto/reseller-assistant.dto";
 import { ResellersService } from "./resellers.service";
+import type { Request } from "express";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 @ApiTags("resellers")
 @Controller("resellers")
 export class ResellersController {
-  constructor(private readonly service: ResellersService) {}
+  constructor(
+    private readonly service: ResellersService,
+    private readonly temporaryTestMode: TemporaryTestModeService,
+  ) {}
 
   @Public()
   @Post("applications")
   @Throttle({ default: { limit: 3, ttl: 60 * 60_000 } })
   @UseInterceptors(FileInterceptor("resume", { limits: { fileSize: 6 * 1024 * 1024 } }))
-  apply(@Body() dto: ResellerApplicationDto, @UploadedFile() file: any) {
+  apply(@Body() dto: ResellerApplicationDto, @UploadedFile() file: any, @Req() request: Request) {
+    this.temporaryTestMode.assertCreationAllowed(request, "revendedor");
     return this.service.apply(dto, file);
   }
 
@@ -52,7 +58,13 @@ export class ResellersController {
 
   @Roles(Role.SUPER_ADMIN)
   @Post("admin/applications/:id/review")
-  review(@Param("id") id: string, @Body() dto: ReviewApplicationDto, @CurrentUser("sub") reviewerId: string) {
+  review(
+    @Param("id") id: string,
+    @Body() dto: ReviewApplicationDto,
+    @CurrentUser("sub") reviewerId: string,
+    @Req() request: Request,
+  ) {
+    if (dto.approve) this.temporaryTestMode.assertCreationAllowed(request, "revendedor");
     return this.service.humanReview(id, dto.approve, dto.notes, reviewerId);
   }
 

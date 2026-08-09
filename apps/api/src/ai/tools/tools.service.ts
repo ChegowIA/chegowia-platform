@@ -6,6 +6,8 @@ import { tenantContext } from "../../common/tenant/tenant-context";
 import { AI_PROVIDER, AIProvider } from "../providers/ai-provider.interface";
 import { UsageService } from "../../usage/usage.service";
 import { WhatsAppOrdersService } from "../../orders/whatsapp-orders.service";
+import { JwtPayload } from "../../common/interfaces/jwt-payload.interface";
+import { TemporaryTestModeService } from "../../common/test-mode/test-mode.service";
 
 /**
  * Implementação das ferramentas listadas em tool-definitions.ts. Cada método recebe
@@ -23,6 +25,7 @@ export class ToolsService {
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly usage: UsageService,
     private readonly whatsappOrders?: WhatsAppOrdersService,
+    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -316,18 +319,22 @@ export class ToolsService {
    * (ver ai/search/search-intent.service.ts). Sem ele, vale a expansão por
    * sinônimos local — é o que mantém a tool utilizável sem provedor de IA.
    */
-  async searchPublicCatalog(data: { message: string; city?: string; neighborhood?: string; terms?: string[] }) {
+  async searchPublicCatalog(
+    data: { message: string; city?: string; neighborhood?: string; terms?: string[] },
+    viewer?: JwtPayload,
+  ) {
     const query = data.message.trim();
     const city = data.city?.trim();
     const neighborhood = data.neighborhood?.trim();
     const tokens = data.terms?.length ? data.terms : searchTokens(query);
 
-    const companyWhere: any = { isActive: true };
+    const visibility = await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer);
+    const companyWhere: any = { isActive: true, ...(visibility ?? {}) };
     if (city) companyWhere.city = { contains: city };
     const companySearch = buildCompanySearch(tokens);
     if (companySearch.length) companyWhere.OR = companySearch;
 
-    const productCompanyWhere: any = { isActive: true };
+    const productCompanyWhere: any = { isActive: true, ...(visibility ?? {}) };
     if (city) productCompanyWhere.city = { contains: city };
     const productWhere: any = { isActive: true, company: { is: productCompanyWhere } };
     const productSearch = buildProductSearch(tokens);

@@ -1,8 +1,11 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { PromotionStatus, Role } from "@prisma/client";
 import { Roles } from "../common/decorators/roles.decorator";
 import { Public } from "../common/decorators/public.decorator";
+import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { OptionalJwtAuthGuard } from "../common/guards/jwt-auth.guard";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { PromotionsService } from "./promotions.service";
 import { CreatePromotionDto } from "./dto/create-promotion.dto";
 
@@ -31,11 +34,12 @@ export class PromotionsController {
 @ApiTags("promotions-public")
 @Public()
 @Controller("promotions/public")
+@UseGuards(OptionalJwtAuthGuard)
 export class PublicPromotionsController {
   constructor(private readonly promotionsService: PromotionsService) {}
 
   @Get()
-  list(@Query("city") city?: string) {
-    return this.promotionsService.publicList({ city });
+  list(@Query("city") city?: string, @CurrentUser() viewer?: JwtPayload) {
+    return this.promotionsService.publicList({ city }, viewer);
   }
 }

@@ -32,6 +32,7 @@ import { AuthService } from "../auth/auth.service";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
@@ -50,6 +51,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     private readonly auth: AuthService,
     private readonly usage: UsageService,
     private readonly mail: MailService,
+    // Opcional para manter os construtores diretos dos testes unitários.
+    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() { return this.prisma as any; }
@@ -72,8 +75,30 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (this.stripeWorker) clearInterval(this.stripeWorker);
   }
 
-  listPlans() {
-    return this.db().softwarePlan.findMany({ where: { isActive: true }, orderBy: [{ isFeatured: "desc" }, { monthlyPrice: "asc" }] });
+  async listPlans() {
+    const plans = await this.db().softwarePlan.findMany({
+      where: { isActive: true },
+      orderBy: [{ isFeatured: "desc" }, { monthlyPrice: "asc" }],
+    });
+    return plans.map((plan: any) => ({
+      ...plan,
+      monthlyPrice: this.effectivePlanMonthlyPrice(plan),
+    }));
+  }
+
+  /** Preço exibido e escolhido por novas empresas durante a homologação. */
+  private effectivePlanMonthlyPrice(plan: { monthlyPrice: unknown }) {
+    return this.temporaryTestMode?.monthlyPriceOverride() ?? Number(plan.monthlyPrice);
+  }
+
+  /** Assinaturas existentes mantêm o preço registrado na entrada do teste. */
+  private effectiveSubscriptionMonthlyPrice(subscription: {
+    monthlyPriceSnapshot?: unknown;
+    plan: { monthlyPrice: unknown };
+  }) {
+    return subscription.monthlyPriceSnapshot === null || subscription.monthlyPriceSnapshot === undefined
+      ? Number(subscription.plan.monthlyPrice)
+      : Number(subscription.monthlyPriceSnapshot);
   }
 
   /**
@@ -112,13 +137,25 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updatePlan(id: string, data: { monthlyPrice?: number; stripePriceId?: string; isActive?: boolean }) {
+    if (this.temporaryTestMode?.isEnabled()) {
+      throw new BadRequestException(
+        "O preço de R$ 0,50 está sendo aplicado pelo modo temporário de testes. Desative esse modo antes de alterar o preço comercial do plano.",
+      );
+    }
     const plan = await this.db().softwarePlan.findUnique({ where: { id } });
     if (!plan) throw new NotFoundException("Plano não encontrado.");
-    const nextPriceId = data.stripePriceId?.trim() || null;
+    const nextMonthlyPrice = data.monthlyPrice ?? Number(plan.monthlyPrice);
+    const planPriceChanged = data.monthlyPrice !== undefined
+      && Math.round(nextMonthlyPrice * 100) !== Math.round(Number(plan.monthlyPrice) * 100);
+    // Um Price ID aponta para um valor imutável na Stripe. Ao alterar o valor
+    // local, removemos a referência antiga para nunca cobrar um preço obsoleto.
+    const nextPriceId = data.stripePriceId === undefined
+      ? (planPriceChanged ? null : undefined)
+      : (data.stripePriceId.trim() || null);
     if (nextPriceId) {
       if (!this.stripe) throw new BadRequestException("Configure a Stripe antes de vincular um preço.");
       await this.assertStripePrice(nextPriceId, {
-        monthlyPrice: data.monthlyPrice ?? Number(plan.monthlyPrice),
+        monthlyPrice: nextMonthlyPrice,
         currency: plan.currency,
       });
     }
@@ -126,7 +163,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       where: { id },
       data: {
         monthlyPrice: data.monthlyPrice,
-        stripePriceId: data.stripePriceId === undefined ? undefined : nextPriceId,
+        stripePriceId: nextPriceId,
         isActive: data.isActive,
       },
     });
@@ -190,6 +227,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       aiFeedback: null,
       aiAnalysis: undefined,
       stripeSessionId: null,
+      isTestOnly: this.temporaryTestMode?.shouldMarkNewCompanyAsTestOnly() ?? false,
+      monthlyPriceSnapshot: this.effectivePlanMonthlyPrice(plan),
     };
     /**
      * Sempre cria um registro novo — nunca reaproveita uma candidatura
@@ -573,12 +612,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
     const trialActive = this.isTrialActive(subscription, now);
     const trialExpired = this.isTrialExpired(subscription, now);
+    const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
     // O valor base só compõe uma estimativa quando existe uma assinatura paga.
     // No teste, inclusive depois do vencimento, nenhum dos consumos acumulados
     // pode virar dívida: o cliente escolhe se começa uma nova assinatura.
     const usage = await this.usage.getBillingUsage(
       companyId,
-      subscription.status === SubscriptionStatus.ATIVA ? Number(subscription.plan.monthlyPrice) : 0,
+      subscription.status === SubscriptionStatus.ATIVA ? monthlyPrice : 0,
     );
     return {
       status: subscription.status,
@@ -602,7 +642,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       canceledAt: subscription.canceledAt,
       plan: {
         name: subscription.plan.name,
-        monthlyPrice: Number(subscription.plan.monthlyPrice),
+        monthlyPrice,
         currency: subscription.plan.currency,
       },
       referral: subscription.reseller
@@ -653,13 +693,20 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!this.isTrialExpired(subscription)) {
       throw new BadRequestException("A ativação paga fica disponível quando os 7 dias de teste terminarem.");
     }
-    if (!this.stripe || !subscription.plan.stripePriceId) {
+    if (!this.stripe) {
       throw new BadRequestException("A cobrança ainda está sendo configurada. Tente novamente em alguns instantes.");
     }
-    await this.assertStripePrice(subscription.plan.stripePriceId, {
-      monthlyPrice: Number(subscription.plan.monthlyPrice),
-      currency: subscription.plan.currency,
-    });
+    const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
+    const canUseStoredStripePrice = Boolean(
+      subscription.plan.stripePriceId
+      && Math.round(monthlyPrice * 100) === Math.round(Number(subscription.plan.monthlyPrice) * 100),
+    );
+    if (canUseStoredStripePrice) {
+      await this.assertStripePrice(subscription.plan.stripePriceId!, {
+        monthlyPrice,
+        currency: subscription.plan.currency,
+      });
+    }
 
     if (subscription.stripeCheckoutSessionId) {
       try {
@@ -685,7 +732,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       mode: "subscription",
       locale: "pt-BR",
       ...(subscription.stripeCustomerId ? { customer: subscription.stripeCustomerId } : { customer_email: admin.email }),
-      line_items: [{ price: subscription.plan.stripePriceId, quantity: 1 }],
+      line_items: [canUseStoredStripePrice
+        ? { price: subscription.plan.stripePriceId!, quantity: 1 }
+        : {
+          price_data: {
+            currency: subscription.plan.currency,
+            unit_amount: Math.round(monthlyPrice * 100),
+            recurring: { interval: "month" },
+            product_data: { name: `ChegowIA — ${subscription.plan.name}` },
+          },
+          quantity: 1,
+        }],
       discounts,
       success_url: `${this.publicAppUrl()}/contratar/sucesso?ativacao=1`,
       cancel_url: `${this.publicAppUrl()}/painel/assinatura?pagamento=cancelado`,
@@ -864,6 +921,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           phone: application.phone,
           city: application.city,
           state: application.state,
+          isTestOnly: Boolean(
+            application.isTestOnly || this.temporaryTestMode?.shouldMarkNewCompanyAsTestOnly(),
+          ),
           settings: { create: { plan: application.plan.slug } },
         },
       });
@@ -886,6 +946,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         data: {
           companyId: company.id,
           planId: application.planId,
+          monthlyPriceSnapshot: application.monthlyPriceSnapshot
+            ?? (application.isTestOnly ? 0.5 : this.effectivePlanMonthlyPrice(application.plan)),
           resellerId: application.resellerId,
           status: SubscriptionStatus.EM_TESTE,
           trialStartedAt: now,
@@ -1041,7 +1103,18 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const discountEndsAt = application.resellerId ? new Date(new Date().setMonth(new Date().getMonth() + 3)) : null;
     const admin = await this.db().$transaction(async (tx: any) => {
       const company = await tx.company.create({
-        data: { name: application.tradeName || application.companyName, slug, cnpj: application.document, phone: application.phone, city: application.city, state: application.state, settings: { create: { plan: application.plan.slug } } },
+        data: {
+          name: application.tradeName || application.companyName,
+          slug,
+          cnpj: application.document,
+          phone: application.phone,
+          city: application.city,
+          state: application.state,
+          isTestOnly: Boolean(
+            application.isTestOnly || this.temporaryTestMode?.shouldMarkNewCompanyAsTestOnly(),
+          ),
+          settings: { create: { plan: application.plan.slug } },
+        },
       });
       await tx.identityDocument.create({
         data: { value: application.document, ownerType: "COMPANY", ownerId: company.id },
@@ -1060,7 +1133,11 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       });
       await tx.clientSubscription.create({
         data: {
-          companyId: company.id, planId: application.planId, resellerId: application.resellerId,
+          companyId: company.id,
+          planId: application.planId,
+          monthlyPriceSnapshot: application.monthlyPriceSnapshot
+            ?? (application.isTestOnly ? 0.5 : this.effectivePlanMonthlyPrice(application.plan)),
+          resellerId: application.resellerId,
           status: SubscriptionStatus.ATIVA, stripeCustomerId, stripeSubscriptionId,
           referralCode: application.resellerCode, referralLockedAt: application.resellerId ? new Date() : null, discountEndsAt,
         },

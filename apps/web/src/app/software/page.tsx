@@ -3,8 +3,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, apiErrorMessage } from "@/lib/api-client";
+import { formatCurrency } from "@/lib/format";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Textarea } from "@/components/ui/input";
@@ -36,6 +37,11 @@ export default function SoftwareLanding() {
   const [sent, setSent] = useState(false);
   const [form, setForm] = useState({ name: "", companyName: "", email: "", phone: "", city: "", state: "", message: "Quero entender como o ChegowIA pode organizar minha operação." });
   const send = useMutation({ mutationFn: () => api.post("/resellers/leads", form), onSuccess: () => setSent(true) });
+  const { data: plans = [] } = useQuery({
+    queryKey: ["software-plans"],
+    queryFn: async () => (await api.get<Array<{ monthlyPrice: number | string }>>("/billing/plans")).data,
+  });
+  const monthlyPrice = Number(plans[0]?.monthlyPrice ?? 159.9);
 
   return (
     <main className="overflow-hidden bg-[#f8f8f6] dark:bg-[#080d18] text-slate-950 dark:text-slate-100">
@@ -119,7 +125,7 @@ export default function SoftwareLanding() {
       </section>
 
       <section id="preco" className="bg-white py-24 dark:bg-slate-900">
-        <div className="mx-auto grid max-w-7xl items-center gap-12 px-5 lg:grid-cols-[.9fr_1.1fr]"><div><Eyebrow>Comece completo</Eyebrow><h2 className="mt-4 text-4xl font-black tracking-[-.04em] sm:text-5xl">Um plano direto.<br />Sem esconder a operação.</h2><p className="mt-5 max-w-xl text-lg leading-8 text-slate-600 dark:text-slate-400">Nesta fase, o ChegowIA oferece um plano único com o conjunto completo de recursos. Sua empresa entra com a estrutura necessária para delivery, salão e gestão — e testa tudo por 7 dias antes de decidir.</p><a href="#contato" className="mt-6 inline-block text-sm font-black text-brand-700 hover:underline dark:text-brand-300">Ainda tem dúvidas? Converse com alguém →</a></div><article className="relative overflow-hidden rounded-[36px] bg-slate-950 p-7 text-white shadow-2xl sm:p-9"><div className="absolute -right-12 -top-14 h-48 w-48 rounded-full bg-brand-500/25 blur-3xl" /><div className="relative"><div className="flex items-center justify-between gap-3"><span className="rounded-full bg-brand-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider">Plano profissional</span><span className="text-xs font-bold text-emerald-300">7 dias grátis</span></div><div className="mt-7 flex items-end gap-2"><strong className="text-5xl font-black tracking-tight">R$ 159,90</strong><span className="pb-2 text-sm text-slate-400">/mês depois do teste</span></div><p className="mt-3 text-sm text-slate-300">Operação completa em uma única assinatura.</p><p className="mt-2 text-[11px] leading-5 text-slate-400">Durante o teste, IA e WhatsApp são medidos, mas os custos são cobertos pela ChegowIA. Você só paga se optar por continuar.</p><div className="my-7 grid gap-3 sm:grid-cols-2">{["Pedidos delivery e retirada","Mesas e pedidos locais","Cozinha e fluxo em tempo real","Entregas e motoboys","Clientes, equipe e permissões","Relatórios e assistentes de IA","Atualizações contínuas","Suporte à operação"].map((item) => <p key={item} className="text-sm font-semibold text-slate-200">✓ {item}</p>)}</div><Link href="/planos"><Button size="lg" className="h-14 w-full rounded-2xl text-base font-black">Começar teste grátis</Button></Link><p className="mt-4 text-center text-[11px] text-slate-500 dark:text-slate-400">Código de parceiro válido dá 15% de desconto nos primeiros 3 meses após a ativação.</p></div></article></div>
+        <div className="mx-auto grid max-w-7xl items-center gap-12 px-5 lg:grid-cols-[.9fr_1.1fr]"><div><Eyebrow>Comece completo</Eyebrow><h2 className="mt-4 text-4xl font-black tracking-[-.04em] sm:text-5xl">Um plano direto.<br />Sem esconder a operação.</h2><p className="mt-5 max-w-xl text-lg leading-8 text-slate-600 dark:text-slate-400">Nesta fase, o ChegowIA oferece um plano único com o conjunto completo de recursos. Sua empresa entra com a estrutura necessária para delivery, salão e gestão — e testa tudo por 7 dias antes de decidir.</p><a href="#contato" className="mt-6 inline-block text-sm font-black text-brand-700 hover:underline dark:text-brand-300">Ainda tem dúvidas? Converse com alguém →</a></div><article className="relative overflow-hidden rounded-[36px] bg-slate-950 p-7 text-white shadow-2xl sm:p-9"><div className="absolute -right-12 -top-14 h-48 w-48 rounded-full bg-brand-500/25 blur-3xl" /><div className="relative"><div className="flex items-center justify-between gap-3"><span className="rounded-full bg-brand-500 px-3 py-1 text-[10px] font-black uppercase tracking-wider">Plano profissional</span><span className="text-xs font-bold text-emerald-300">7 dias grátis</span></div><div className="mt-7 flex items-end gap-2"><strong className="text-5xl font-black tracking-tight">{formatCurrency(monthlyPrice)}</strong><span className="pb-2 text-sm text-slate-400">/mês depois do teste</span></div><p className="mt-3 text-sm text-slate-300">Operação completa em uma única assinatura.</p><p className="mt-2 text-[11px] leading-5 text-slate-400">Durante o teste, IA e WhatsApp são medidos, mas os custos são cobertos pela ChegowIA. Você só paga se optar por continuar.</p><div className="my-7 grid gap-3 sm:grid-cols-2">{["Pedidos delivery e retirada","Mesas e pedidos locais","Cozinha e fluxo em tempo real","Entregas e motoboys","Clientes, equipe e permissões","Relatórios e assistentes de IA","Atualizações contínuas","Suporte à operação"].map((item) => <p key={item} className="text-sm font-semibold text-slate-200">✓ {item}</p>)}</div><Link href="/planos"><Button size="lg" className="h-14 w-full rounded-2xl text-base font-black">Começar teste grátis</Button></Link><p className="mt-4 text-center text-[11px] text-slate-500 dark:text-slate-400">Código de parceiro válido dá 15% de desconto nos primeiros 3 meses após a ativação.</p></div></article></div>
       </section>
 
       <section className="mx-auto max-w-7xl px-5 py-24">

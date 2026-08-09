@@ -13,6 +13,8 @@ import { normalizeBrazilDocument } from "../common/validators/brazil-document.va
 import { AuthService } from "../auth/auth.service";
 import { isStoreOpen } from "../common/utils/store-hours";
 import { LocalStorageService } from "../common/storage/local-storage.service";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 @Injectable()
 export class CompaniesService {
@@ -20,6 +22,8 @@ export class CompaniesService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly auth: AuthService,
     private readonly storage: LocalStorageService,
+    // Opcional para os testes unitários que instanciam este serviço diretamente.
+    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -38,7 +42,7 @@ export class CompaniesService {
     return candidate;
   }
 
-  async create(dto: CreateCompanyDto) {
+  async create(dto: CreateCompanyDto, options: { isTestOnly?: boolean } = {}) {
     const slug = dto.slug ? slugify(dto.slug) : await this.uniqueSlug(dto.name);
     const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : null;
     if (cnpj) {
@@ -65,6 +69,7 @@ export class CompaniesService {
             deliveryRadiusKm: dto.deliveryRadiusKm ?? 10,
             avgDeliveryTimeMinutes: dto.avgDeliveryTimeMinutes ?? 40,
             logoUrl: dto.logoUrl,
+            isTestOnly: options.isTestOnly ?? false,
             settings: { create: {} },
           },
           include: { settings: true },
@@ -242,8 +247,11 @@ export class CompaniesService {
   }
 
   /** Diretório público — a elegibilidade exata é calculada pela rota no checkout. */
-  async publicList(params: { city?: string; neighborhood?: string; search?: string }) {
-    const where: any = { isActive: true };
+  async publicList(params: { city?: string; neighborhood?: string; search?: string }, viewer?: JwtPayload) {
+    const where: any = {
+      isActive: true,
+      ...(await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer) ?? {}),
+    };
     if (params.city) where.city = { contains: params.city };
     if (params.search) where.name = { contains: params.search };
 
@@ -271,9 +279,13 @@ export class CompaniesService {
    * internas numa rota anônima, bastando enumerar os slugs devolvidos por
    * `publicList`. Só entra aqui o que a loja realmente mostra ao cliente.
    */
-  async publicFindBySlug(slug: string) {
+  async publicFindBySlug(slug: string, viewer?: JwtPayload) {
     const company = await this.db().company.findFirst({
-      where: { slug, isActive: true },
+      where: {
+        slug,
+        isActive: true,
+        ...(await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer) ?? {}),
+      },
       select: {
         id: true,
         name: true,

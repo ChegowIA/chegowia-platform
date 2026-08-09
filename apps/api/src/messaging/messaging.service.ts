@@ -30,6 +30,8 @@ import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversatio
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-provider.interface";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
 
@@ -45,6 +47,7 @@ export class MessagingService {
     private readonly ai: AiService,
     private readonly usage: UsageService,
     private readonly realtime: RealtimeGateway,
+    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -903,8 +906,14 @@ export class MessagingService {
     return { link: this.provider.buildContactLink(phone, summary), summary };
   }
 
-  async buildStoreContactLink(companySlug: string) {
-    const company = await this.db().company.findFirst({ where: { slug: companySlug, isActive: true } });
+  async buildStoreContactLink(companySlug: string, viewer?: JwtPayload) {
+    const company = await this.db().company.findFirst({
+      where: {
+        slug: companySlug,
+        isActive: true,
+        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer)) ?? {}),
+      },
+    });
     if (!company?.whatsapp) throw new NotFoundException("Empresa não tem WhatsApp configurado.");
     const message = `Olá, ${company.name}! Vim pelo site e gostaria de fazer um pedido.`;
     return { link: this.provider.buildContactLink(company.whatsapp, message) };

@@ -32,7 +32,7 @@ describe("teste gratuito de empresas", () => {
       passwordHash: "hash",
       termsAcceptedAt: now,
       privacyAcceptedAt: now,
-      plan: { slug: "profissional" },
+      plan: { slug: "profissional", monthlyPrice: 159.9 },
     };
     const prisma = {
       clientApplication: { findUnique: jest.fn().mockResolvedValue(application) },
@@ -55,6 +55,7 @@ describe("teste gratuito de empresas", () => {
         status: SubscriptionStatus.EM_TESTE,
         trialStartedAt: now,
         trialEndsAt: result.trialEndsAt,
+        monthlyPriceSnapshot: 159.9,
       }),
     }));
     expect(auth.sendVerificationForUser).toHaveBeenCalledWith("admin-1");
@@ -86,5 +87,29 @@ describe("teste gratuito de empresas", () => {
     expect(status.trial).toMatchObject({ expired: true, current: true, days: 7 });
     expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 0);
     process.env.BILLING_ENFORCEMENT = previousEnforcement;
+  });
+
+  it("expõe R$ 0,50 para novas contratações somente durante o modo temporário", async () => {
+    const prisma = {
+      softwarePlan: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "plano-1", monthlyPrice: 159.9, isFeatured: true },
+        ]),
+      },
+    };
+    const temporaryMode = { monthlyPriceOverride: jest.fn().mockReturnValue(0.5) };
+    const service = new BillingService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      temporaryMode as never,
+    );
+    service.onModuleDestroy();
+
+    await expect(service.listPlans()).resolves.toEqual([
+      expect.objectContaining({ id: "plano-1", monthlyPrice: 0.5 }),
+    ]);
   });
 });
