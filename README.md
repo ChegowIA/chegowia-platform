@@ -129,9 +129,11 @@ domínio pode ser configurada por `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`.
 ## WhatsApp Business oficial e atendimento híbrido
 
 Em **Configurações → WhatsApp com IA e equipe**, o empresário só clica em
-**Conectar meu WhatsApp**, entra na própria conta Meta Business e escolhe ou cadastra
-o número. O popup oficial do **Meta Embedded Signup** devolve uma autorização de uso
-único ao servidor; ele valida o número, registra a Cloud API quando necessário,
+**Conectar e manter meu WhatsApp**, entra na própria conta Meta Business e escolhe o
+número que já usa no WhatsApp Business App. O popup oficial do **Meta Embedded
+Signup** solicita o modo de coexistência, para que o número continue disponível no
+app e também atenda pelo ChegowIA. Ele devolve uma autorização de uso único ao
+servidor; este valida o número, evita novo registro nos fluxos de coexistência,
 assina os webhooks e guarda as credenciais cifradas. O empresário não procura nem
 copia `Phone Number ID`, WABA ID, token ou PIN.
 
@@ -149,6 +151,8 @@ envia um `companyId` para escolher o tenant.
   empresa conectada, além do catálogo permitido pelas ferramentas.
 - Cada mensagem, status Meta, troca de modo e resposta da equipe fica no histórico da
   conversa da própria empresa.
+- A Meta define a elegibilidade para coexistência. A conexão técnica manual fica
+  protegida em opções avançadas porque ela pode migrar o número para fora do app.
 
 Isso exige uma configuração única da plataforma no App Meta: criar uma configuração
 **WhatsApp Embedded Signup** em **Facebook Login for Business**, autorizar o domínio

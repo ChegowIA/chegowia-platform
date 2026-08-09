@@ -51,6 +51,7 @@ const FINISH_EVENTS = new Set<EmbeddedSignupEvent>([
   "FINISH_OBO_MIGRATION",
   "FINISH_GRANT_ONLY_API_ACCESS",
 ]);
+const WHATSAPP_BUSINESS_APP_COEXISTENCE_FEATURE = "whatsapp_business_app_onboarding";
 let facebookSdkPromise: Promise<FacebookSdk> | null = null;
 
 /**
@@ -62,6 +63,7 @@ export function WhatsAppCloudSettings() {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [manualMigrationAcknowledged, setManualMigrationAcknowledged] = useState(false);
   const [signupState, setSignupState] = useState<"idle" | "opening" | "waiting" | "connecting">("idle");
   const signupCode = useRef<string | null>(null);
   const signupAssets = useRef<SignupAssets | null>(null);
@@ -123,7 +125,7 @@ export function WhatsAppCloudSettings() {
     },
     onSuccess: () => {
       setError(null);
-      setFeedback("Tudo pronto: seu WhatsApp está conectado e pronto para atender com IA e equipe.");
+      setFeedback("Tudo pronto: seu WhatsApp está conectado para atender com IA e equipe. O WhatsApp Business App continua sendo o canal do dia a dia quando a Meta concluir o vínculo de coexistência.");
       setSignupState("idle");
       refresh();
     },
@@ -231,7 +233,13 @@ export function WhatsAppCloudSettings() {
         config_id: signupConfig.configurationId,
         response_type: "code",
         override_default_response_type: true,
-        extras: { setup: {} },
+        // Solicita à Meta o fluxo de coexistência: o mesmo número segue ativo no
+        // WhatsApp Business App e também pode atender pelo ChegowIA. Não usamos o
+        // cadastro padrão de Cloud API, que pode migrar o número para fora do app.
+        extras: {
+          setup: {},
+          featureType: WHATSAPP_BUSINESS_APP_COEXISTENCE_FEATURE,
+        },
       });
     } catch {
       setSignupState("idle");
@@ -248,9 +256,9 @@ export function WhatsAppCloudSettings() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">WhatsApp da empresa</p>
-            <CardTitle className="mt-1">Conecte seu atendimento em poucos passos</CardTitle>
+            <CardTitle className="mt-1">Conecte sem sair do WhatsApp Business App</CardTitle>
             <p className="mt-1 max-w-2xl text-sm text-slate-500 dark:text-slate-400">
-              Seus clientes poderão escolher entre o atendente virtual e sua equipe. Você só precisa autorizar a conexão segura da Meta.
+              Seus clientes poderão escolher entre o atendente virtual e sua equipe, enquanto sua equipe continua usando o WhatsApp Business App no celular.
             </p>
           </div>
           <span className={`inline-flex w-fit rounded-full px-3 py-1 text-xs font-black ${channel?.connected ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"}`}>
@@ -271,10 +279,11 @@ export function WhatsAppCloudSettings() {
             </div>
           ) : (
             <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-5 dark:bg-emerald-950/25 dark:border-emerald-900/50">
-              <p className="text-base font-black text-slate-950 dark:text-slate-100">Você não precisa procurar códigos nem tokens.</p>
+              <p className="text-base font-black text-slate-950 dark:text-slate-100">Seu WhatsApp Business App permanece ativo.</p>
+              <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">O ChegowIA solicita o modo de coexistência da Meta: um único número para o app no celular, a IA e a equipe.</p>
               <ol className="mt-3 space-y-2 text-sm leading-6 text-slate-600 dark:text-slate-400">
                 <li><span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-700 text-[11px] font-black text-white">1</span>Clique em conectar.</li>
-                <li><span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-700 text-[11px] font-black text-white">2</span>Entre na sua conta Meta Business e escolha o WhatsApp da empresa.</li>
+                <li><span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-700 text-[11px] font-black text-white">2</span>Na Meta, escolha o número que já usa no WhatsApp Business App.</li>
                 <li><span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-700 text-[11px] font-black text-white">3</span>Volte para cá: a automação já fica ligada a este negócio.</li>
               </ol>
             </div>
@@ -282,8 +291,8 @@ export function WhatsAppCloudSettings() {
 
           <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
             <div className="p-5">
-              <p className="text-sm font-black text-slate-900 dark:text-slate-100">{channel?.connected ? "Trocar ou reconectar WhatsApp" : "Conectar meu WhatsApp"}</p>
-              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">A janela aberta é da própria Meta. Nenhuma senha ou credencial fica visível aqui.</p>
+              <p className="text-sm font-black text-slate-900 dark:text-slate-100">{channel?.connected ? "Reconectar mantendo o WhatsApp Business" : "Conectar mantendo o WhatsApp Business"}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">A janela aberta é da própria Meta. Nenhuma senha ou credencial fica visível aqui, e o fluxo solicitado preserva o uso do número no app.</p>
             </div>
             <CardActions>
               <Button
@@ -293,7 +302,7 @@ export function WhatsAppCloudSettings() {
                 disabled={isLoadingSignupConfig || !signupConfig?.enabled}
                 onClick={() => void startEmbeddedSignup()}
               >
-                {channel?.connected ? "Reconectar pela Meta" : "Conectar meu WhatsApp"}
+                {channel?.connected ? "Reconectar e manter o app" : "Conectar e manter meu WhatsApp"}
               </Button>
             </CardActions>
           </div>
@@ -334,6 +343,9 @@ export function WhatsAppCloudSettings() {
           <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
             <summary className="cursor-pointer text-sm font-black text-slate-800 dark:text-slate-200">Opções avançadas de suporte</summary>
             <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Você não precisa usar esta área. Abra somente se nossa equipe orientar uma conexão técnica manual.</p>
+            <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+              Atenção: a conexão manual não solicita coexistência e pode tirar o número do WhatsApp Business App. Para manter o app ativo, use o botão de conexão segura acima.
+            </p>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <FormField label="Identificador do número na Meta">
                 <Input placeholder="Ex.: 123456789012345" value={form.phoneNumberId} onChange={(event) => setForm((current) => ({ ...current, phoneNumberId: event.target.value }))} />
@@ -347,8 +359,17 @@ export function WhatsAppCloudSettings() {
                 </FormField>
               </div>
             </div>
+            <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-600 dark:border-slate-700 dark:text-slate-300">
+              <input
+                className="mt-0.5"
+                type="checkbox"
+                checked={manualMigrationAcknowledged}
+                onChange={(event) => setManualMigrationAcknowledged(event.target.checked)}
+              />
+              <span>Entendo que esta opção é técnica, não preserva o WhatsApp Business App e só deve ser usada com orientação do suporte.</span>
+            </label>
             <CardActions className="-mx-4 mt-4 !px-4">
-              <Button className="w-full sm:w-auto" variant="outline" isLoading={connectManually.isPending} disabled={!readyForManualConnection} onClick={() => connectManually.mutate()}>
+              <Button className="w-full sm:w-auto" variant="outline" isLoading={connectManually.isPending} disabled={!readyForManualConnection || !manualMigrationAcknowledged} onClick={() => connectManually.mutate()}>
                 Conectar manualmente
               </Button>
             </CardActions>
@@ -376,7 +397,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function isMetaOrigin(origin: string) {
   try {
     const url = new URL(origin);
-    return url.protocol === "https:" && ["facebook.com", "www.facebook.com", "web.facebook.com"].includes(url.hostname);
+    return url.protocol === "https:" && (url.hostname === "facebook.com" || url.hostname.endsWith(".facebook.com"));
   } catch {
     return false;
   }

@@ -66,6 +66,12 @@ describe("DTOs críticos", () => {
     });
     expect(await validate(valid)).toHaveLength(0);
 
+    const coexistence = plainToInstance(CompleteWhatsAppEmbeddedSignupDto, {
+      ...valid,
+      event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    });
+    expect(await validate(coexistence)).toHaveLength(0);
+
     const invalid = plainToInstance(CompleteWhatsAppEmbeddedSignupDto, {
       ...valid,
       event: "CANCEL",

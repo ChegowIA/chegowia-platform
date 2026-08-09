@@ -95,4 +95,49 @@ describe("Meta Embedded Signup", () => {
     }));
     expect(JSON.stringify(result)).not.toContain("token-privado");
   });
+
+  it("não tenta registrar novamente um número do WhatsApp Business App em coexistência", async () => {
+    const prisma = {
+      messagingChannel: {
+        findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(null),
+        upsert: jest.fn().mockImplementation(async ({ create }) => ({ id: "canal-coexistencia", ...create })),
+      },
+      company: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const meta = {
+      exchangeEmbeddedSignupCode: jest.fn().mockResolvedValue({ accessToken: "token-privado", expiresInSeconds: 3600 }),
+      businessHasPhoneNumber: jest.fn().mockResolvedValue(true),
+      getPhoneNumber: jest.fn().mockResolvedValue({
+        id: "123456789012345",
+        displayPhoneNumber: "+55 62 99999-9999",
+        verifiedName: "Empresa teste",
+        qualityRating: "GREEN",
+      }),
+      registerPhoneNumber: jest.fn().mockResolvedValue(undefined),
+      subscribeAppToBusinessAccount: jest.fn().mockResolvedValue(undefined),
+    };
+    const secrets = {
+      encrypt: jest.fn((value: string) => `cifrado:${value}`),
+      isConfigured: jest.fn().mockReturnValue(true),
+    };
+    const service = new MessagingService(
+      prisma as never,
+      {} as never,
+      meta as never,
+      secrets as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.completeWhatsAppEmbeddedSignup("empresa-1", {
+      code: "codigo-de-uso-unico-da-meta",
+      phoneNumberId: "123456789012345",
+      businessAccountId: "987654321098765",
+      event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    });
+
+    expect(meta.registerPhoneNumber).not.toHaveBeenCalled();
+    expect(meta.subscribeAppToBusinessAccount).toHaveBeenCalledTimes(1);
+  });
 });

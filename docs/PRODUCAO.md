@@ -103,8 +103,10 @@ quando houver mudança de câmbio, modelo, país destinatário ou faixa de volum
 ## 5. WhatsApp Cloud API (Meta)
 
 Esta é uma configuração **única da ChegowIA**. Depois dela, cada empresário faz o
-próprio vínculo pelo botão **Conectar meu WhatsApp** no painel; ele não recebe IDs,
-token, webhook ou PIN técnico.
+próprio vínculo pelo botão **Conectar e manter meu WhatsApp** no painel; ele não
+recebe IDs, token, webhook ou PIN técnico. O painel solicita o fluxo de coexistência
+da Meta, para o número continuar ativo no WhatsApp Business App e também atender pela
+Cloud API.
 
 1. No App Meta da plataforma, adicione o produto **WhatsApp** e **Facebook Login for
    Business**. Crie uma configuração do tipo **WhatsApp Embedded Signup** e guarde o
@@ -143,9 +145,12 @@ token, webhook ou PIN técnico.
    ChegowIA, confirme também com a Meta se
    a conta usa crédito compartilhado de Solution Partner/BSP; se cada WABA pagar a
    Meta diretamente, não cobre o mesmo valor outra vez no Stripe.
-5. No painel da empresa, faça um teste real do botão **Conectar meu WhatsApp** com uma
-   conta Meta Business de teste. O servidor troca o código temporário por token,
-   confirma a posse do WABA/número, registra números novos e assina o app nos eventos.
+5. No painel da empresa, faça um teste real do botão **Conectar e manter meu
+   WhatsApp** com uma conta Meta Business de teste que já use o WhatsApp Business
+   App. O servidor troca o código temporário por token, confirma a posse do
+   WABA/número, não registra novamente números em coexistência e assina o app nos
+   eventos. A Meta determina quais números são elegíveis; não use a conexão manual
+   para tentar manter o app.
 6. Envie mensagens de teste para validar os botões de escolha IA/humano, a entrega de
    webhook, o inbox, a troca de modo e a linha de consumo da empresa correta.
 
