@@ -152,6 +152,18 @@ export class MessagingService {
         appSecret,
         code: dto.code.trim(),
       });
+      const businessPortfolioId = dto.businessPortfolioId?.trim() || null;
+      if (businessPortfolioId) {
+        // Não confiamos apenas no ID entregue ao navegador pela Meta. A API
+        // confirma que a credencial trocada no servidor realmente pode ler o
+        // Business Portfolio escolhido antes de vincular qualquer ativo a este
+        // tenant.
+        const businessPortfolio = await this.meta.getBusinessPortfolio(businessPortfolioId, credential.accessToken);
+        if (businessPortfolio.id !== businessPortfolioId) {
+          throw new BadRequestException("A Meta não confirmou o Business Portfolio escolhido para esta conexão.");
+        }
+      }
+
       const belongsToBusiness = await this.meta.businessHasPhoneNumber({
         businessAccountId,
         phoneNumberId,
@@ -188,7 +200,7 @@ export class MessagingService {
         companyId,
         phoneNumberId,
         businessAccountId,
-        businessPortfolioId: dto.businessPortfolioId?.trim() || null,
+        businessPortfolioId,
         accessToken: credential.accessToken,
         accessTokenExpiresAt: expiresAt,
         registrationPin,

@@ -35,6 +35,7 @@ describe("Meta Embedded Signup", () => {
     };
     const meta = {
       exchangeEmbeddedSignupCode: jest.fn().mockResolvedValue({ accessToken: "token-privado", expiresInSeconds: 3600 }),
+      getBusinessPortfolio: jest.fn().mockResolvedValue({ id: "456789123456789", name: "Empresa teste" }),
       businessHasPhoneNumber: jest.fn().mockResolvedValue(true),
       getPhoneNumber: jest.fn().mockResolvedValue({
         id: "123456789012345",
@@ -71,6 +72,7 @@ describe("Meta Embedded Signup", () => {
       appId: "123456789012345",
       code: "codigo-de-uso-unico-da-meta",
     }));
+    expect(meta.getBusinessPortfolio).toHaveBeenCalledWith("456789123456789", "token-privado");
     expect(meta.businessHasPhoneNumber).toHaveBeenCalledWith({
       businessAccountId: "987654321098765",
       phoneNumberId: "123456789012345",

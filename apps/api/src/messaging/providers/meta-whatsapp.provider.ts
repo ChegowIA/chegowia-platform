@@ -14,6 +14,11 @@ type MetaEmbeddedSignupToken = {
   expiresInSeconds: number | null;
 };
 
+type MetaBusinessPortfolioDetails = {
+  id: string;
+  name?: string | null;
+};
+
 /** Cliente fino para a API oficial WhatsApp Cloud API da Meta. */
 @Injectable()
 export class MetaWhatsAppProvider {
@@ -57,6 +62,23 @@ export class MetaWhatsAppProvider {
     return {
       accessToken,
       expiresInSeconds: Number.isFinite(expires) && expires > 0 ? expires : null,
+    };
+  }
+
+  /**
+   * Consulta o Business Portfolio retornado pelo Embedded Signup. Além de
+   * validar o vínculo com a conta que autorizou o fluxo, esta chamada usa a
+   * permissão business_management de maneira estritamente necessária ao
+   * onboarding multiempresa.
+   */
+  async getBusinessPortfolio(businessPortfolioId: string, accessToken: string): Promise<MetaBusinessPortfolioDetails> {
+    const result = await this.request(`/${encodeURIComponent(businessPortfolioId)}?fields=id,name`, {
+      method: "GET",
+      accessToken,
+    });
+    return {
+      id: String(result?.id ?? ""),
+      name: typeof result?.name === "string" ? result.name : null,
     };
   }
 
