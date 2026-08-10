@@ -694,12 +694,15 @@ export class MessagingService {
   private async sendChoiceMenu(conversation: any, channel: any, body: string) {
     const token = this.accessTokenFor(channel);
     try {
-      const sent = await this.meta.sendChoiceMenu({
-        phoneNumberId: channel.metaPhoneNumberId,
-        accessToken: token,
-        to: conversation.customerPhone,
-        body: truncateWhatsappText(body),
-      });
+      const sent = await this.sendToMetaRecipient(
+        conversation.customerPhone,
+        (to) => this.meta.sendChoiceMenu({
+          phoneNumberId: channel.metaPhoneNumberId,
+          accessToken: token,
+          to,
+          body: truncateWhatsappText(body),
+        }),
+      );
       return this.persistOutbound(conversation, channel, {
         providerMessageId: sent.messageId,
         body,
@@ -716,12 +719,15 @@ export class MessagingService {
     const body = truncateWhatsappText(content);
     const token = this.accessTokenFor(channel);
     try {
-      const sent = await this.meta.sendText({
-        phoneNumberId: channel.metaPhoneNumberId,
-        accessToken: token,
-        to: conversation.customerPhone,
-        body,
-      });
+      const sent = await this.sendToMetaRecipient(
+        conversation.customerPhone,
+        (to) => this.meta.sendText({
+          phoneNumberId: channel.metaPhoneNumberId,
+          accessToken: token,
+          to,
+          body,
+        }),
+      );
       return this.persistOutbound(conversation, channel, {
         providerMessageId: sent.messageId,
         body,
@@ -732,6 +738,28 @@ export class MessagingService {
     } catch (error) {
       await this.persistFailedOutbound(conversation, channel, body, type, error, sentByUserId);
       throw error;
+    }
+  }
+
+  /**
+   * Na lista de destinatários de números de teste, a Meta compara o número de
+   * forma estrita. Para alguns celulares brasileiros, o webhook chega sem o
+   * nono dígito, enquanto o cadastro na lista aceita/exige o número completo.
+   * Só tentamos a alternativa depois da recusa #131030 — isto evita trocar o
+   * destino em situações normais de produção.
+   */
+  private async sendToMetaRecipient<T>(customerPhone: string, send: (to: string) => Promise<T>): Promise<T> {
+    const normalizedPhone = normalizePhone(customerPhone);
+    try {
+      return await send(normalizedPhone);
+    } catch (error) {
+      const alternatePhone = brazilianRecipientWithNinthDigit(normalizedPhone);
+      if (!alternatePhone || !isMetaRecipientNotAllowedError(error)) throw error;
+
+      this.logger.warn(
+        `A Meta recusou o destinatário brasileiro ${maskPhone(normalizedPhone)} na lista de teste; tentando a variante com nono dígito.`,
+      );
+      return send(alternatePhone);
     }
   }
 
@@ -933,6 +961,23 @@ function channelConfig(channel: any): Record<string, any> {
 
 function normalizePhone(value: string) {
   return value.replace(/\D/g, "");
+}
+
+function brazilianRecipientWithNinthDigit(phone: string) {
+  // 55 + DDD (2) + número local de oito dígitos. A variação só é aplicável
+  // quando o webhook não trouxe o 9 que identifica celular brasileiro.
+  if (!/^55\d{10}$/.test(phone)) return null;
+  return `${phone.slice(0, 4)}9${phone.slice(4)}`;
+}
+
+function isMetaRecipientNotAllowedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("#131030") || /recipient phone number not in allowed list/i.test(message);
+}
+
+function maskPhone(phone: string) {
+  if (phone.length <= 4) return "***";
+  return `${phone.slice(0, 4)}***${phone.slice(-2)}`;
 }
 
 function truncateWhatsappText(value: string) {
