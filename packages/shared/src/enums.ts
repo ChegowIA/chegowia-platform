@@ -197,6 +197,23 @@ export enum WhatsAppMessageStatus {
   FALHOU = "FALHOU",
 }
 
+export enum PlatformSupportConversationMode {
+  IA = "IA",
+  HUMANO = "HUMANO",
+}
+
+export enum PlatformSupportConversationStatus {
+  ABERTA = "ABERTA",
+  ENCERRADA = "ENCERRADA",
+}
+
+export enum PlatformSupportMessageRole {
+  USUARIO = "USUARIO",
+  ASSISTENTE = "ASSISTENTE",
+  SUPER_ADMIN = "SUPER_ADMIN",
+  SISTEMA = "SISTEMA",
+}
+
 export enum WhatsAppOrderDraftStatus {
   MONTANDO = "MONTANDO",
   AGUARDANDO_CONFIRMACAO = "AGUARDANDO_CONFIRMACAO",

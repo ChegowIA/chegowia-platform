@@ -130,20 +130,17 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       ) {
         throw new Error("Empresa inativa.");
       }
-      const enforceBilling = process.env.BILLING_ENFORCEMENT === "true"
-        || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
-      if (
-        COMPANY_ROLES.has(payload.role)
-        && (
-          isTrialExpired(user.company?.subscription)
-          || (enforceBilling && !subscriptionAllowsAccess(user.company?.subscription))
-        )
-      ) {
-        throw new Error("Assinatura inativa.");
-      }
-      (client.data as { user: JwtPayload }).user = payload;
+      const companyRole = COMPANY_ROLES.has(payload.role);
+      const billingAllowed = this.billingAllowsCompanyRealtime(user.company?.subscription, companyRole);
+      const socketData = client.data as { user: JwtPayload; companyAccessPaused?: boolean };
+      socketData.user = payload;
+      socketData.companyAccessPaused = companyRole && Boolean(payload.companyId) && !billingAllowed;
+      // A sala pessoal não contém eventos da empresa. Mantê-la ativa quando a
+      // assinatura expira permite que a pessoa continue recebendo a Central de
+      // Suporte, sem devolver acesso em tempo real a pedidos, clientes ou
+      // conversas da empresa.
       client.join(this.userRoom(payload.sub));
-      if (payload.companyId) {
+      if (payload.companyId && billingAllowed) {
         for (const topic of await this.allowedTopics(payload)) {
           client.join(this.topicRoom(payload.companyId, topic));
         }
@@ -192,7 +189,8 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
    */
   private scheduleRevalidation(client: Socket) {
     const timer = setInterval(async () => {
-      const payload = (client.data as { user?: JwtPayload }).user;
+      const socketData = client.data as { user?: JwtPayload; companyAccessPaused?: boolean };
+      const payload = socketData.user;
       if (!payload) return;
       const user = await (this.prisma as any).user
         .findUnique({
@@ -206,23 +204,37 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
           },
         })
         .catch(() => null);
-      const enforceBilling = process.env.BILLING_ENFORCEMENT === "true"
-        || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
       const companyRole = COMPANY_ROLES.has(payload.role);
-      const billingAllowed = !companyRole
-        || (
-          !isTrialExpired(user?.company?.subscription)
-          && (!enforceBilling || subscriptionAllowsAccess(user?.company?.subscription))
-        );
-      const aindaValido = user?.isActive
+      const billingAllowed = this.billingAllowsCompanyRealtime(user?.company?.subscription, companyRole);
+      const identidadeValida = user?.isActive
         && user.emailVerifiedAt
         && user.role === payload.role
         && user.companyId === payload.companyId
-        && (!companyRole || user.company?.isActive)
-        && billingAllowed;
-      if (!aindaValido) {
+        && (!companyRole || user.company?.isActive);
+      if (!identidadeValida) {
         client.emit("session.revoked", { reason: "acesso revalidado e negado" });
         client.disconnect(true);
+        return;
+      }
+
+      if (companyRole && payload.companyId && !billingAllowed) {
+        // Expirou enquanto o painel estava aberto: remove só as salas de
+        // negócio. A sala user:{id} segue aberta exclusivamente para suporte.
+        for (const topic of Object.keys(TOPIC_PERMISSION) as RealtimeTopic[]) {
+          client.leave(this.topicRoom(payload.companyId, topic));
+        }
+        socketData.companyAccessPaused = true;
+        client.emit("company.access.paused", { reason: "assinatura inativa" });
+        return;
+      }
+
+      if (companyRole && payload.companyId && billingAllowed && socketData.companyAccessPaused) {
+        // Caso o pagamento seja regularizado sem o usuário atualizar a página,
+        // as permissões de tópico são restauradas na próxima revalidação.
+        for (const topic of await this.allowedTopics(payload)) {
+          client.join(this.topicRoom(payload.companyId, topic));
+        }
+        socketData.companyAccessPaused = false;
       }
     }, REVALIDATION_INTERVAL_MS);
     timer.unref?.();
@@ -235,6 +247,17 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   private userRoom(userId: string) {
     return `user:${userId}`;
+  }
+
+  private billingAllowsCompanyRealtime(
+    subscription: { status?: SubscriptionStatus; trialEndsAt?: Date | null } | null | undefined,
+    companyRole: boolean,
+  ) {
+    if (!companyRole) return true;
+    const enforceBilling = process.env.BILLING_ENFORCEMENT === "true"
+      || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
+    return !isTrialExpired(subscription)
+      && (!enforceBilling || subscriptionAllowsAccess(subscription));
   }
 
   /**

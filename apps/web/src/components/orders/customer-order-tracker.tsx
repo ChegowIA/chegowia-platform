@@ -102,7 +102,7 @@ export function CustomerOrderTracker() {
       <button
         type="button"
         onClick={() => setExpanded(true)}
-        className="order-tracker-enter fixed bottom-5 left-4 z-[55] flex items-center gap-3 rounded-full border border-slate-200 bg-white p-2 pr-5 shadow-2xl transition hover:-translate-y-1 sm:bottom-6 sm:left-6 dark:bg-slate-900 dark:border-slate-800"
+        className="order-tracker-enter fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-4 z-[55] flex items-center gap-3 rounded-full border border-slate-200 bg-white p-2 pr-5 shadow-2xl transition hover:-translate-y-1 sm:bottom-6 sm:left-6 dark:bg-slate-900 dark:border-slate-800"
       >
         <span className="relative grid h-11 w-11 place-items-center rounded-full bg-brand-50 dark:bg-brand-950/30">
           <BrandLogo adaptive variant="mark" className="h-8 w-8" />
@@ -119,7 +119,7 @@ export function CustomerOrderTracker() {
   return (
     <aside
       aria-live="polite"
-      className="order-tracker-enter fixed inset-x-3 bottom-3 z-[55] overflow-hidden rounded-[26px] border border-slate-200/80 bg-white shadow-[0_28px_80px_-30px_rgba(15,23,42,.6)] sm:inset-x-auto sm:bottom-6 sm:left-6 sm:w-[410px] dark:bg-slate-900 dark:border-slate-800/80"
+      className="order-tracker-enter fixed inset-x-3 bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-[55] overflow-hidden rounded-[26px] border border-slate-200/80 bg-white shadow-[0_28px_80px_-30px_rgba(15,23,42,.6)] sm:inset-x-auto sm:bottom-6 sm:left-6 sm:w-[410px] dark:bg-slate-900 dark:border-slate-800/80"
     >
       <div className="relative overflow-hidden bg-slate-950 px-5 pb-5 pt-4 text-white">
         <div className="absolute -right-12 -top-16 h-36 w-36 rounded-full bg-brand-600/35 blur-3xl" />

@@ -5,6 +5,7 @@ import { api, refreshAccessToken } from "@/lib/api-client";
 import { AuthUser, useAuthStore } from "@/lib/auth-store";
 import { connectSocket, disconnectSocket } from "@/lib/socket-client";
 import { CustomerOrderTracker } from "@/components/orders/customer-order-tracker";
+import { PlatformSupportBubble } from "@/components/support/platform-support-bubble";
 
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
@@ -68,6 +69,7 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <CustomerOrderTracker />
+      <PlatformSupportBubble />
     </>
   );
 }

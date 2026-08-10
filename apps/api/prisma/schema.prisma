@@ -127,6 +127,27 @@ enum WhatsAppMessageStatus {
   FALHOU
 }
 
+// Atendimento autenticado da própria ChegowIA. Ele não pertence a nenhuma
+// Company: é a ponte entre qualquer pessoa logada e a equipe da plataforma.
+// Mantê-lo fora das conversas operacionais evita que dados de suporte sejam
+// filtrados, expostos ou faturados como se fossem de uma empresa cliente.
+enum PlatformSupportConversationMode {
+  IA
+  HUMANO
+}
+
+enum PlatformSupportConversationStatus {
+  ABERTA
+  ENCERRADA
+}
+
+enum PlatformSupportMessageRole {
+  USUARIO
+  ASSISTENTE
+  SUPER_ADMIN
+  SISTEMA
+}
+
 // Carrinho persistente do atendimento automatizado. O pedido só é criado após
 // a confirmação explícita do cliente; até lá, endereço, itens e orçamento
 // permanecem neste rascunho isolado pela empresa e pela conversa.
@@ -366,6 +387,9 @@ model User {
   resellerProfile               ResellerProfile?
   resellerApplicationsReviewed  ResellerApplication[]  @relation("ResellerApplicationReviewedBy")
   leadsClaimed                  SalesLead[]            @relation("SalesLeadClaimedBy")
+  platformSupportConversations PlatformSupportConversation[] @relation("PlatformSupportUser")
+  platformSupportAssigned      PlatformSupportConversation[] @relation("PlatformSupportAssignedSuperAdmin")
+  platformSupportMessages      PlatformSupportMessage[]      @relation("PlatformSupportMessageAuthor")
 
   @@index([companyId])
 }
@@ -1781,12 +1805,71 @@ model PlatformWhatsAppMessage {
   @@index([channelId, providerMessageId])
 }
 
+// ---------------------------------------------------------------------------
+// Suporte autenticado da ChegowIA
+// ---------------------------------------------------------------------------
+//
+// O usuário e a empresa ficam fotografados no momento da abertura. Assim a
+// central mostra contexto útil ao superadmin, mas nunca confia em ids enviados
+// pelo navegador nem precisa consultar ou expor dados de outro tenant.
+
+model PlatformSupportConversation {
+  id                         String                          @id @default(cuid())
+  userId                     String
+  // Enquanto o atendimento está aberto, activeKey recebe o userId e garante
+  // uma única conversa ativa por pessoa. Ao encerrar, ela vira null, permitindo
+  // que o mesmo usuário abra um novo atendimento posteriormente.
+  activeKey                  String?                         @unique
+  userName                   String
+  userEmail                  String
+  userRole                   Role
+  companyIdSnapshot          String?
+  companyNameSnapshot        String?
+  mode                       PlatformSupportConversationMode @default(IA)
+  status                     PlatformSupportConversationStatus @default(ABERTA)
+  lastMessageText            String?                         @db.Text
+  lastMessageAt              DateTime                        @default(now())
+  humanRequestedAt           DateTime?
+  humanHandoffNotifiedAt     DateTime?
+  assignedSuperAdminId       String?
+  closedAt                   DateTime?
+  createdAt                  DateTime                        @default(now())
+  updatedAt                  DateTime                        @updatedAt
+
+  user               User                     @relation("PlatformSupportUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedSuperAdmin User?                    @relation("PlatformSupportAssignedSuperAdmin", fields: [assignedSuperAdminId], references: [id], onDelete: SetNull)
+  messages           PlatformSupportMessage[]
+  usageLedgers       PlatformUsageLedger[]
+
+  @@index([userId, lastMessageAt])
+  @@index([status, mode, lastMessageAt])
+  @@index([assignedSuperAdminId, status, lastMessageAt])
+}
+
+model PlatformSupportMessage {
+  id             String                     @id @default(cuid())
+  conversationId String
+  authorUserId   String?
+  role           PlatformSupportMessageRole
+  content        String                     @db.Text
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  conversation PlatformSupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?                       @relation("PlatformSupportMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+}
+
 // Consumo pago pela própria ChegowIA no seu canal comercial. Não é uma fatura
 // de cliente e, por isso, não reutiliza UsageLedger (que obrigatoriamente tem
 // companyId). Guardamos a tarifa calculada no instante do uso para auditoria.
 model PlatformUsageLedger {
   id                String      @id @default(cuid())
-  channelId         String
+  // O custo institucional pode nascer no WhatsApp comercial ou no suporte
+  // autenticado. Cada linha referencia exatamente um deles.
+  channelId         String?
+  supportConversationId String?
   usageRateId       String?
   source            UsageSource
   metric            UsageMetric
@@ -1797,10 +1880,12 @@ model PlatformUsageLedger {
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
-  channel   PlatformWhatsAppChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  usageRate UsageRate?              @relation(fields: [usageRateId], references: [id], onDelete: SetNull)
+  channel             PlatformWhatsAppChannel?  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  supportConversation PlatformSupportConversation? @relation(fields: [supportConversationId], references: [id], onDelete: Cascade)
+  usageRate           UsageRate?                 @relation(fields: [usageRateId], references: [id], onDelete: SetNull)
 
   @@index([channelId, createdAt])
+  @@index([supportConversationId, createdAt])
   @@index([source, metric, createdAt])
 }
 

@@ -36,6 +36,7 @@ import { CashModule } from "./cash/cash.module";
 import { ObservabilityModule } from "./common/observability/observability.module";
 import { MetricsInterceptor } from "./common/observability/metrics.interceptor";
 import { TemporaryTestModeModule } from "./common/test-mode/test-mode.module";
+import { PlatformSupportModule } from "./platform-support/platform-support.module";
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { TemporaryTestModeModule } from "./common/test-mode/test-mode.module";
     TablesModule,
     ResellersModule,
     BillingModule,
+    PlatformSupportModule,
     HealthModule,
   ],
   providers: [
