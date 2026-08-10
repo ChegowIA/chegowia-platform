@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { Role } from "@prisma/client";
@@ -110,6 +110,20 @@ export class MessagingController {
     @Body() dto: UpdateWhatsAppConversationDto,
   ) {
     return this.messagingService.updateWhatsAppConversation(companyId, id, dto);
+  }
+
+  /**
+   * Limpa somente o histórico visível da conversa do tenant atual. Pedidos já
+   * realizados e os lançamentos de consumo continuam preservados.
+   */
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
+  @RequirePermission(PermissionKey.PEDIDOS_EDITAR)
+  @Delete("conversations/:id/messages")
+  clearConversation(
+    @CurrentUser("companyId") companyId: string,
+    @Param("id") id: string,
+  ) {
+    return this.messagingService.clearWhatsAppConversation(companyId, id);
   }
 
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)

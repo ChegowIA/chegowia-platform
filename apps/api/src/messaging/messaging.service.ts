@@ -13,6 +13,7 @@ import {
   SubscriptionStatus,
   WhatsAppConversationMode,
   WhatsAppConversationStatus,
+  WhatsAppOrderDraftStatus,
   WhatsAppMessageDirection,
   WhatsAppMessageStatus,
 } from "@prisma/client";
@@ -456,6 +457,59 @@ export class MessagingService {
     const conversation = await this.db().whatsAppConversation.update({ where: { id }, data });
     this.realtime.emitToCompany(companyId, "whatsapp.conversation.updated", conversation);
     return conversation;
+  }
+
+  /**
+   * O atendente pode recomeçar a conversa sem apagar pedidos e faturamento.
+   *
+   * O recorte por `companyId` aparece em todas as operações, inclusive nas
+   * exclusões. Isso impede que um ID de outra empresa seja usado para limpar
+   * mensagens de outro tenant. Também desvinculamos o contexto da IA e
+   * cancelamos apenas o rascunho ainda aberto: assim um próximo contato não
+   * herda itens, endereço ou instruções antigas.
+   */
+  async clearWhatsAppConversation(companyId: string, id: string) {
+    const existing = await this.getWhatsAppConversation(companyId, id);
+    const clearedAt = new Date();
+
+    const result = await this.db().$transaction(async (tx: any) => {
+      const deletedMessages = await tx.whatsAppMessage.deleteMany({
+        where: { companyId, conversationId: existing.id },
+      });
+      await tx.whatsAppOrderDraft.updateMany({
+        where: {
+          companyId,
+          conversationId: existing.id,
+          activeKey: { not: null },
+          status: {
+            in: [WhatsAppOrderDraftStatus.MONTANDO, WhatsAppOrderDraftStatus.AGUARDANDO_CONFIRMACAO],
+          },
+        },
+        data: {
+          activeKey: null,
+          status: WhatsAppOrderDraftStatus.CANCELADO,
+          quoteSnapshot: null,
+          quoteFingerprint: null,
+          confirmationRequestedAt: null,
+          lastError: "Rascunho cancelado ao limpar o atendimento.",
+        },
+      });
+      const conversation = await tx.whatsAppConversation.update({
+        where: { id_companyId: { id: existing.id, companyId } },
+        data: {
+          aiConversationId: null,
+          lastMessageText: null,
+          lastMessageAt: clearedAt,
+          lastInboundAt: null,
+        },
+      });
+      return { conversation, deletedMessages: deletedMessages.count };
+    });
+
+    this.realtime.emitToCompany(companyId, "whatsapp.conversation.updated", {
+      conversationId: result.conversation.id,
+    });
+    return { id: result.conversation.id, clearedMessages: result.deletedMessages };
   }
 
   async sendHumanMessage(companyId: string, userId: string, conversationId: string, content: string) {
