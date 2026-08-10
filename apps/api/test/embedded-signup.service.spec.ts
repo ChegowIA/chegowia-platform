@@ -140,4 +140,47 @@ describe("Meta Embedded Signup", () => {
     expect(meta.registerPhoneNumber).not.toHaveBeenCalled();
     expect(meta.subscribeAppToBusinessAccount).toHaveBeenCalledTimes(1);
   });
+
+  it("assina os webhooks do WABA ao conectar um número técnico de teste", async () => {
+    const prisma = {
+      messagingChannel: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(async ({ create }) => ({ id: "canal-manual", ...create })),
+      },
+      company: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const meta = {
+      getPhoneNumber: jest.fn().mockResolvedValue({
+        id: "123456789012345",
+        displayPhoneNumber: "+55 62 99999-9999",
+        verifiedName: "Número de teste Meta",
+        qualityRating: "GREEN",
+      }),
+      subscribeAppToBusinessAccount: jest.fn().mockResolvedValue(undefined),
+    };
+    const secrets = {
+      encrypt: jest.fn((value: string) => `cifrado:${value}`),
+      isConfigured: jest.fn().mockReturnValue(true),
+    };
+    const service = new MessagingService(
+      prisma as never,
+      {} as never,
+      meta as never,
+      secrets as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.connectWhatsappCloud("empresa-teste", {
+      phoneNumberId: "123456789012345",
+      businessAccountId: "987654321098765",
+      accessToken: "token-de-teste-da-meta-com-tamanho-suficiente",
+    });
+
+    expect(meta.subscribeAppToBusinessAccount).toHaveBeenCalledWith({
+      businessAccountId: "987654321098765",
+      accessToken: "token-de-teste-da-meta-com-tamanho-suficiente",
+    });
+  });
 });

@@ -5,10 +5,9 @@ export class ConnectWhatsAppCloudDto {
   @Matches(/^\d{5,32}$/)
   phoneNumberId: string;
 
-  @IsOptional()
   @IsString()
   @Matches(/^\d{5,32}$/)
-  businessAccountId?: string;
+  businessAccountId: string;
 
   @IsString()
   @MinLength(20)

@@ -81,15 +81,20 @@ export class MessagingService {
     this.assertCloudApiEnabled();
     const accessToken = dto.accessToken.trim();
     const phoneNumberId = dto.phoneNumberId.trim();
+    const businessAccountId = dto.businessAccountId.trim();
     const details = await this.meta.getPhoneNumber(phoneNumberId, accessToken);
     if (details.id !== phoneNumberId) {
       throw new BadRequestException("O identificador do número retornado pela Meta não confere.");
     }
+    // A conexão técnica é usada principalmente para número de teste/suporte. Sem
+    // assinar o WABA, o app até consegue enviar, mas não recebe o webhook e não
+    // cria a conversa na Central de atendimento para a demonstração/revisão Meta.
+    await this.meta.subscribeAppToBusinessAccount({ businessAccountId, accessToken });
 
     return this.saveWhatsappCloudConnection({
       companyId,
       phoneNumberId,
-      businessAccountId: dto.businessAccountId?.trim() || null,
+      businessAccountId,
       accessToken,
       displayPhoneNumber: details.displayPhoneNumber,
       verifiedName: details.verifiedName,

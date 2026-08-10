@@ -247,7 +247,7 @@ export function WhatsAppCloudSettings() {
     }
   };
 
-  const readyForManualConnection = Boolean(form.phoneNumberId.trim() && form.accessToken.trim());
+  const readyForManualConnection = Boolean(form.phoneNumberId.trim() && form.businessAccountId.trim() && form.accessToken.trim());
   const signupBusy = signupState !== "idle" || completeEmbeddedSignup.isPending;
 
   return (
@@ -350,7 +350,7 @@ export function WhatsAppCloudSettings() {
               <FormField label="Identificador do número na Meta">
                 <Input placeholder="Ex.: 123456789012345" value={form.phoneNumberId} onChange={(event) => setForm((current) => ({ ...current, phoneNumberId: event.target.value }))} />
               </FormField>
-              <FormField label="Identificador da conta WhatsApp Business (opcional)">
+              <FormField label="Identificador da conta WhatsApp Business">
                 <Input placeholder="Ex.: 123456789012345" value={form.businessAccountId} onChange={(event) => setForm((current) => ({ ...current, businessAccountId: event.target.value }))} />
               </FormField>
               <div className="lg:col-span-2">
@@ -359,6 +359,7 @@ export function WhatsAppCloudSettings() {
                 </FormField>
               </div>
             </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Nesta conexão técnica, o ID da conta é necessário para assinar os webhooks e fazer as mensagens aparecerem na Central de atendimento.</p>
             <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-600 dark:border-slate-700 dark:text-slate-300">
               <input
                 className="mt-0.5"
