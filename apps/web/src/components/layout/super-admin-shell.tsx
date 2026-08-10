@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: "/super-admin/aprovacoes", label: "Aprovações" },
   { href: "/super-admin/planos", label: "Planos e billing" },
   { href: "/super-admin/operacao", label: "Saúde operacional" },
+  { href: "/super-admin/atendimento", label: "Atendimento ChegowIA" },
   { href: "/super-admin/relatorios", label: "Relatórios globais" },
 ];
 

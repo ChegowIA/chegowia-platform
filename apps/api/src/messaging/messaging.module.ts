@@ -5,6 +5,8 @@ import { MessagingService } from "./messaging.service";
 import { MessagingController } from "./messaging.controller";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { MessagingSecretsService } from "./messaging-secrets.service";
+import { PlatformWhatsAppController } from "./platform-whatsapp.controller";
+import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 import { AiModule } from "../ai/ai.module";
 import { RealtimeModule } from "../realtime/realtime.module";
 import { UsageModule } from "../usage/usage.module";
@@ -16,8 +18,14 @@ const messagingProviderFactory = {
 
 @Module({
   imports: [AiModule, RealtimeModule, UsageModule],
-  controllers: [MessagingController],
-  providers: [messagingProviderFactory, MetaWhatsAppProvider, MessagingSecretsService, MessagingService],
-  exports: [MessagingService],
+  controllers: [MessagingController, PlatformWhatsAppController],
+  providers: [
+    messagingProviderFactory,
+    MetaWhatsAppProvider,
+    MessagingSecretsService,
+    PlatformWhatsAppService,
+    MessagingService,
+  ],
+  exports: [MessagingService, PlatformWhatsAppService],
 })
 export class MessagingModule {}

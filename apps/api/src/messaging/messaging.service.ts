@@ -33,6 +33,7 @@ import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-provider.interface";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
 
@@ -49,6 +50,7 @@ export class MessagingService {
     private readonly usage: UsageService,
     private readonly realtime: RealtimeGateway,
     private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly platformWhatsApp?: PlatformWhatsAppService,
   ) {}
 
   private db() {
@@ -83,6 +85,9 @@ export class MessagingService {
     const accessToken = dto.accessToken.trim();
     const phoneNumberId = dto.phoneNumberId.trim();
     const businessAccountId = dto.businessAccountId.trim();
+    if (await this.isInstitutionalPhoneNumber(phoneNumberId)) {
+      throw new ConflictException("Este Phone Number ID está reservado ao canal institucional da ChegowIA.");
+    }
     const details = await this.meta.getPhoneNumber(phoneNumberId, accessToken);
     if (details.id !== phoneNumberId) {
       throw new BadRequestException("O identificador do número retornado pela Meta não confere.");
@@ -144,6 +149,9 @@ export class MessagingService {
     const existingOwner = await this.globalPhoneNumberOwner(phoneNumberId);
     if (existingOwner && existingOwner.companyId !== companyId) {
       throw new ConflictException("Este número da Meta já está vinculado a outra empresa.");
+    }
+    if (await this.isInstitutionalPhoneNumber(phoneNumberId)) {
+      throw new ConflictException("Este Phone Number ID está reservado ao canal institucional da ChegowIA.");
     }
 
     try {
@@ -228,6 +236,12 @@ export class MessagingService {
     return tenantContext.run({ companyId: null, bypass: true }, () => {
       return this.db().messagingChannel.findUnique({ where: { metaPhoneNumberId: phoneNumberId } });
     });
+  }
+
+  private async isInstitutionalPhoneNumber(phoneNumberId: string) {
+    return this.platformWhatsApp
+      ? this.platformWhatsApp.isPhoneNumberRegistered(phoneNumberId)
+      : false;
   }
 
   private async saveWhatsappCloudConnection(params: {
@@ -555,8 +569,16 @@ export class MessagingService {
         },
       },
     });
-    if (!channel || channel.status !== MessagingChannelStatus.ATIVO) {
+    if (!channel) {
+      const handledByPlatform = this.platformWhatsApp
+        ? await this.platformWhatsApp.handleMetaMessagesChange(value)
+        : false;
+      if (handledByPlatform) return;
       this.logger.warn(`Webhook WhatsApp ignorado: número Meta não vinculado (${String(phoneNumberId)}).`);
+      return;
+    }
+    if (channel.status !== MessagingChannelStatus.ATIVO) {
+      this.logger.warn(`Webhook WhatsApp ignorado: canal inativo (${String(phoneNumberId)}).`);
       return;
     }
     await this.db().messagingChannel.update({

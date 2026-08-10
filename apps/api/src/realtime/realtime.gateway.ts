@@ -148,6 +148,9 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
           client.join(this.topicRoom(payload.companyId, topic));
         }
       }
+      // O inbox institucional não pertence a uma empresa. Só SUPER_ADMIN entra
+      // nesta sala, que jamais usa os tópicos company:{id}:*.
+      if (payload.role === Role.SUPER_ADMIN) client.join("super-admins");
       if (payload.role === Role.REVENDEDOR) client.join("resellers");
       // O handshake é a única autorização do socket; sem prazo, um tablet de
       // salão aberto o dia todo seguiria conectado com credencial vencida.
@@ -255,6 +258,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   emitToResellers(event: string, payload: unknown) {
     this.emitToRoom("resellers", event, payload);
+  }
+
+  emitToSuperAdmins(event: string, payload: unknown) {
+    this.emitToRoom("super-admins", event, payload);
   }
 
   /**
