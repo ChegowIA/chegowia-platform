@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { ReactNode } from "react";
 import clsx from "clsx";
 import { usePathname } from "next/navigation";
@@ -25,6 +25,7 @@ export function FloatingAssistantChat({
   position?: "left" | "right";
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const panelId = useId();
   const pathname = usePathname();
   const hasMobileDock = Boolean(pathname?.startsWith("/painel") || pathname?.startsWith("/super-admin") || pathname?.startsWith("/revendedor"));
 
@@ -41,13 +42,18 @@ export function FloatingAssistantChat({
       <button
         type="button"
         aria-label={open ? "Fechar assistente" : "Abrir assistente"}
-        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        // O atalho só abre o canal. O fechamento fica explícito no painel,
+        // evitando que um segundo toque (comum no mobile) pareça ignorar a
+        // abertura ou feche a conversa imediatamente.
+        onClick={() => setOpen(true)}
         className={clsx(
           // No claro, a sombra recorta o balão do fundo. No escuro ela não
           // existe visualmente — `bg-slate-950` sobre página quase preta some
           // pelas bordas. O anel é o que devolve o contorno.
-          "group fixed z-[60] flex h-14 items-center gap-3 rounded-full bg-slate-950 p-1.5 text-white shadow-[0_18px_50px_-12px_rgba(15,23,42,.55)] md:bottom-5",
-          position === "left" ? "left-3 sm:pl-4 md:left-5" : "right-3 sm:pr-4 md:right-5",
+          "group fixed z-[110] flex h-14 cursor-pointer items-center gap-3 rounded-full bg-slate-950 p-1.5 text-white shadow-[0_18px_50px_-12px_rgba(15,23,42,.55)] sm:px-4 md:bottom-5",
+          position === "left" ? "left-3 md:left-5" : "right-3 md:right-5",
           "dark:ring-1 dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
           hasMobileDock ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))]" : "bottom-[max(.75rem,env(safe-area-inset-bottom))]",
           "transition-all duration-300 ease-out hover:-translate-y-1 hover:bg-brand-700 active:translate-y-0 active:scale-95",
@@ -65,8 +71,12 @@ export function FloatingAssistantChat({
       </button>
 
       <div
+        id={panelId}
         className={clsx(
-          "fixed inset-0 z-50 flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-white shadow-2xl transition-all duration-300 ease-out dark:bg-slate-900",
+          // A central precisa ficar acima do dock móvel (z-80) e de qualquer
+          // shell do painel. Sem isso, o clique abria o chat por trás da
+          // interface e dava a impressão de que o botão não fazia nada.
+          "fixed inset-0 z-[100] flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-white shadow-2xl transition-all duration-300 ease-out dark:bg-slate-900",
           "sm:inset-auto sm:bottom-6 sm:h-[min(640px,calc(100vh-3rem))] sm:w-[400px] sm:max-w-[calc(100vw-3rem)] sm:rounded-3xl sm:border sm:border-slate-200/80",
           position === "left" ? "sm:left-6" : "sm:right-6",
           "dark:sm:border-white/15",
