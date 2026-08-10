@@ -28,8 +28,17 @@ fi
 # no banco antes de aplicar, e é idempotente: quem perder a corrida espera e
 # depois não encontra nada pendente. Rodar nos dois garante que nenhum processo
 # suba contra um schema antigo.
-echo "Aplicando migrações pendentes..."
-./node_modules/.bin/prisma migrate deploy --schema=apps/api/prisma/schema.prisma
+if [ "${SKIP_PRISMA_MIGRATIONS:-false}" = "true" ]; then
+  # Válvula de recuperação operacional: só deve ser habilitada de forma
+  # temporária quando uma migration já marcada como falha precisa ser
+  # diagnosticada no banco de produção. Não é o comportamento padrão e não
+  # tenta "resolver" migrations automaticamente, pois isso poderia esconder
+  # uma alteração parcial de schema.
+  echo "Migrações Prisma ignoradas temporariamente (SKIP_PRISMA_MIGRATIONS=true)."
+else
+  echo "Aplicando migrações pendentes..."
+  ./node_modules/.bin/prisma migrate deploy --schema=apps/api/prisma/schema.prisma
+fi
 
 echo "Iniciando o processo (APP_ROLE=${APP_ROLE:-all})..."
 exec "$@"
