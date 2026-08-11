@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import clsx from "clsx";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -154,17 +155,7 @@ export function PlatformSupportBubble() {
   }
 
   return (
-    <FloatingAssistantChat
-      // Suporte e assistente compartilham a direita: suporte fica acima,
-      // sem encobrir o atalho operacional na base.
-      position="right"
-      stacked
-      title="Suporte ChegowIA"
-      subtitle="Escolha IA ou equipe humana"
-      triggerEyebrow="Suporte ChegowIA"
-      triggerLabel="IA ou humano"
-      triggerKind="support"
-    >
+    <SupportFloatingChat subtitle="Escolha IA ou equipe humana">
       <NonCriticalBoundary name="painel de conversa do suporte" fallback={<SupportUnavailable />}>
         {!hasHydrated ? <LoadingSupport /> : !user ? <AnonymousSupport /> : isSuperAdmin ? <SuperAdminSupport /> : (
         <div className="flex h-full min-h-0 flex-col bg-slate-50 dark:bg-slate-950">
@@ -246,7 +237,7 @@ export function PlatformSupportBubble() {
         </div>
       )}
       </NonCriticalBoundary>
-    </FloatingAssistantChat>
+    </SupportFloatingChat>
   );
 }
 
@@ -257,18 +248,54 @@ export function PlatformSupportBubble() {
  */
 export function PlatformSupportFallback() {
   return (
+    <SupportFloatingChat subtitle="Estamos preparando seu atendimento">
+      <SupportUnavailable />
+    </SupportFloatingChat>
+  );
+}
+
+/**
+ * O suporte é global, mas o assistente operacional só existe em algumas
+ * telas. Em vez de manter um espaço fixo vazio, observamos o componente
+ * compartilhado: se houver assistente, o suporte sobe; se não houver, ele
+ * usa diretamente a posição inferior natural daquela tela.
+ */
+function SupportFloatingChat({ subtitle, children }: { subtitle: string; children: ReactNode }) {
+  const hasOperationalAssistant = useOperationalAssistantPresence();
+
+  return (
     <FloatingAssistantChat
       position="right"
-      stacked
+      stacked={hasOperationalAssistant}
       title="Suporte ChegowIA"
-      subtitle="Estamos preparando seu atendimento"
+      subtitle={subtitle}
       triggerEyebrow="Suporte ChegowIA"
       triggerLabel="IA ou humano"
       triggerKind="support"
     >
-      <SupportUnavailable />
+      {children}
     </FloatingAssistantChat>
   );
+}
+
+function useOperationalAssistantPresence() {
+  const [hasAssistant, setHasAssistant] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setHasAssistant(Boolean(document.querySelector('[data-floating-trigger="assistant"]')));
+    sync();
+
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-floating-trigger"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  return hasAssistant;
 }
 
 function LoadingSupport() {

@@ -94,6 +94,7 @@ export function FloatingAssistantChat({
       <button
         ref={triggerRef}
         type="button"
+        data-floating-trigger={triggerKind}
         aria-label={open ? "Fechar assistente" : isSupportTrigger ? "Abrir suporte ChegowIA" : `Abrir assistente: ${triggerLabel}`}
         aria-expanded={open}
         aria-controls={panelId}
@@ -133,9 +134,11 @@ export function FloatingAssistantChat({
         <span className="relative grid h-14 w-14 shrink-0 place-items-center">
           <span className={clsx(
             "absolute inset-1.5 rounded-full transition-colors duration-200",
-            expanded ? "bg-white/12" : isSupportTrigger ? "bg-brand-100 dark:bg-brand-400/15" : "bg-slate-50 dark:bg-white/5",
+            // O logo da marca é alaranjado: no estado expandido ele precisa de
+            // uma base branca real para nunca se perder dentro da cápsula.
+            expanded ? "bg-white shadow-sm" : isSupportTrigger ? "bg-brand-100 dark:bg-slate-800" : "bg-white",
           )} />
-          <span className="relative grid h-10 w-10 place-items-center">
+          <span className={clsx("relative grid h-10 w-10 place-items-center", isSupportTrigger && "text-brand-700 dark:text-brand-300")}>
             {isSupportTrigger ? <SupportIcon /> : <BrandLogo adaptive variant="mark" className="h-8 w-8" />}
           </span>
           <span className={clsx(
