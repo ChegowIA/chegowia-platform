@@ -16,6 +16,7 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { AdminAssistantBubble } from "@/components/ai/admin-assistant-bubble";
 import { KitchenAssistant } from "@/components/ai/kitchen-assistant";
 import { MobileDock } from "@/components/layout/mobile-dock";
+import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 
 interface NavItem {
   href: string;
@@ -253,14 +254,22 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <MobileDock items={items.map((item) => ({ ...item, badge: item.href === "/painel/pedidos" ? pendingOrders?.count : 0 }))} pathname={pathname} />
-      {user && [Role.ADMIN, Role.FUNCIONARIO].includes(user.role) && pathname !== "/painel/agente" && <AdminAssistantBubble />}
+      {user && [Role.ADMIN, Role.FUNCIONARIO].includes(user.role) && pathname !== "/painel/agente" && (
+        <NonCriticalBoundary name="assistente operacional">
+          <AdminAssistantBubble />
+        </NonCriticalBoundary>
+      )}
       {/*
         No shell, e não numa página só: a fila de produção atravessa Pedidos e
         Mesas, e o assistente sumir ao trocar de aba quebraria a consulta no
         meio. Motoboy e garçom continuam por página porque o contexto deles é
         da própria tela.
       */}
-      {user?.role === Role.COZINHA && <KitchenAssistant />}
+      {user?.role === Role.COZINHA && (
+        <NonCriticalBoundary name="assistente da cozinha">
+          <KitchenAssistant />
+        </NonCriticalBoundary>
+      )}
     </div>
   );
 }

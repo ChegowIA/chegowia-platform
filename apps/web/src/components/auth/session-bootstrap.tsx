@@ -6,6 +6,7 @@ import { AuthUser, useAuthStore } from "@/lib/auth-store";
 import { connectSocket, disconnectSocket } from "@/lib/socket-client";
 import { CustomerOrderTracker } from "@/components/orders/customer-order-tracker";
 import { PlatformSupportBubble } from "@/components/support/platform-support-bubble";
+import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
@@ -68,8 +69,12 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   return (
     <>
       {children}
-      <CustomerOrderTracker />
-      <PlatformSupportBubble />
+      <NonCriticalBoundary name="acompanhamento de pedido">
+        <CustomerOrderTracker />
+      </NonCriticalBoundary>
+      <NonCriticalBoundary name="suporte">
+        <PlatformSupportBubble />
+      </NonCriticalBoundary>
     </>
   );
 }

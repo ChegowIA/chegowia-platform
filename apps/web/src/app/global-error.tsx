@@ -1,6 +1,15 @@
 "use client";
 
-export default function GlobalErrorPage({ reset }: { reset: () => void }) {
+import { useEffect } from "react";
+
+export default function GlobalErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  useEffect(() => {
+    // Esta é a última fronteira do app. Registrar o erro aqui transforma uma
+    // tela genérica em uma causa rastreável no Console, sem mostrar stack ou
+    // dados internos para a pessoa usuária.
+    console.error("[ChegowIA] Erro global da aplicação.", error);
+  }, [error]);
+
   return (
     <html lang="pt-BR">
       <body style={{ margin: 0, background: "#020617", color: "#0f172a", fontFamily: "system-ui, sans-serif" }}>

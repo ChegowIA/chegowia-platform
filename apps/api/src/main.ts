@@ -24,6 +24,20 @@ async function bootstrap() {
 
   app.use(cookieParser());
   app.use(compression());
+  // Endpoints da API carregam dados operacionais e de sessão. Eles não devem
+  // ser revalidados pelo navegador como se fossem assets: após um deploy ou
+  // reinício isso poderia reutilizar uma resposta 304 sem o estado atual.
+  // Arquivos públicos em /uploads continuam com sua própria política de cache.
+  app.use((request, response, next) => {
+    // `originalUrl` preserva o prefixo global do Nest antes do roteamento.
+    // Assim a regra continua correta mesmo se algum middleware normalizar
+    // `request.path` internamente.
+    if ((request.originalUrl ?? request.path).startsWith("/api/")) {
+      response.setHeader("Cache-Control", "private, no-store, max-age=0");
+      response.setHeader("Pragma", "no-cache");
+    }
+    next();
+  });
   /**
    * CSP explícita em vez do padrão do helmet.
    *
