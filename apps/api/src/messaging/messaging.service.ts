@@ -695,13 +695,19 @@ export class MessagingService {
         },
       });
     });
+    const value = metaValueFromGupshupV2(payload);
+    if (!value) return { ignored: true };
+
     if (!channel) {
+      // Pode ser o número institucional da ChegowIA, que vive em tabelas
+      // próprias justamente para não atravessar o isolamento dos tenants.
+      const handledByPlatform = this.platformWhatsApp
+        ? await this.platformWhatsApp.handleGupshupMessagesChange(appName, value)
+        : false;
+      if (handledByPlatform) return { received: true };
       this.logger.warn(`Callback Gupshup ignorado: aplicativo não vinculado (${appName}).`);
       return { ignored: true };
     }
-
-    const value = metaValueFromGupshupV2(payload);
-    if (!value) return { ignored: true };
 
     await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
       return this.processMessagesChangeForChannel(channel, value, appName);

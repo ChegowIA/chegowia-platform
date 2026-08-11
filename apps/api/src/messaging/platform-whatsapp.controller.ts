@@ -5,6 +5,7 @@ import { Role } from "@prisma/client";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { ConnectPlatformWhatsAppCloudDto } from "./dto/connect-platform-whatsapp-cloud.dto";
+import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
 import { SendWhatsAppMessageDto } from "./dto/send-whatsapp-message.dto";
 import { UpdatePlatformWhatsAppAutomationDto } from "./dto/update-platform-whatsapp-automation.dto";
 import { UpdatePlatformWhatsAppConversationDto } from "./dto/update-platform-whatsapp-conversation.dto";
@@ -32,6 +33,13 @@ export class PlatformWhatsAppController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   connect(@Body() dto: ConnectPlatformWhatsAppCloudDto) {
     return this.platformWhatsApp.connectCloud(dto);
+  }
+
+  /** Vínculo manual do modo self-serve do Gupshup para o número institucional. */
+  @Put("channel/gupshup")
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  connectGupshup(@Body() dto: ConnectWhatsAppGupshupDto) {
+    return this.platformWhatsApp.connectGupshupManual(dto);
   }
 
   @Patch("automation")

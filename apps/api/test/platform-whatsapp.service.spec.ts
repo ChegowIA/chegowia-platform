@@ -46,6 +46,7 @@ describe("Canal institucional do WhatsApp", () => {
     const instance = new PlatformWhatsAppService(
       prisma as never,
       meta as never,
+      {} as never,
       secrets as never,
       { chat: jest.fn() } as never,
       realtime as never,

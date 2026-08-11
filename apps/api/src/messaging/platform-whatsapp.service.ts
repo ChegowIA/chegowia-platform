@@ -14,6 +14,7 @@ import {
   WhatsAppMessageStatus,
   UsageMetric,
   UsageSource,
+  WhatsAppProvider,
 } from "@prisma/client";
 import { AI_PROVIDER, AIChatMessage, AIProvider } from "../ai/providers/ai-provider.interface";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
@@ -25,6 +26,8 @@ import { UpdatePlatformWhatsAppAutomationDto } from "./dto/update-platform-whats
 import { UpdatePlatformWhatsAppConversationDto } from "./dto/update-platform-whatsapp-conversation.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
+import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
+import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
 
 const PLATFORM_CHANNEL_KEY = "chegowia-institucional";
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
@@ -44,6 +47,7 @@ export class PlatformWhatsAppService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly meta: MetaWhatsAppProvider,
+    private readonly gupshup: GupshupWhatsAppProvider,
     private readonly secrets: MessagingSecretsService,
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly realtime: RealtimeGateway,
@@ -141,6 +145,65 @@ export class PlatformWhatsAppService {
     } catch (error) {
       if (isUniqueConstraint(error)) {
         throw new ConflictException("Este Phone Number ID já está vinculado a outro canal da plataforma.");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Vincula o número institucional a um aplicativo do Gupshup criado à mão no
+   * painel deles — mesmo caminho usado nas empresas, já que no modo self-serve
+   * não existe API para criar aplicativo por código.
+   *
+   * O canal só fica ATIVO quando o número é informado: até lá o app existe, mas
+   * ainda não há por onde enviar.
+   */
+  async connectGupshupManual(dto: ConnectWhatsAppGupshupDto) {
+    if (!this.gupshup.isEnabled()) {
+      throw new BadRequestException("A conexão pelo Gupshup ainda não está habilitada nesta plataforma.");
+    }
+    const appName = dto.appName.trim();
+    const number = dto.number ? normalizePhone(dto.number) : null;
+    if (number && number.length < 10) {
+      throw new BadRequestException("Informe o número do WhatsApp com DDI e DDD.");
+    }
+
+    // O nome do app é único global: é por ele que o callback v2 encontra o canal,
+    // então o institucional não pode repetir o de uma empresa cliente.
+    const companyOwner = await tenantContext.run({ companyId: null, bypass: true }, () => {
+      return this.db().messagingChannel.findUnique({ where: { gupshupAppName: appName } });
+    });
+    if (companyOwner) {
+      throw new ConflictException("Este aplicativo do Gupshup já está vinculado a uma empresa cliente.");
+    }
+
+    const current = await this.db().platformWhatsAppChannel.findUnique({
+      where: { key: PLATFORM_CHANNEL_KEY },
+    });
+    const data = {
+      provider: WhatsAppProvider.GUPSHUP,
+      status: number ? MessagingChannelStatus.ATIVO : MessagingChannelStatus.INATIVO,
+      config: {
+        ...channelConfig(current),
+        ...(number ? { number } : {}),
+        ...(dto.signupLink ? { gupshupSignupLink: dto.signupLink.trim() } : {}),
+      },
+      gupshupAppName: appName,
+      gupshupAppId: dto.appId?.trim() || null,
+      ...(number ? { connectedAt: new Date() } : {}),
+      lastError: null,
+    };
+
+    try {
+      const channel = await this.db().platformWhatsAppChannel.upsert({
+        where: { key: PLATFORM_CHANNEL_KEY },
+        create: { key: PLATFORM_CHANNEL_KEY, ...data },
+        update: data,
+      });
+      return this.channelSummary(channel);
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        throw new ConflictException("Este aplicativo do Gupshup já está vinculado a outro canal.");
       }
       throw error;
     }
@@ -258,6 +321,23 @@ export class PlatformWhatsAppService {
     const channel = await this.db().platformWhatsAppChannel.findUnique({
       where: { metaPhoneNumberId: String(phoneNumberId) },
     });
+    return this.processMessagesChange(channel, value);
+  }
+
+  /**
+   * Callback do Gupshup para o canal institucional. O `value` já chega no formato
+   * da Meta — a tradução acontece no MessagingService — então só a resolução do
+   * canal difere: aqui é pelo nome do aplicativo.
+   */
+  async handleGupshupMessagesChange(appName: string, value: any) {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({
+      where: { gupshupAppName: appName },
+    });
+    return this.processMessagesChange(channel, value);
+  }
+
+  /** Devolve false quando o canal não é da plataforma, para o chamador seguir procurando. */
+  private async processMessagesChange(channel: any, value: any) {
     if (!channel) return false;
     if (channel.status !== MessagingChannelStatus.ATIVO) return true;
 
@@ -731,7 +811,17 @@ export class PlatformWhatsAppService {
       automationEnabled: Boolean(channel.automationEnabled),
       welcomeMessage: channel.welcomeMessage ?? null,
       salesInstructions: channel.salesInstructions ?? null,
-      connected: Boolean(channel.metaPhoneNumberId && channel.metaAccessTokenEncrypted && channel.status === MessagingChannelStatus.ATIVO),
+      provider: channel.provider ?? WhatsAppProvider.META,
+      // Cada BSP tem sua própria prova de que o canal está de pé: na Meta é o
+      // par número + token; no Gupshup é o app vinculado com número informado.
+      connected: channel.provider === WhatsAppProvider.GUPSHUP
+        ? Boolean(channel.gupshupAppName && channel.status === MessagingChannelStatus.ATIVO)
+        : Boolean(channel.metaPhoneNumberId && channel.metaAccessTokenEncrypted && channel.status === MessagingChannelStatus.ATIVO),
+      gupshup: {
+        appId: channel.gupshupAppId ?? null,
+        appName: channel.gupshupAppName ?? null,
+        signupLink: channelConfig(channel).gupshupSignupLink ?? null,
+      },
       integration: {
         phoneNumberId: channel.metaPhoneNumberId ?? null,
         businessAccountId: channel.metaBusinessAccountId ?? null,
@@ -753,7 +843,9 @@ export class PlatformWhatsAppService {
       automationEnabled: true,
       welcomeMessage: null,
       salesInstructions: null,
+      provider: WhatsAppProvider.META,
       connected: false,
+      gupshup: { appId: null, appName: null, signupLink: null },
       integration: {
         phoneNumberId: null,
         businessAccountId: null,

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardActions, CardContent } from "@/components/ui/card";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { PlatformGupshupLink } from "@/components/messaging/platform-gupshup-link";
 
 type PlatformChannel = {
   id: string | null;
@@ -277,6 +278,13 @@ export default function SuperAdminAtendimentoPage() {
       </header>
 
       {error && <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">{error}</p>}
+
+      {/*
+        Fica sob o mesmo botão de configuração da Meta: são dois caminhos para o
+        mesmo número institucional, e o card some sozinho quando o Gupshup não
+        está habilitado nesta instalação.
+      */}
+      {connectionOpen && <PlatformGupshupLink />}
 
       {connectionOpen && (
         <Card className="overflow-hidden">
