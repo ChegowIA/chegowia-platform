@@ -41,6 +41,88 @@ type SupportConversation = {
 const SUPPORT_QUERY_KEY = ["platform-support-conversation"] as const;
 
 /**
+ * A central de suporte é global e pode sobreviver a uma atualização isolada
+ * da API. Nunca deixamos uma resposta parcial derrubar o widget inteiro: ela
+ * é normalizada antes de chegar à interface e a pessoa continua podendo abrir
+ * uma nova conversa normalmente.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function supportRole(value: unknown): PlatformSupportMessageRole {
+  return Object.values(PlatformSupportMessageRole).includes(value as PlatformSupportMessageRole)
+    ? value as PlatformSupportMessageRole
+    : PlatformSupportMessageRole.SISTEMA;
+}
+
+function userRole(value: unknown): Role {
+  return Object.values(Role).includes(value as Role) ? value as Role : Role.CLIENTE;
+}
+
+function conversationMode(value: unknown): PlatformSupportConversationMode {
+  return value === PlatformSupportConversationMode.HUMANO
+    ? PlatformSupportConversationMode.HUMANO
+    : PlatformSupportConversationMode.IA;
+}
+
+function conversationStatus(value: unknown): PlatformSupportConversationStatus {
+  return value === PlatformSupportConversationStatus.ENCERRADA
+    ? PlatformSupportConversationStatus.ENCERRADA
+    : PlatformSupportConversationStatus.ABERTA;
+}
+
+function normalizeMessage(value: unknown): SupportMessage | null {
+  if (!isRecord(value) || !stringValue(value.id)) return null;
+
+  const author = isRecord(value.author) && stringValue(value.author.id)
+    ? {
+      id: stringValue(value.author.id),
+      name: stringValue(value.author.name, "Equipe ChegowIA"),
+      email: stringValue(value.author.email),
+      role: userRole(value.author.role),
+    }
+    : null;
+
+  return {
+    id: stringValue(value.id),
+    role: supportRole(value.role),
+    content: stringValue(value.content),
+    createdAt: stringValue(value.createdAt),
+    author,
+  };
+}
+
+function normalizeConversation(value: unknown): SupportConversation | null {
+  if (!isRecord(value) || !stringValue(value.id)) return null;
+
+  const messages = Array.isArray(value.messages)
+    ? value.messages.map(normalizeMessage).filter((message): message is SupportMessage => message !== null)
+    : [];
+
+  return {
+    id: stringValue(value.id),
+    userName: stringValue(value.userName, "Você"),
+    userEmail: stringValue(value.userEmail),
+    userRole: userRole(value.userRole),
+    companyName: typeof value.companyName === "string" ? value.companyName : null,
+    mode: conversationMode(value.mode),
+    status: conversationStatus(value.status),
+    messages,
+  };
+}
+
+function requireConversation(value: unknown): SupportConversation {
+  const conversation = normalizeConversation(value);
+  if (!conversation) throw new Error("A resposta do suporte não pôde ser lida. Tente novamente.");
+  return conversation;
+}
+
+/**
  * Canal de ajuda global da ChegowIA. Ele fica separado dos assistentes de
  * operação de cada painel: nenhuma conversa do suporte usa dados de pedidos,
  * empresa ou WhatsApp do tenant no navegador.
@@ -57,11 +139,15 @@ export function PlatformSupportBubble() {
 
   const conversationQuery = useQuery({
     queryKey: SUPPORT_QUERY_KEY,
-    queryFn: async () => (await api.get<SupportConversation | null>("/platform/support/conversation")).data,
+    queryFn: async () => normalizeConversation((await api.get<unknown>("/platform/support/conversation")).data),
     enabled: canUseSupport,
     refetchInterval: 30_000,
   });
-  const conversation = conversationQuery.data ?? null;
+  const conversation = normalizeConversation(conversationQuery.data);
+  const messages = conversation?.messages ?? [];
+  const visibleError = error ?? (conversationQuery.isError
+    ? apiErrorMessage(conversationQuery.error, "Não foi possível carregar o suporte agora. Tente novamente.")
+    : null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: SUPPORT_QUERY_KEY });
 
@@ -85,10 +171,10 @@ export function PlatformSupportBubble() {
     const container = messagesRef.current;
     if (!container) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-  }, [conversation?.id, conversation?.messages.length]);
+  }, [conversation?.id, messages.length]);
 
   const startConversation = useMutation({
-    mutationFn: async () => (await api.post<SupportConversation>("/platform/support/conversations")).data,
+    mutationFn: async () => requireConversation((await api.post<unknown>("/platform/support/conversations")).data),
     onSuccess: (created) => {
       setError(null);
       queryClient.setQueryData(SUPPORT_QUERY_KEY, created);
@@ -97,9 +183,9 @@ export function PlatformSupportBubble() {
   });
 
   const requestHuman = useMutation({
-    mutationFn: async (conversationId: string) => (
-      await api.post<SupportConversation>(`/platform/support/conversations/${conversationId}/human`)
-    ).data,
+    mutationFn: async (conversationId: string) => requireConversation(
+      (await api.post<unknown>(`/platform/support/conversations/${conversationId}/human`)).data,
+    ),
     onSuccess: (updated) => {
       setError(null);
       queryClient.setQueryData(SUPPORT_QUERY_KEY, updated);
@@ -108,9 +194,9 @@ export function PlatformSupportBubble() {
   });
 
   const sendMessage = useMutation({
-    mutationFn: async ({ conversationId, content }: { conversationId: string; content: string }) => (
-      await api.post<SupportConversation>(`/platform/support/conversations/${conversationId}/messages`, { content })
-    ).data,
+    mutationFn: async ({ conversationId, content }: { conversationId: string; content: string }) => requireConversation(
+      (await api.post<unknown>(`/platform/support/conversations/${conversationId}/messages`, { content })).data,
+    ),
     onSuccess: (updated) => {
       setError(null);
       queryClient.setQueryData(SUPPORT_QUERY_KEY, updated);
@@ -183,10 +269,10 @@ export function PlatformSupportBubble() {
               </div>
 
               <div ref={messagesRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
-                {conversation.messages.map((message) => <SupportMessageBubble key={message.id} message={message} />)}
+                {messages.map((message) => <SupportMessageBubble key={message.id} message={message} />)}
               </div>
 
-              {error && <p className="mx-3 mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">{error}</p>}
+              {visibleError && <p className="mx-3 mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">{visibleError}</p>}
 
               <div className="shrink-0 border-t border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                 {conversation.mode === PlatformSupportConversationMode.IA && (
@@ -228,10 +314,14 @@ export function PlatformSupportBubble() {
             </>
           ) : (
             <SupportChoice
-              error={error}
+              error={visibleError}
               loading={startConversation.isPending || requestHuman.isPending || conversationQuery.isLoading}
               onAi={startWithAi}
               onHuman={startWithHuman}
+              onRetry={() => {
+                setError(null);
+                void conversationQuery.refetch();
+              }}
             />
           )}
         </div>
@@ -248,7 +338,7 @@ export function PlatformSupportBubble() {
  */
 export function PlatformSupportFallback() {
   return (
-    <SupportFloatingChat subtitle="Estamos preparando seu atendimento">
+    <SupportFloatingChat subtitle="Canal de atendimento">
       <SupportUnavailable />
     </SupportFloatingChat>
   );
@@ -306,10 +396,10 @@ function SupportUnavailable() {
   return (
     <div className="flex h-full flex-col justify-center p-6">
       <span className="grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-2xl dark:bg-amber-950/35">🛟</span>
-      <p className="mt-5 text-xl font-black text-slate-950 dark:text-slate-100">Canal de suporte em atualização</p>
-      <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">O atalho continua disponível. Estamos reconectando as mensagens com segurança; tente abrir novamente em alguns instantes.</p>
+      <p className="mt-5 text-xl font-black text-slate-950 dark:text-slate-100">Não foi possível abrir o suporte</p>
+      <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">O restante do sistema continua disponível. Reabra este painel para tentar conectar ao atendimento novamente.</p>
       <button type="button" className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-black text-white shadow-[0_8px_24px_-12px_rgba(234,88,12,.8)] transition hover:bg-brand-700" onClick={() => window.location.reload()}>
-        Atualizar suporte
+        Tentar novamente
       </button>
     </div>
   );
@@ -337,7 +427,7 @@ function SuperAdminSupport() {
   );
 }
 
-function SupportChoice({ error, loading, onAi, onHuman }: { error: string | null; loading: boolean; onAi: () => void; onHuman: () => void }) {
+function SupportChoice({ error, loading, onAi, onHuman, onRetry }: { error: string | null; loading: boolean; onAi: () => void; onHuman: () => void; onRetry: () => void }) {
   return (
     <div className="flex h-full min-h-0 flex-col justify-center p-5">
       <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-600 dark:text-brand-300">Você escolhe o atendimento</p>
@@ -351,7 +441,14 @@ function SupportChoice({ error, loading, onAi, onHuman }: { error: string | null
           <span className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-lg text-white">♥</span><span><span className="block text-sm font-black text-slate-950 dark:text-slate-100">Falar com uma pessoa</span><span className="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">A IA avisa a equipe e deixa a conversa em modo humano.</span></span></span>
         </button>
       </div>
-      {error && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">{error}</p>}
+      {error && (
+        <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 dark:border-rose-900/60 dark:bg-rose-950/30">
+          <p className="text-xs font-semibold text-rose-700 dark:text-rose-200">{error}</p>
+          <button type="button" className="mt-2 text-xs font-black text-brand-700 underline underline-offset-2 dark:text-brand-300" onClick={onRetry}>
+            Tentar reconectar
+          </button>
+        </div>
+      )}
       <p className="mt-4 text-center text-[11px] leading-5 text-slate-400 dark:text-slate-500">Nunca envie senha, código ou token pelo suporte.</p>
     </div>
   );
