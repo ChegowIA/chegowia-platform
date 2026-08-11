@@ -14,6 +14,7 @@ export function FloatingAssistantChat({
   triggerEyebrow = "Posso ajudar?",
   triggerLabel = "Fale com a loja",
   position = "right",
+  stacked = false,
 }: {
   title: string;
   subtitle?: string;
@@ -23,6 +24,8 @@ export function FloatingAssistantChat({
   triggerLabel?: string;
   /** Permite um segundo canal global, como o suporte, sem sobrepor o assistente operacional. */
   position?: "left" | "right";
+  /** Posiciona este atalho acima de outro balão na mesma lateral. */
+  stacked?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
@@ -55,9 +58,13 @@ export function FloatingAssistantChat({
           "group fixed z-[110] flex h-14 max-w-[calc(100vw-1.5rem)] cursor-pointer items-center gap-2 overflow-hidden rounded-full bg-brand-600 p-1.5 text-white shadow-[0_18px_50px_-12px_rgba(234,88,12,.5)]",
           position === "left" ? "left-3 md:left-5" : "right-3 md:right-5",
           "ring-1 ring-brand-700/40 dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
-          hasMobileDock
-            ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))]"
-            : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
+          stacked
+            ? hasMobileDock
+              ? "bottom-[calc(9.65rem+env(safe-area-inset-bottom))] md:bottom-[5.5rem]"
+              : "bottom-[max(5rem,calc(4.25rem+env(safe-area-inset-bottom)))] md:bottom-[5.5rem]"
+            : hasMobileDock
+              ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))] md:bottom-5"
+              : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
           "transition-all duration-300 ease-out hover:-translate-y-1 hover:bg-brand-700 active:translate-y-0 active:scale-95",
           open && "pointer-events-none translate-y-20 opacity-0",
         )}

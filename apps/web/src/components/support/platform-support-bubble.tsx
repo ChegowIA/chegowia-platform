@@ -155,9 +155,10 @@ export function PlatformSupportBubble() {
 
   return (
     <FloatingAssistantChat
-      // O suporte permanece na esquerda e o assistente operacional na direita.
-      // Ele conserva a mesma altura da base usada pelos demais atalhos.
-      position="left"
+      // Suporte e assistente compartilham a direita: suporte fica acima,
+      // sem encobrir o atalho operacional na base.
+      position="right"
+      stacked
       title="Suporte ChegowIA"
       subtitle="Escolha IA ou equipe humana"
       triggerEyebrow="Suporte ChegowIA"
@@ -256,7 +257,8 @@ export function PlatformSupportBubble() {
 export function PlatformSupportFallback() {
   return (
     <FloatingAssistantChat
-      position="left"
+      position="right"
+      stacked
       title="Suporte ChegowIA"
       subtitle="Estamos preparando seu atendimento"
       triggerEyebrow="Suporte ChegowIA"
