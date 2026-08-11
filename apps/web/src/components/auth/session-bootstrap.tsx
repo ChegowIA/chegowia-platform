@@ -5,7 +5,7 @@ import { api, refreshAccessToken } from "@/lib/api-client";
 import { AuthUser, useAuthStore } from "@/lib/auth-store";
 import { connectSocket, disconnectSocket } from "@/lib/socket-client";
 import { CustomerOrderTracker } from "@/components/orders/customer-order-tracker";
-import { PlatformSupportBubble } from "@/components/support/platform-support-bubble";
+import { PlatformSupportBubble, PlatformSupportFallback } from "@/components/support/platform-support-bubble";
 import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
@@ -72,7 +72,7 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
       <NonCriticalBoundary name="acompanhamento de pedido">
         <CustomerOrderTracker />
       </NonCriticalBoundary>
-      <NonCriticalBoundary name="suporte">
+      <NonCriticalBoundary name="suporte" fallback={<PlatformSupportFallback />}>
         <PlatformSupportBubble />
       </NonCriticalBoundary>
     </>

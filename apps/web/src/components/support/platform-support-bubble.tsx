@@ -13,6 +13,7 @@ import {
 import { FloatingAssistantChat } from "@/components/ai/floating-assistant-chat";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
+import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/auth-store";
 import { connectSocket } from "@/lib/socket-client";
@@ -154,15 +155,18 @@ export function PlatformSupportBubble() {
 
   return (
     <FloatingAssistantChat
-      // Para clientes com pedido em andamento, o acompanhamento ao vivo ocupa
-      // a esquerda. O suporte muda para a direita e continua sempre visível.
-      position={user?.role === Role.CLIENTE ? "right" : "left"}
+      // O suporte permanece na esquerda e o assistente operacional na direita.
+      // Para clientes com acompanhamento de pedido, elevamos apenas o atalho
+      // de suporte para que os dois continuem acessíveis.
+      position="left"
+      stacked={user?.role === Role.CLIENTE}
       title="Suporte ChegowIA"
       subtitle="Escolha IA ou equipe humana"
       triggerEyebrow="Suporte ChegowIA"
       triggerLabel="IA ou humano"
     >
-      {!hasHydrated ? <LoadingSupport /> : !user ? <AnonymousSupport /> : isSuperAdmin ? <SuperAdminSupport /> : (
+      <NonCriticalBoundary name="painel de conversa do suporte" fallback={<SupportUnavailable />}>
+        {!hasHydrated ? <LoadingSupport /> : !user ? <AnonymousSupport /> : isSuperAdmin ? <SuperAdminSupport /> : (
         <div className="flex h-full min-h-0 flex-col bg-slate-50 dark:bg-slate-950">
           {conversation ? (
             <>
@@ -241,12 +245,45 @@ export function PlatformSupportBubble() {
           )}
         </div>
       )}
+      </NonCriticalBoundary>
+    </FloatingAssistantChat>
+  );
+}
+
+/**
+ * Este fallback também é usado pela barreira global. Assim, mesmo que uma
+ * consulta ou integração do suporte falhe, a pessoa ainda enxerga e abre o
+ * canal — não parece que o suporte simplesmente desapareceu da plataforma.
+ */
+export function PlatformSupportFallback() {
+  return (
+    <FloatingAssistantChat
+      position="left"
+      title="Suporte ChegowIA"
+      subtitle="Estamos preparando seu atendimento"
+      triggerEyebrow="Suporte ChegowIA"
+      triggerLabel="IA ou humano"
+    >
+      <SupportUnavailable />
     </FloatingAssistantChat>
   );
 }
 
 function LoadingSupport() {
   return <div className="grid h-full place-items-center bg-slate-50 p-6 text-center dark:bg-slate-950"><span className="h-8 w-8 animate-spin rounded-full border-2 border-brand-500 border-r-transparent" /><p className="mt-3 text-sm font-bold text-slate-500 dark:text-slate-400">Preparando seu suporte…</p></div>;
+}
+
+function SupportUnavailable() {
+  return (
+    <div className="flex h-full flex-col justify-center p-6">
+      <span className="grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-2xl dark:bg-amber-950/35">🛟</span>
+      <p className="mt-5 text-xl font-black text-slate-950 dark:text-slate-100">Canal de suporte em atualização</p>
+      <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">O atalho continua disponível. Estamos reconectando as mensagens com segurança; tente abrir novamente em alguns instantes.</p>
+      <button type="button" className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-black text-white shadow-[0_8px_24px_-12px_rgba(234,88,12,.8)] transition hover:bg-brand-700" onClick={() => window.location.reload()}>
+        Atualizar suporte
+      </button>
+    </div>
+  );
 }
 
 function AnonymousSupport() {

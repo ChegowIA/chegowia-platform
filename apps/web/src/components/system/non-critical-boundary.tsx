@@ -6,6 +6,12 @@ type NonCriticalBoundaryProps = {
   children: ReactNode;
   /** Identifica o bloco nos logs do navegador sem expor detalhes à pessoa usuária. */
   name: string;
+  /**
+   * Alguns widgets possuem um atalho que continua útil mesmo quando o seu
+   * conteúdo remoto falha. Nesses casos, renderizamos uma alternativa em vez
+   * de sumir com o bloco inteiro.
+   */
+  fallback?: ReactNode;
 };
 
 type NonCriticalBoundaryState = { failed: boolean };
@@ -29,7 +35,7 @@ export class NonCriticalBoundary extends Component<NonCriticalBoundaryProps, Non
   }
 
   render() {
-    if (this.state.failed) return null;
+    if (this.state.failed) return this.props.fallback ?? null;
     return this.props.children;
   }
 }
