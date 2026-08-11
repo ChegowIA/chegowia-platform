@@ -156,10 +156,8 @@ export function PlatformSupportBubble() {
   return (
     <FloatingAssistantChat
       // O suporte permanece na esquerda e o assistente operacional na direita.
-      // Para clientes com acompanhamento de pedido, elevamos apenas o atalho
-      // de suporte para que os dois continuem acessíveis.
+      // Ele conserva a mesma altura da base usada pelos demais atalhos.
       position="left"
-      stacked={user?.role === Role.CLIENTE}
       title="Suporte ChegowIA"
       subtitle="Escolha IA ou equipe humana"
       triggerEyebrow="Suporte ChegowIA"

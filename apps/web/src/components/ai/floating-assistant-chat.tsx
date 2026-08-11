@@ -14,7 +14,6 @@ export function FloatingAssistantChat({
   triggerEyebrow = "Posso ajudar?",
   triggerLabel = "Fale com a loja",
   position = "right",
-  stacked = false,
 }: {
   title: string;
   subtitle?: string;
@@ -24,8 +23,6 @@ export function FloatingAssistantChat({
   triggerLabel?: string;
   /** Permite um segundo canal global, como o suporte, sem sobrepor o assistente operacional. */
   position?: "left" | "right";
-  /** Eleva apenas o atalho quando outro painel fixo ocupa a mesma lateral. */
-  stacked?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
@@ -52,28 +49,24 @@ export function FloatingAssistantChat({
         // abertura ou feche a conversa imediatamente.
         onClick={() => setOpen(true)}
         className={clsx(
-          // O selo branco preenche toda a altura do lado esquerdo. Assim ele
-          // compartilha o arredondamento do próprio balão, sem aquele vão
-          // visual entre ícone e cápsula que fazia parecer outro componente.
-          "group fixed z-[110] flex h-14 max-w-[calc(100vw-1.5rem)] cursor-pointer items-stretch overflow-hidden rounded-full bg-brand-600 p-0 text-white shadow-[0_18px_50px_-12px_rgba(234,88,12,.5)]",
+          // O ícone fica dentro de uma margem curta e simétrica. A cápsula
+          // mantém o seu contorno contínuo, mas ganha respiro suficiente para
+          // a curva esquerda não parecer colada ao selo.
+          "group fixed z-[110] flex h-14 max-w-[calc(100vw-1.5rem)] cursor-pointer items-center gap-2 overflow-hidden rounded-full bg-brand-600 p-1.5 text-white shadow-[0_18px_50px_-12px_rgba(234,88,12,.5)]",
           position === "left" ? "left-3 md:left-5" : "right-3 md:right-5",
           "ring-1 ring-brand-700/40 dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
-          stacked
-            ? hasMobileDock
-              ? "bottom-[calc(10rem+env(safe-area-inset-bottom))]"
-              : "bottom-24 md:bottom-24"
-            : hasMobileDock
-              ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))]"
-              : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
+          hasMobileDock
+            ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))]"
+            : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
           "transition-all duration-300 ease-out hover:-translate-y-1 hover:bg-brand-700 active:translate-y-0 active:scale-95",
           open && "pointer-events-none translate-y-20 opacity-0",
         )}
       >
-        <span className="relative -ml-px grid h-14 w-14 shrink-0 place-items-center rounded-full bg-white text-brand-700 shadow-[inset_-1px_0_0_rgba(15,23,42,.1)] dark:bg-slate-900 dark:text-brand-300">
+        <span className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white text-brand-700 ring-1 ring-black/5 dark:bg-slate-900 dark:text-brand-300 dark:ring-white/10">
           <span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-brand-600 bg-emerald-400 transition-colors group-hover:border-brand-700" />
           {open ? <CloseIcon /> : <BrandLogo adaptive variant="mark" className="h-8 w-8" />}
         </span>
-        <span className="min-w-0 flex-1 self-center px-3.5 pr-4 text-left">
+        <span className="min-w-0 flex-1 pr-2 text-left">
           <span className="block truncate text-[10px] font-bold uppercase tracking-[0.16em] text-brand-100 group-hover:text-brand-50">{triggerEyebrow}</span>
           <span className="block truncate text-sm font-bold leading-tight">{triggerLabel}</span>
         </span>
