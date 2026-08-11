@@ -1843,7 +1843,7 @@ model PlatformSupportConversation {
 
   @@index([userId, lastMessageAt])
   @@index([status, mode, lastMessageAt])
-  @@index([assignedSuperAdminId, status, lastMessageAt])
+  @@index([assignedSuperAdminId, status, lastMessageAt], map: "PlatformSupportConversation_assigned_status_last_at_idx")
 }
 
 model PlatformSupportMessage {

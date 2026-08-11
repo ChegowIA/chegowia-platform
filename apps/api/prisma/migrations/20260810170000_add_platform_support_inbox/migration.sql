@@ -25,7 +25,7 @@ CREATE TABLE `PlatformSupportConversation` (
   UNIQUE INDEX `PlatformSupportConversation_activeKey_key`(`activeKey`),
   INDEX `PlatformSupportConversation_userId_lastMessageAt_idx`(`userId`, `lastMessageAt`),
   INDEX `PlatformSupportConversation_status_mode_lastMessageAt_idx`(`status`, `mode`, `lastMessageAt`),
-  INDEX `PlatformSupportConversation_assignedSuperAdminId_status_lastMessageAt_idx`(`assignedSuperAdminId`, `status`, `lastMessageAt`),
+  INDEX `PlatformSupportConversation_assigned_status_last_at_idx`(`assignedSuperAdminId`, `status`, `lastMessageAt`),
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
