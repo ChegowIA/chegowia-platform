@@ -7,6 +7,8 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
+import { SwitchContextDto } from "./dto/switch-context.dto";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import {
   ForgotPasswordDto,
   ResendVerificationDto,
@@ -40,7 +42,38 @@ export class AuthController {
     const result = await this.authService.login(dto);
     if (result.mfaRequired) return result;
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
-    return { accessToken: result.accessToken, user: result.user, mfaRequired: false };
+    return {
+      accessToken: result.accessToken,
+      user: result.user,
+      mfaRequired: false,
+      multiContext: result.multiContext,
+    };
+  }
+
+  /**
+   * Contextos que o superadmin multiacesso pode assumir. Devolve lista vazia para
+   * qualquer outra conta, então não serve para descobrir empresas.
+   */
+  @Get("contexts")
+  listContexts(@CurrentUser() user: JwtPayload) {
+    return this.authService.availableContexts(user);
+  }
+
+  /**
+   * Troca o contexto da sessão. Emite um token novo com o papel escolhido; o
+   * usuário real continua no `sub` do token, para auditoria.
+   */
+  @Post("context")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async switchContext(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SwitchContextDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.switchContext(user, dto.companyId ?? null);
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
   }
 
   @Public()

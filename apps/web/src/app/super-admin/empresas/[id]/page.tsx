@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { Company } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CompanyGupshupLink } from "@/components/messaging/company-gupshup-link";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
@@ -350,6 +351,8 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
           </form>
         </CardContent>
       </Card>
+
+      <CompanyGupshupLink companyId={id} />
 
       <Card>
         <CardHeader>

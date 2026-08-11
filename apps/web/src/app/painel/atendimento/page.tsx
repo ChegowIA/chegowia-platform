@@ -17,6 +17,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { MessagingChannel, WhatsAppConversation, WhatsAppConversationDetail } from "@/lib/types";
 import { connectSocket } from "@/lib/socket-client";
+import { WhatsAppProfileSettings } from "@/components/messaging/whatsapp-profile-settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
@@ -222,6 +223,14 @@ export default function AtendimentoPage() {
           </div>
         </div>
       </Modal>
+
+      {/*
+        O perfil fica abaixo da caixa de entrada, e não dentro dela: a grade do
+        inbox tem altura fixa, e é aqui que o empresário passa o dia — com o
+        número fora do aplicativo, este é o único lugar onde ele edita foto,
+        descrição e contatos.
+      */}
+      {isAdmin && <WhatsAppProfileSettings />}
     </div>
   );
 }

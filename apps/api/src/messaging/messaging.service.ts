@@ -16,6 +16,7 @@ import {
   WhatsAppOrderDraftStatus,
   WhatsAppMessageDirection,
   WhatsAppMessageStatus,
+  WhatsAppProvider,
 } from "@prisma/client";
 import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
@@ -25,11 +26,14 @@ import { AiService } from "../ai/ai.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { UsageService } from "../usage/usage.service";
 import { ConnectWhatsAppCloudDto } from "./dto/connect-whatsapp-cloud.dto";
+import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
 import { CompleteWhatsAppEmbeddedSignupDto } from "./dto/complete-whatsapp-embedded-signup.dto";
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
+import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
+import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-provider.interface";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
@@ -45,6 +49,7 @@ export class MessagingService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     @Inject(MESSAGING_PROVIDER) private readonly provider: MessagingProvider,
     private readonly meta: MetaWhatsAppProvider,
+    private readonly gupshup: GupshupWhatsAppProvider,
     private readonly secrets: MessagingSecretsService,
     private readonly ai: AiService,
     private readonly usage: UsageService,
@@ -226,6 +231,294 @@ export class MessagingService {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Conexão via Gupshup
+  // ---------------------------------------------------------------------------
+
+  /** Informa ao painel se o caminho Gupshup está disponível nesta instalação. */
+  gupshupConfiguration() {
+    const enabled = this.gupshup.isEnabled();
+    const selfServe = this.gupshup.mode() === "SELF_SERVE";
+    const webhookToken = process.env.GUPSHUP_WEBHOOK_TOKEN?.trim();
+    return {
+      enabled,
+      mode: this.gupshup.mode(),
+      // No self-serve o app é criado no painel do Gupshup: o painel mostra o
+      // formulário de vínculo manual em vez do botão de conexão automática.
+      automaticOnboarding: enabled && this.gupshup.supportsAutomaticOnboarding(),
+      /**
+       * No self-serve não há API para registrar o callback: o superadmin cola
+       * esta URL no painel do Gupshup, por aplicativo. O segredo já vem embutido
+       * porque é ele que autentica o webhook.
+       */
+      callbackUrl: selfServe && webhookToken
+        ? `${publicApiUrl()}/api/messaging/webhooks/gupshup/self-serve?token=${encodeURIComponent(webhookToken)}`
+        : null,
+      reason: enabled ? null : "A conexão pelo Gupshup ainda não está habilitada nesta plataforma.",
+    };
+  }
+
+  /**
+   * Abre a conexão de um número. Criamos o app no Gupshup, apontamos o callback
+   * para a nossa API e devolvemos o link oficial de Embedded Signup — quem
+   * responde à Meta pelo aplicativo é o Gupshup, então a plataforma não depende
+   * do App Review próprio para colocar um cliente no ar.
+   *
+   * O canal nasce INATIVO: só vira ATIVO quando a Meta promove o número a "live",
+   * o que é confirmado em `syncGupshupConnection`.
+   */
+  async startGupshupConnection(companyId: string) {
+    if (!this.gupshup.isEnabled()) {
+      throw new BadRequestException("A conexão pelo Gupshup ainda não está habilitada nesta plataforma.");
+    }
+    if (!this.secrets.isConfigured()) {
+      throw new BadRequestException("Configure a chave de criptografia de credenciais antes de conectar um número.");
+    }
+
+    const existing = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    if (existing?.provider === WhatsAppProvider.META && existing.metaPhoneNumberId) {
+      throw new ConflictException(
+        "Esta empresa já está conectada pela Meta. Desconecte o número atual antes de migrar para o Gupshup.",
+      );
+    }
+
+    // Reaproveita o app quando o empresário reabre o assistente no meio do
+    // caminho; criar outro deixaria um app órfão consumindo cota do parceiro.
+    let appId = existing?.provider === WhatsAppProvider.GUPSHUP ? existing.gupshupAppId : null;
+    let appName = existing?.gupshupAppName ?? null;
+    if (!appId) {
+      const company = await this.db().company.findUnique({ where: { id: companyId } });
+      if (!company) throw new NotFoundException("Empresa não encontrada.");
+      const created = await this.gupshup.createApp({ name: gupshupAppName(company) });
+      appId = created.appId;
+      appName = created.name;
+    }
+
+    const webhookToken = process.env.GUPSHUP_WEBHOOK_TOKEN?.trim();
+    if (!webhookToken) {
+      throw new BadRequestException("Configure GUPSHUP_WEBHOOK_TOKEN antes de conectar números pelo Gupshup.");
+    }
+    // O segredo viaja na URL registrada no BSP: é o que autentica o callback,
+    // já que o Gupshup não assina o corpo como a Meta.
+    await this.gupshup.setCallbackUrl(
+      appId,
+      `${publicApiUrl()}/api/messaging/webhooks/gupshup?token=${encodeURIComponent(webhookToken)}`,
+    );
+    const embedLink = await this.gupshup.generateEmbedLink(appId);
+
+    const channel = await this.db().messagingChannel.upsert({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+      create: {
+        companyId,
+        type: MessagingChannelType.WHATSAPP,
+        provider: WhatsAppProvider.GUPSHUP,
+        status: MessagingChannelStatus.INATIVO,
+        config: {},
+        gupshupAppId: appId,
+        gupshupAppName: appName,
+      },
+      update: {
+        provider: WhatsAppProvider.GUPSHUP,
+        gupshupAppId: appId,
+        gupshupAppName: appName,
+        lastError: null,
+      },
+    });
+
+    return { ...this.channelSummary(channel), embedLink };
+  }
+
+  /**
+   * Vincula um app do Gupshup criado à mão no painel deles. É o caminho do modo
+   * self-serve: sem Partner API não há como criar o app por código, mas o resto
+   * do sistema (envio, webhook, perfil) funciona igual.
+   *
+   * O canal nasce INATIVO quando ainda não há número: o webhook do Gupshup ou o
+   * preenchimento posterior do número é que o ativam.
+   */
+  async connectGupshupManual(companyId: string, dto: ConnectWhatsAppGupshupDto) {
+    if (!this.gupshup.isEnabled()) {
+      throw new BadRequestException("A conexão pelo Gupshup ainda não está habilitada nesta plataforma.");
+    }
+    const appName = dto.appName.trim();
+    const number = dto.number ? normalizePhone(dto.number) : null;
+    if (number && number.length < 10) {
+      throw new BadRequestException("Informe o número do WhatsApp com DDI e DDD.");
+    }
+
+    // O nome do app é único global, como o phone number id da Meta: é por ele
+    // que o callback v2 encontra o canal, então dois tenants não podem repetir.
+    const owner = await tenantContext.run({ companyId: null, bypass: true }, () => {
+      return this.db().messagingChannel.findUnique({ where: { gupshupAppName: appName } });
+    });
+    if (owner && owner.companyId !== companyId) {
+      throw new ConflictException("Este aplicativo do Gupshup já está vinculado a outra empresa.");
+    }
+
+    const current = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    const config = {
+      ...channelConfig(current),
+      ...(number ? { number } : {}),
+      ...(dto.signupLink ? { gupshupSignupLink: dto.signupLink.trim() } : {}),
+    };
+    const data = {
+      provider: WhatsAppProvider.GUPSHUP,
+      status: number ? MessagingChannelStatus.ATIVO : MessagingChannelStatus.INATIVO,
+      config,
+      gupshupAppName: appName,
+      gupshupAppId: dto.appId?.trim() || null,
+      ...(number ? { connectedAt: new Date() } : {}),
+      lastError: null,
+    };
+
+    try {
+      const channel = await this.db().messagingChannel.upsert({
+        where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+        create: { companyId, type: MessagingChannelType.WHATSAPP, ...data },
+        update: data,
+      });
+      if (number) {
+        await this.db().company.updateMany({
+          where: { id: companyId, whatsapp: null },
+          data: { whatsapp: number },
+        });
+      }
+      return this.channelSummary(channel);
+    } catch (error) {
+      if (isUniqueConstraint(error)) {
+        throw new ConflictException("Este aplicativo do Gupshup já está vinculado a outra empresa.");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Confere na Partner API se o número já concluiu o Embedded Signup. É o que o
+   * painel consulta enquanto o empresário termina o fluxo na janela da Meta.
+   */
+  async syncGupshupConnection(companyId: string) {
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP || !channel.gupshupAppId) {
+      throw new NotFoundException("Nenhuma conexão do Gupshup foi iniciada para esta empresa.");
+    }
+
+    const details = await this.gupshup.getAppDetails(channel.gupshupAppId);
+    const phone = details.phone ? normalizePhone(details.phone) : null;
+    // "live" é o sinal do Gupshup de que a Meta liberou o número; sem ele o app
+    // existe mas ainda não envia.
+    const ready = details.live === true && Boolean(phone);
+
+    const updated = await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: {
+        status: ready ? MessagingChannelStatus.ATIVO : MessagingChannelStatus.INATIVO,
+        gupshupAppName: details.name ?? channel.gupshupAppName,
+        ...(phone ? { config: { ...channelConfig(channel), number: phone } } : {}),
+        ...(ready && !channel.connectedAt ? { connectedAt: new Date() } : {}),
+      },
+    });
+
+    if (ready && phone) {
+      await this.db().company.updateMany({
+        where: { id: companyId, whatsapp: null },
+        data: { whatsapp: phone },
+      });
+    }
+    return this.channelSummary(updated);
+  }
+
+  /**
+   * Solta o número deste tenant. Não removemos o app no Gupshup: ele pode estar
+   * em migração e apagar aqui não desfaz o vínculo na Meta — quem decide isso é
+   * o dono do número no portal do BSP.
+   */
+  async disconnectGupshupConnection(companyId: string) {
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP) {
+      throw new NotFoundException("Nenhuma conexão do Gupshup foi iniciada para esta empresa.");
+    }
+    const updated = await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: {
+        status: MessagingChannelStatus.INATIVO,
+        gupshupAppId: null,
+        gupshupAppName: null,
+        gupshupAppTokenEncrypted: null,
+        gupshupAppTokenExpiresAt: null,
+        connectedAt: null,
+      },
+    });
+    return this.channelSummary(updated);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Perfil comercial do WhatsApp
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Lê o perfil que o cliente final vê no WhatsApp. Como o número deixa de estar
+   * no aplicativo, este painel passa a ser o único lugar onde o empresário
+   * consegue editar foto, descrição e contatos.
+   */
+  async getWhatsAppProfile(companyId: string) {
+    const { channel, appToken } = await this.gupshupChannelWithToken(companyId);
+    const [profile, photoUrl] = await Promise.all([
+      this.gupshup.getBusinessProfile({ appId: channel.gupshupAppId, appToken }),
+      this.gupshup.getProfilePhotoUrl({ appId: channel.gupshupAppId, appToken }).catch(() => null),
+    ]);
+    return {
+      ...profile,
+      profilePictureUrl: photoUrl,
+      displayName: channel.metaVerifiedName ?? channel.gupshupAppName ?? null,
+      number: channelConfig(channel).number ?? null,
+    };
+  }
+
+  async updateWhatsAppProfile(companyId: string, dto: UpdateWhatsAppProfileDto) {
+    const { channel, appToken } = await this.gupshupChannelWithToken(companyId);
+    await this.gupshup.updateBusinessProfile({
+      appId: channel.gupshupAppId,
+      appToken,
+      profile: dto,
+    });
+    return this.getWhatsAppProfile(companyId);
+  }
+
+  async updateWhatsAppProfilePhoto(
+    companyId: string,
+    file: { buffer: Buffer; mimeType: string; fileName: string },
+  ) {
+    const { channel, appToken } = await this.gupshupChannelWithToken(companyId);
+    await this.gupshup.updateProfilePhoto({ appId: channel.gupshupAppId, appToken, file });
+    return this.getWhatsAppProfile(companyId);
+  }
+
+  /**
+   * O perfil só existe quando o número está de fato no ar por um BSP que o
+   * gerencie. Hoje isso é o Gupshup; canais Meta continuam editando o perfil
+   * pelo Business Manager, que é onde a credencial deles vive.
+   */
+  private async gupshupChannelWithToken(companyId: string) {
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP || !channel.gupshupAppId) {
+      throw new BadRequestException(
+        "O perfil do WhatsApp só pode ser editado aqui quando o número está conectado pelo Gupshup.",
+      );
+    }
+    const appToken = await this.gupshupAppTokenFor(channel);
+    return { channel, appToken };
+  }
+
   private assertCloudApiEnabled() {
     if (process.env.NODE_ENV === "production" && process.env.WHATSAPP_CLOUD_API_ENABLED !== "true") {
       throw new BadRequestException("A conexão com a WhatsApp Cloud API ainda não está habilitada.");
@@ -358,6 +651,101 @@ export class MessagingService {
       for (const change of entry?.changes ?? []) {
         if (change?.field !== "messages") continue;
         await this.handleMetaMessagesChange(change.value ?? {});
+      }
+    }
+    return { received: true };
+  }
+
+  /**
+   * O Gupshup não assina o callback como a Meta faz com x-hub-signature-256.
+   * Autenticamos pelo segredo que nós mesmos colocamos na URL registrada na
+   * Partner API: só a plataforma e o Gupshup a conhecem.
+   */
+  verifyGupshupWebhookToken(token?: string) {
+    const expected = process.env.GUPSHUP_WEBHOOK_TOKEN?.trim();
+    if (!expected || !token) return false;
+    return safeEqual(token, expected);
+  }
+
+  /**
+   * Callback do gupshup.io no modo self-serve. Aqui o formato é o v2 proprietário
+   * do Gupshup, não o envelope da Meta — convertemos para o formato Meta e
+   * seguimos pelo mesmo caminho de tratamento, para não manter dois parsers de
+   * conversa.
+   *
+   * O canal é resolvido pelo nome do app (`app`), que é o identificador que o
+   * Gupshup envia no v2 e é único na plataforma deles.
+   */
+  async handleGupshupSelfServeWebhook(payload: any) {
+    const appName = typeof payload?.app === "string" ? payload.app : null;
+    if (!appName) return { ignored: true };
+
+    const channel = await tenantContext.run({ companyId: null, bypass: true }, () => {
+      return this.db().messagingChannel.findUnique({
+        where: { gupshupAppName: appName },
+        include: {
+          company: {
+            select: {
+              id: true,
+              name: true,
+              settings: { select: { aiEnabled: true } },
+              subscription: { select: { status: true, trialEndsAt: true } },
+            },
+          },
+        },
+      });
+    });
+    if (!channel) {
+      this.logger.warn(`Callback Gupshup ignorado: aplicativo não vinculado (${appName}).`);
+      return { ignored: true };
+    }
+
+    const value = metaValueFromGupshupV2(payload);
+    if (!value) return { ignored: true };
+
+    await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
+      return this.processMessagesChangeForChannel(channel, value, appName);
+    });
+    return { received: true };
+  }
+
+  /**
+   * Callback v3 do Gupshup: mesmo envelope da Meta, acrescido de `gs_app_id`.
+   * É por esse id que o canal é resolvido, já que o número da Meta não é
+   * gerenciado por nós neste caminho.
+   */
+  async handleGupshupWebhook(payload: any) {
+    const appId = readGupshupAppId(payload);
+    if (!appId) return { ignored: true };
+
+    // O app id é único global, como o phone number id da Meta. O bypass existe
+    // só para achar o dono do callback; nenhum dado do tenant sai daqui.
+    const channel = await tenantContext.run({ companyId: null, bypass: true }, () => {
+      return this.db().messagingChannel.findUnique({
+        where: { gupshupAppId: appId },
+        include: {
+          company: {
+            select: {
+              id: true,
+              name: true,
+              settings: { select: { aiEnabled: true } },
+              subscription: { select: { status: true, trialEndsAt: true } },
+            },
+          },
+        },
+      });
+    });
+    if (!channel) {
+      this.logger.warn(`Callback Gupshup ignorado: aplicativo não vinculado (${appId}).`);
+      return { ignored: true };
+    }
+
+    for (const entry of payload.entry ?? []) {
+      for (const change of entry?.changes ?? []) {
+        if (change?.field !== "messages") continue;
+        await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
+          return this.processMessagesChangeForChannel(channel, change.value ?? {}, appId);
+        });
       }
     }
     return { received: true };
@@ -577,8 +965,17 @@ export class MessagingService {
       this.logger.warn(`Webhook WhatsApp ignorado: número Meta não vinculado (${String(phoneNumberId)}).`);
       return;
     }
+    await this.processMessagesChangeForChannel(channel, value, String(phoneNumberId));
+  }
+
+  /**
+   * Trecho comum aos dois BSPs. O `value` chega no formato da Meta tanto pelo
+   * webhook oficial quanto pelo callback v3 do Gupshup, então só a resolução do
+   * canal difere — aqui para baixo o tratamento é idêntico.
+   */
+  private async processMessagesChangeForChannel(channel: any, value: any, reference: string) {
     if (channel.status !== MessagingChannelStatus.ATIVO) {
-      this.logger.warn(`Webhook WhatsApp ignorado: canal inativo (${String(phoneNumberId)}).`);
+      this.logger.warn(`Webhook WhatsApp ignorado: canal inativo (${reference}).`);
       return;
     }
     await this.db().messagingChannel.update({
@@ -780,16 +1177,11 @@ export class MessagingService {
   }
 
   private async sendChoiceMenu(conversation: any, channel: any, body: string) {
-    const token = this.accessTokenFor(channel);
+    const dispatch = await this.dispatcherFor(channel);
     try {
       const sent = await this.sendToMetaRecipient(
         conversation.customerPhone,
-        (to) => this.meta.sendChoiceMenu({
-          phoneNumberId: channel.metaPhoneNumberId,
-          accessToken: token,
-          to,
-          body: truncateWhatsappText(body),
-        }),
+        (to) => dispatch.choiceMenu(to, truncateWhatsappText(body)),
       );
       return this.persistOutbound(conversation, channel, {
         providerMessageId: sent.messageId,
@@ -805,16 +1197,11 @@ export class MessagingService {
 
   private async sendText(conversation: any, channel: any, content: string, sentByUserId?: string, type = "text") {
     const body = truncateWhatsappText(content);
-    const token = this.accessTokenFor(channel);
+    const dispatch = await this.dispatcherFor(channel);
     try {
       const sent = await this.sendToMetaRecipient(
         conversation.customerPhone,
-        (to) => this.meta.sendText({
-          phoneNumberId: channel.metaPhoneNumberId,
-          accessToken: token,
-          to,
-          body,
-        }),
+        (to) => dispatch.text(to, body),
       );
       return this.persistOutbound(conversation, channel, {
         providerMessageId: sent.messageId,
@@ -926,6 +1313,70 @@ export class MessagingService {
     return this.secrets.decrypt(channel.metaAccessTokenEncrypted);
   }
 
+  /**
+   * Resolve para onde a mensagem sai. O corpo é idêntico nos dois caminhos —
+   * as Passthrough APIs do Gupshup reproduzem o formato da Meta — então só o
+   * transporte e a credencial mudam.
+   */
+  private async dispatcherFor(channel: any) {
+    if (channel.provider === WhatsAppProvider.GUPSHUP) {
+      const appId = channel.gupshupAppId ?? "";
+      const appToken = await this.gupshupAppTokenFor(channel);
+      const params = {
+        appId,
+        appToken,
+        source: channelConfig(channel).number ?? null,
+        appName: channel.gupshupAppName ?? null,
+      };
+      return {
+        text: (to: string, body: string) => this.gupshup.sendText({ ...params, to, body }),
+        choiceMenu: (to: string, body: string) => this.gupshup.sendChoiceMenu({ ...params, to, body }),
+      };
+    }
+    const accessToken = this.accessTokenFor(channel);
+    const phoneNumberId = channel.metaPhoneNumberId;
+    return {
+      text: (to: string, body: string) => this.meta.sendText({ phoneNumberId, accessToken, to, body }),
+      choiceMenu: (to: string, body: string) => this.meta.sendChoiceMenu({ phoneNumberId, accessToken, to, body }),
+    };
+  }
+
+  /**
+   * O token de app do Gupshup vale 24h. Reaproveitamos o que está cifrado no
+   * canal enquanto for válido e renovamos pela Partner API quando vence,
+   * persistindo o novo — assim uma mensagem nunca falha por credencial expirada
+   * e não pagamos uma ida à Partner API por envio.
+   */
+  private async gupshupAppTokenFor(channel: any): Promise<string> {
+    if (channel.status !== MessagingChannelStatus.ATIVO) {
+      throw new BadRequestException("Este canal não está conectado ao WhatsApp pelo Gupshup.");
+    }
+    // No self-serve a autenticação é a apikey da conta, resolvida no provider;
+    // não existe token por app para buscar nem guardar.
+    if (this.gupshup.mode() === "SELF_SERVE") return "";
+    if (!channel.gupshupAppId) {
+      throw new BadRequestException("Este canal não está conectado ao WhatsApp pelo Gupshup.");
+    }
+    const stored = channel.gupshupAppTokenEncrypted;
+    const expiresAt = channel.gupshupAppTokenExpiresAt as Date | null;
+    if (stored && expiresAt && expiresAt.getTime() > Date.now()) {
+      return this.secrets.decrypt(stored);
+    }
+    const renewed = await this.gupshup.fetchAppToken(channel.gupshupAppId);
+    await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: {
+        gupshupAppTokenEncrypted: this.secrets.encrypt(renewed.token),
+        gupshupAppTokenExpiresAt: renewed.expiresAt,
+      },
+    });
+    // Mantém o objeto em memória coerente com o banco: o mesmo canal costuma ser
+    // reusado adiante no fluxo de envio.
+    channel.gupshupAppTokenEncrypted = this.secrets.encrypt(renewed.token);
+    channel.gupshupAppTokenExpiresAt = renewed.expiresAt;
+    return renewed.token;
+  }
+
   private canRunWhatsAppAutomation(channel: any) {
     const subscription = channel.company?.subscription;
     const trialActive = subscription?.status === SubscriptionStatus.EM_TESTE
@@ -946,7 +1397,19 @@ export class MessagingService {
       number: config.number ?? channel.metaDisplayPhoneNumber ?? null,
       automationEnabled: Boolean(channel.automationEnabled),
       welcomeMessage: channel.welcomeMessage ?? null,
-      connected: Boolean(channel.metaPhoneNumberId && channel.metaAccessTokenEncrypted && channel.status === MessagingChannelStatus.ATIVO),
+      provider: channel.provider ?? WhatsAppProvider.META,
+      // Cada BSP tem sua própria prova de que o canal está de pé: na Meta é o
+      // par número + token; no Gupshup é o app já promovido a "live" pela Meta.
+      connected: channel.provider === WhatsAppProvider.GUPSHUP
+        ? Boolean(channel.gupshupAppId && channel.status === MessagingChannelStatus.ATIVO)
+        : Boolean(channel.metaPhoneNumberId && channel.metaAccessTokenEncrypted && channel.status === MessagingChannelStatus.ATIVO),
+      gupshup: {
+        appId: channel.gupshupAppId ?? null,
+        appName: channel.gupshupAppName ?? null,
+        // Link que o empresário abre para concluir o cadastro com o Facebook
+        // dele. No self-serve vem colado pelo superadmin; no partner é gerado.
+        signupLink: config.gupshupSignupLink ?? null,
+      },
       integration: {
         phoneNumberId: channel.metaPhoneNumberId ?? null,
         businessAccountId: channel.metaBusinessAccountId ?? null,
@@ -971,7 +1434,9 @@ export class MessagingService {
       number: null,
       automationEnabled: true,
       welcomeMessage: null,
+      provider: WhatsAppProvider.META,
       connected: false,
+      gupshup: { appId: null, appName: null, signupLink: null },
       integration: {
         phoneNumberId: null,
         businessAccountId: null,
@@ -1049,6 +1514,105 @@ function channelConfig(channel: any): Record<string, any> {
 
 function normalizePhone(value: string) {
   return value.replace(/\D/g, "");
+}
+
+/**
+ * Traduz o callback v2 do Gupshup para o `value` que a Meta envia, de forma que
+ * `processIncomingMessage`/`processMessageStatus` continuem sendo os únicos
+ * lugares que entendem uma conversa.
+ *
+ * Devolve null para eventos que não representam mensagem nem status (por exemplo
+ * os avisos de conta), que devem ser descartados sem log de erro.
+ */
+function metaValueFromGupshupV2(payload: any): any | null {
+  const inner = payload?.payload;
+  if (!inner) return null;
+
+  if (payload.type === "message-event") {
+    const providerMessageId = inner.gsId ?? inner.id;
+    if (!providerMessageId) return null;
+    return {
+      messaging_product: "whatsapp",
+      metadata: {},
+      statuses: [
+        {
+          id: String(providerMessageId),
+          status: String(inner.type ?? ""),
+          recipient_id: inner.destination ? String(inner.destination) : undefined,
+          errors: inner.payload?.reason ? [{ message: String(inner.payload.reason) }] : undefined,
+        },
+      ],
+    };
+  }
+
+  if (payload.type !== "message") return null;
+
+  const sender = inner.sender ?? {};
+  const from = String(inner.source ?? sender.phone ?? "");
+  if (!from) return null;
+  // O v2 traz timestamp em milissegundos; a Meta usa segundos.
+  const timestamp = Math.floor(Number(payload.timestamp ?? Date.now()) / 1000);
+  const base = { from, id: String(inner.id ?? ""), timestamp: String(timestamp) };
+
+  let message: Record<string, unknown>;
+  if (inner.type === "button_reply" || inner.type === "list_reply" || inner.type === "quick_reply") {
+    const replyKey = inner.type === "list_reply" ? "list_reply" : "button_reply";
+    message = {
+      ...base,
+      type: "interactive",
+      interactive: {
+        type: replyKey,
+        [replyKey]: {
+          // No quick reply o Gupshup devolve o postbackText que enviamos como id.
+          id: String(inner.payload?.postbackText ?? inner.payload?.id ?? ""),
+          title: String(inner.payload?.title ?? inner.payload?.text ?? ""),
+        },
+      },
+    };
+  } else if (inner.type === "text") {
+    message = { ...base, type: "text", text: { body: String(inner.payload?.text ?? "") } };
+  } else {
+    // Mídia e demais tipos caem no texto genérico já tratado por incomingContent.
+    message = { ...base, type: String(inner.type ?? "unsupported") };
+  }
+
+  return {
+    messaging_product: "whatsapp",
+    metadata: {},
+    contacts: [{ profile: { name: sender.name ? String(sender.name) : undefined }, wa_id: from }],
+    messages: [message],
+  };
+}
+
+/**
+ * O `gs_app_id` aparece na raiz do envelope v3, mas o Gupshup também o repete
+ * dentro de entry/changes conforme o evento. Procuramos nos dois lugares para
+ * não descartar callback válido.
+ */
+function readGupshupAppId(payload: any): string | null {
+  const direct = payload?.gs_app_id ?? payload?.app;
+  if (typeof direct === "string" && direct) return direct;
+  for (const entry of payload?.entry ?? []) {
+    for (const change of entry?.changes ?? []) {
+      const nested = change?.value?.gs_app_id;
+      if (typeof nested === "string" && nested) return nested;
+    }
+  }
+  return null;
+}
+
+/**
+ * O Gupshup exige nome de app único e sem espaço/acento. Prefixamos com a
+ * plataforma e fechamos com o id da empresa para não colidir entre tenants nem
+ * vazar o nome fantasia do cliente no painel do parceiro.
+ */
+function gupshupAppName(company: { id: string; slug?: string | null }) {
+  const base = (company.slug ?? "empresa")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 20) || "empresa";
+  return `chegowia${base}${company.id.slice(-8)}`;
 }
 
 function brazilianRecipientWithNinthDigit(phone: string) {

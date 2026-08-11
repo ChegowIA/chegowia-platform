@@ -20,6 +20,7 @@ describe("destinatário brasileiro de número Meta de teste", () => {
       prisma as never,
       {} as never,
       meta as never,
+      {} as never,
       { decrypt: jest.fn().mockReturnValue("token-teste") } as never,
       {} as never,
       usage as never,

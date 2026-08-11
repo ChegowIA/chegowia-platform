@@ -4,7 +4,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import gsap from "gsap";
+import { Role } from "@chegowia/shared";
 import { AuthShell } from "@/components/auth/auth-shell";
+import { ContextPicker } from "@/components/auth/context-picker";
 import { Button } from "@/components/ui/button";
 import { FormField, Input } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
@@ -26,6 +28,7 @@ export default function AccessPage() {
   const [mfaChallenge, setMfaChallenge] = useState<{ id: string; emailHint: string } | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
+  const [contextPicker, setContextPicker] = useState(false);
   const card = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const login = useLogin();
@@ -92,6 +95,11 @@ export default function AccessPage() {
         setMfaChallenge({ id: data.challengeId, emailHint: data.emailHint });
         return;
       }
+      // Conta multiacesso escolhe o contexto antes de cair no painel.
+      if (data.multiContext) {
+        setContextPicker(true);
+        return;
+      }
       router.replace(homePathForRole(data.user.role));
     } catch (err) {
       setError(apiErrorMessage(err, "E-mail ou senha inválidos."));
@@ -123,6 +131,10 @@ export default function AccessPage() {
         challengeId: mfaChallenge.id,
         code: mfaCode,
       });
+      if (data.multiContext) {
+        setContextPicker(true);
+        return;
+      }
       router.replace(homePathForRole(data.user.role));
     } catch (err) {
       setError(apiErrorMessage(err, "Código inválido ou expirado."));
@@ -132,6 +144,27 @@ export default function AccessPage() {
   if (!ready || switching) return <main className="grid h-dvh place-items-center bg-slate-950 text-sm font-bold text-white">Preparando seu acesso...</main>;
 
   const registerMode = mode === "cadastro";
+
+  /**
+   * A escolha de contexto substitui o formulário: a autenticação já terminou, e
+   * mostrar os campos de login por baixo confundiria quem só precisa decidir por
+   * onde entrar.
+   */
+  if (contextPicker) {
+    return (
+      <AuthShell
+        eyebrow="Acesso multiempresa"
+        title="Escolha seu acesso"
+        description="Você entrou. Agora diga por onde quer trabalhar."
+        variant="register"
+      >
+        <ContextPicker
+          onDone={() => router.replace(homePathForRole(useAuthStore.getState().user?.role ?? Role.SUPER_ADMIN))}
+        />
+      </AuthShell>
+    );
+  }
+
   return (
     <AuthShell
       eyebrow={registerMode ? "Seu acesso começa aqui" : "Que bom ter você de volta"}

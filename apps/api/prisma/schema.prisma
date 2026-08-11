@@ -104,6 +104,14 @@ enum MessagingChannelStatus {
   INATIVO
 }
 
+// BSP responsável pelo número. META fala direto com o Graph API; GUPSHUP passa
+// pelas Passthrough APIs, que imitam o formato da Meta no envio e no webhook —
+// por isso o corpo das mensagens e o parser de callback são compartilhados.
+enum WhatsAppProvider {
+  META
+  GUPSHUP
+}
+
 enum WhatsAppConversationMode {
   VIRTUAL
   HUMANO
@@ -401,6 +409,11 @@ model RefreshToken {
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime  @default(now())
+  // Contexto assumido pelo superadmin multiacesso. Fica aqui para que renovar a
+  // sessão não devolva silenciosamente o usuário ao papel de plataforma —
+  // trocar de contexto seria desfeito a cada refresh.
+  assumedRole      Role?
+  assumedCompanyId String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1587,7 +1600,16 @@ model MessagingChannel {
   companyId                    String
   type                         MessagingChannelType   @default(WHATSAPP)
   status                       MessagingChannelStatus @default(ATIVO)
+  provider                     WhatsAppProvider       @default(META)
   config                       Json
+  // Credenciais Gupshup. O app token vale 24h e é renovado sob demanda; guardá-lo
+  // cifrado evita ida à Partner API a cada mensagem sem expor a credencial.
+  gupshupAppId                 String?                @unique
+  // O callback v2 do self-serve identifica o app pelo nome, então ele também
+  // precisa ser único para resolver o canal sem ambiguidade.
+  gupshupAppName               String?                @unique
+  gupshupAppTokenEncrypted     String?                @db.Text
+  gupshupAppTokenExpiresAt     DateTime?
   metaPhoneNumberId            String?                @unique
   metaBusinessAccountId        String?
   metaBusinessPortfolioId      String?
@@ -1739,7 +1761,12 @@ model PlatformWhatsAppChannel {
   id                       String                 @id @default(cuid())
   key                      String                 @unique
   status                   MessagingChannelStatus @default(ATIVO)
+  provider                 WhatsAppProvider       @default(META)
   config                   Json
+  gupshupAppId             String?                @unique
+  gupshupAppName           String?
+  gupshupAppTokenEncrypted String?                @db.Text
+  gupshupAppTokenExpiresAt DateTime?
   metaPhoneNumberId        String?                @unique
   metaBusinessAccountId    String?
   metaAccessTokenEncrypted String?                @db.Text

@@ -2,9 +2,11 @@ import { createHash, randomBytes, randomInt } from "node:crypto";
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
@@ -23,6 +25,12 @@ interface IssuedTokens {
   accessToken: string;
   refreshTokenCookie: string;
   refreshTokenExpiresAt: Date;
+}
+
+/** Papel e empresa que o superadmin multiacesso decidiu assumir nesta sessão. */
+interface AssumedContext {
+  role: Role;
+  companyId: string | null;
 }
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -46,12 +54,23 @@ export class AuthService {
     return this.prisma as any;
   }
 
-  private toPayload(user: { id: string; email: string; role: Role; companyId: string | null }): JwtPayload {
+  private toPayload(
+    user: { id: string; email: string; role: Role; companyId: string | null },
+    assumed?: AssumedContext | null,
+  ): JwtPayload {
+    if (assumed) {
+      // `sub` continua sendo o usuário real: é o que permite auditar quem agiu
+      // dentro da empresa assumida.
+      return { sub: user.id, email: user.email, role: assumed.role, companyId: assumed.companyId, assumed: true };
+    }
     return { sub: user.id, email: user.email, role: user.role, companyId: user.companyId };
   }
 
-  private async issueTokens(user: { id: string; email: string; role: Role; companyId: string | null }): Promise<IssuedTokens> {
-    const accessToken = this.jwtService.sign(this.toPayload(user), {
+  private async issueTokens(
+    user: { id: string; email: string; role: Role; companyId: string | null },
+    assumed?: AssumedContext | null,
+  ): Promise<IssuedTokens> {
+    const accessToken = this.jwtService.sign(this.toPayload(user, assumed), {
       secret: process.env.JWT_ACCESS_SECRET,
       expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ?? "15m") as any,
       issuer: process.env.JWT_ISSUER ?? "chegowia-api",
@@ -63,7 +82,13 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
 
     const record = await this.db().refreshToken.create({
-      data: { userId: user.id, tokenHash, expiresAt },
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+        assumedRole: assumed?.role ?? null,
+        assumedCompanyId: assumed?.companyId ?? null,
+      },
     });
 
     return {
@@ -118,6 +143,91 @@ export class AuthService {
       ...tokens,
       mfaRequired: false as const,
       user: await this.publicUser(user),
+      // O painel usa isto para abrir o seletor de contexto logo após entrar.
+      multiContext: this.isMultiContextUser(user),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Login multiacesso do superadmin
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Um único e-mail, definido por ambiente, pode escolher com que papel entrar.
+   * Vive em variável de ambiente justamente para não virar um privilégio que se
+   * concede pelo painel: mudar quem tem esse poder exige acesso ao servidor.
+   */
+  private multiContextEmail() {
+    return (process.env.MULTI_CONTEXT_LOGIN_EMAIL ?? "").trim().toLowerCase();
+  }
+
+  private isMultiContextUser(user: { email: string; role: Role }) {
+    const allowed = this.multiContextEmail();
+    return Boolean(allowed) && user.role === Role.SUPER_ADMIN && user.email.trim().toLowerCase() === allowed;
+  }
+
+  /**
+   * Contextos que este usuário pode assumir: a plataforma (papel real) e cada
+   * empresa ativa, sempre como ADMIN. Não oferecemos papéis operacionais porque
+   * ADMIN já engloba as permissões deles dentro da empresa.
+   */
+  async availableContexts(identity: JwtPayload) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || !this.isMultiContextUser(user)) {
+      return { multiContext: false as const, contexts: [] };
+    }
+    const companies = await this.db().company.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, slug: true },
+      orderBy: { name: "asc" },
+    });
+    return {
+      multiContext: true as const,
+      contexts: [
+        { kind: "PLATFORM" as const, role: Role.SUPER_ADMIN, companyId: null, label: "Plataforma ChegowIA" },
+        ...companies.map((company: any) => ({
+          kind: "COMPANY" as const,
+          role: Role.ADMIN,
+          companyId: company.id,
+          label: company.name,
+          slug: company.slug,
+        })),
+      ],
+    };
+  }
+
+  /**
+   * Emite uma sessão no contexto escolhido. A elegibilidade é reconferida aqui
+   * contra o banco e o ambiente — nunca contra o que veio do navegador.
+   */
+  async switchContext(identity: JwtPayload, companyId: string | null) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || !user.isActive || !this.isMultiContextUser(user)) {
+      throw new ForbiddenException("Esta conta não pode trocar de contexto.");
+    }
+
+    if (!companyId) {
+      const tokens = await this.issueTokens(user);
+      this.logger.warn(`Contexto de plataforma retomado por ${user.email}.`);
+      return { ...tokens, user: await this.publicUser(user), assumed: null };
+    }
+
+    const company = await this.db().company.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!company || !company.isActive) {
+      throw new NotFoundException("Empresa não encontrada ou inativa.");
+    }
+
+    const assumed: AssumedContext = { role: Role.ADMIN, companyId: company.id };
+    const tokens = await this.issueTokens(user, assumed);
+    // Assumir uma empresa é ação sensível: fica no log com quem, onde e quando.
+    this.logger.warn(`Contexto assumido: ${user.email} entrou como ADMIN da empresa ${company.name} (${company.id}).`);
+    return {
+      ...tokens,
+      user: { ...(await this.publicUser(user)), role: Role.ADMIN, companyId: company.id },
+      assumed: { companyId: company.id, companyName: company.name },
     };
   }
 
@@ -274,7 +384,11 @@ export class AuthService {
       data: { usedAt: new Date() },
     });
     const tokens = await this.issueTokens(record.user);
-    return { ...tokens, user: await this.publicUser(record.user) };
+    return {
+      ...tokens,
+      user: await this.publicUser(record.user),
+      multiContext: this.isMultiContextUser(record.user),
+    };
   }
 
   async refresh(cookieValue: string | undefined) {
@@ -301,8 +415,22 @@ export class AuthService {
     const user = await this.db().user.findUnique({ where: { id: record.userId } });
     if (!user || !user.isActive || !user.emailVerifiedAt) throw new UnauthorizedException("Usuário inativo.");
 
-    const tokens = await this.issueTokens(user);
-    return { ...tokens, user: await this.publicUser(user) };
+    /**
+     * Renovar mantém o contexto assumido — sem isto o superadmin cairia de volta
+     * para a plataforma no meio do trabalho dentro de uma empresa. A elegibilidade
+     * é reconferida: se a conta perdeu o direito, a sessão volta ao papel real em
+     * vez de continuar assumindo.
+     */
+    const assumed: AssumedContext | null = record.assumedRole && this.isMultiContextUser(user)
+      ? { role: record.assumedRole, companyId: record.assumedCompanyId ?? null }
+      : null;
+
+    const tokens = await this.issueTokens(user, assumed);
+    const publicUser = await this.publicUser(user);
+    return {
+      ...tokens,
+      user: assumed ? { ...publicUser, role: assumed.role, companyId: assumed.companyId } : publicUser,
+    };
   }
 
   async logout(cookieValue: string | undefined) {

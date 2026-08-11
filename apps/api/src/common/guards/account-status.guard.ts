@@ -50,11 +50,26 @@ export class AccountStatusGuard implements CanActivate {
         id: true,
         isActive: true,
         role: true,
+        email: true,
         companyId: true,
         emailVerifiedAt: true,
       },
     });
-    if (!user?.isActive || user.role !== identity.role || user.companyId !== identity.companyId) {
+    if (!user?.isActive) throw new UnauthorizedException("Sua sessão não é mais válida.");
+
+    if (identity.assumed) {
+      /**
+       * Token de contexto assumido: por definição o papel do token difere do
+       * papel gravado no banco, então a comparação estrita não se aplica. Em
+       * troca, revalidamos a origem a cada requisição — se a conta deixar de ser
+       * superadmin, ou sair da lista autorizada, a sessão assumida morre na hora.
+       */
+      const email = (user.email ?? "").trim().toLowerCase();
+      const allowed = (process.env.MULTI_CONTEXT_LOGIN_EMAIL ?? "").trim().toLowerCase();
+      if (user.role !== Role.SUPER_ADMIN || !allowed || email !== allowed) {
+        throw new UnauthorizedException("Sua sessão não é mais válida.");
+      }
+    } else if (user.role !== identity.role || user.companyId !== identity.companyId) {
       throw new UnauthorizedException("Sua sessão não é mais válida.");
     }
     if (!user.emailVerifiedAt) throw new ForbiddenException("Confirme seu e-mail para continuar.");

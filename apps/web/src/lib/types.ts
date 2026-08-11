@@ -350,6 +350,13 @@ export interface MessagingChannel {
   automationEnabled: boolean;
   welcomeMessage?: string | null;
   connected: boolean;
+  provider: "META" | "GUPSHUP";
+  gupshup: {
+    appId?: string | null;
+    appName?: string | null;
+    /** Link que o empresário abre para concluir o cadastro com o Facebook dele. */
+    signupLink?: string | null;
+  };
   integration: {
     phoneNumberId?: string | null;
     businessAccountId?: string | null;
