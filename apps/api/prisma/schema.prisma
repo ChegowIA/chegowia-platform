@@ -1764,7 +1764,9 @@ model PlatformWhatsAppChannel {
   provider                 WhatsAppProvider       @default(META)
   config                   Json
   gupshupAppId             String?                @unique
-  gupshupAppName           String?
+  // Único como no canal das empresas: o callback v2 do self-serve identifica o
+  // aplicativo pelo nome, e é por ele que este canal é resolvido.
+  gupshupAppName           String?                @unique
   gupshupAppTokenEncrypted String?                @db.Text
   gupshupAppTokenExpiresAt DateTime?
   metaPhoneNumberId        String?                @unique
