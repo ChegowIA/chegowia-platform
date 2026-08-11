@@ -40,6 +40,11 @@ export function FloatingAssistantChat({
   const triggerTextRef = useRef<HTMLSpanElement | null>(null);
   const hasMobileDock = Boolean(pathname?.startsWith("/painel") || pathname?.startsWith("/super-admin") || pathname?.startsWith("/revendedor"));
   const isSupportTrigger = triggerKind === "support";
+  const hasCounterpartTrigger = useFloatingTriggerPresence(isSupportTrigger ? "assistant" : "support");
+  // Quando existem os dois canais, qualquer card abre acima da dupla de
+  // ícones. Assim nenhum ícone invade o conteúdo do outro painel e ambos
+  // continuam visíveis como âncoras da conversa.
+  const panelAboveBothTriggers = stacked || hasCounterpartTrigger;
   const expanded = !open && (hovered || focused);
 
   useEffect(() => {
@@ -128,7 +133,6 @@ export function FloatingAssistantChat({
             : hasMobileDock
               ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))] md:bottom-5"
               : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
-          open && "pointer-events-none translate-y-20 opacity-0",
         )}
       >
         <span className="relative grid h-14 w-14 shrink-0 place-items-center">
@@ -159,7 +163,12 @@ export function FloatingAssistantChat({
           // shell do painel. Sem isso, o clique abria o chat por trás da
           // interface e dava a impressão de que o botão não fazia nada.
           "fixed inset-0 z-[100] flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-white shadow-2xl transition-all duration-300 ease-out dark:bg-slate-900",
-          "sm:inset-auto sm:bottom-6 sm:h-[min(640px,calc(100vh-3rem))] sm:w-[400px] sm:max-w-[calc(100vw-3rem)] sm:rounded-3xl sm:border sm:border-slate-200/80",
+          "sm:inset-auto sm:w-[400px] sm:max-w-[calc(100vw-3rem)] sm:rounded-3xl sm:border sm:border-slate-200/80",
+          // Além de subir o painel, limitamos sua altura pela área restante:
+          // em notebooks baixos ele nunca é cortado no topo.
+          panelAboveBothTriggers
+            ? "sm:bottom-40 sm:h-[min(640px,calc(100vh-12.5rem))]"
+            : "sm:bottom-[5.5rem] sm:h-[min(640px,calc(100vh-8.5rem))]",
           position === "left" ? "sm:left-6" : "sm:right-6",
           "dark:sm:border-white/15",
           open ? "pointer-events-auto opacity-100 sm:translate-y-0 sm:scale-100" : "pointer-events-none opacity-0 sm:translate-y-6 sm:scale-95",
@@ -191,6 +200,27 @@ export function FloatingAssistantChat({
       </div>
     </>
   );
+}
+
+function useFloatingTriggerPresence(kind: "assistant" | "support") {
+  const [present, setPresent] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setPresent(Boolean(document.querySelector(`[data-floating-trigger="${kind}"]`)));
+    sync();
+
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-floating-trigger"],
+    });
+
+    return () => observer.disconnect();
+  }, [kind]);
+
+  return present;
 }
 
 function SupportIcon() {
