@@ -163,6 +163,7 @@ export function PlatformSupportBubble() {
       subtitle="Escolha IA ou equipe humana"
       triggerEyebrow="Suporte ChegowIA"
       triggerLabel="IA ou humano"
+      triggerKind="support"
     >
       <NonCriticalBoundary name="painel de conversa do suporte" fallback={<SupportUnavailable />}>
         {!hasHydrated ? <LoadingSupport /> : !user ? <AnonymousSupport /> : isSuperAdmin ? <SuperAdminSupport /> : (
@@ -263,6 +264,7 @@ export function PlatformSupportFallback() {
       subtitle="Estamos preparando seu atendimento"
       triggerEyebrow="Suporte ChegowIA"
       triggerLabel="IA ou humano"
+      triggerKind="support"
     >
       <SupportUnavailable />
     </FloatingAssistantChat>

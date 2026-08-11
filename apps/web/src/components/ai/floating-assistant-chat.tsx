@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import clsx from "clsx";
+import gsap from "gsap";
 import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/brand/brand-logo";
 
@@ -13,6 +14,7 @@ export function FloatingAssistantChat({
   defaultOpen = false,
   triggerEyebrow = "Posso ajudar?",
   triggerLabel = "Fale com a loja",
+  triggerKind = "assistant",
   position = "right",
   stacked = false,
 }: {
@@ -22,15 +24,23 @@ export function FloatingAssistantChat({
   defaultOpen?: boolean;
   triggerEyebrow?: string;
   triggerLabel?: string;
+  /** Diferencia visualmente canais globais, como o suporte da plataforma. */
+  triggerKind?: "assistant" | "support";
   /** Permite um segundo canal global, como o suporte, sem sobrepor o assistente operacional. */
   position?: "left" | "right";
   /** Posiciona este atalho acima de outro balão na mesma lateral. */
   stacked?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
   const panelId = useId();
   const pathname = usePathname();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const triggerTextRef = useRef<HTMLSpanElement | null>(null);
   const hasMobileDock = Boolean(pathname?.startsWith("/painel") || pathname?.startsWith("/super-admin") || pathname?.startsWith("/revendedor"));
+  const isSupportTrigger = triggerKind === "support";
+  const expanded = !open && (hovered || focused);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -40,24 +50,76 @@ export function FloatingAssistantChat({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  /**
+   * O estado inicial é propositalmente só o selo circular. O GSAP controla
+   * exclusivamente a largura e a entrada do texto, evitando o "pulo" que um
+   * transition-all causa quando os dois atalhos empilhados mudam de tamanho.
+   * Em preferências de movimento reduzido, a mudança é imediata e acessível.
+   */
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    const text = triggerTextRef.current;
+    if (!trigger || !text) return;
+
+    const width = expanded ? Math.min(248, window.innerWidth - 24) : 56;
+    const textState = { autoAlpha: expanded ? 1 : 0, x: expanded ? 0 : -8 };
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    gsap.killTweensOf(trigger);
+    gsap.killTweensOf(text);
+
+    if (reduceMotion) {
+      gsap.set(trigger, { width });
+      gsap.set(text, textState);
+      return;
+    }
+
+    gsap.to(trigger, {
+      width,
+      duration: 0.32,
+      ease: "power3.out",
+      overwrite: "auto",
+    });
+    gsap.to(text, {
+      ...textState,
+      duration: 0.22,
+      delay: expanded ? 0.07 : 0,
+      ease: "power2.out",
+      overwrite: "auto",
+    });
+  }, [expanded]);
+
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
-        aria-label={open ? "Fechar assistente" : "Abrir assistente"}
+        aria-label={open ? "Fechar assistente" : isSupportTrigger ? "Abrir suporte ChegowIA" : `Abrir assistente: ${triggerLabel}`}
         aria-expanded={open}
         aria-controls={panelId}
         // O atalho só abre o canal. O fechamento fica explícito no painel,
         // evitando que um segundo toque (comum no mobile) pareça ignorar a
         // abertura ou feche a conversa imediatamente.
-        onClick={() => setOpen(true)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onClick={() => {
+          setHovered(false);
+          setFocused(false);
+          setOpen(true);
+        }}
         className={clsx(
-          // O ícone fica dentro de uma margem curta e simétrica. A cápsula
-          // mantém o seu contorno contínuo, mas ganha respiro suficiente para
-          // a curva esquerda não parecer colada ao selo.
-          "group fixed z-[110] flex h-14 max-w-[calc(100vw-1.5rem)] cursor-pointer items-center gap-2 overflow-hidden rounded-full bg-brand-600 p-1.5 text-white shadow-[0_18px_50px_-12px_rgba(234,88,12,.5)]",
+          // Fechado, o botão é apenas o disco de ícone. O capsule só aparece
+          // quando há intenção clara (hover/foco), preservando espaço visual
+          // e não disputando atenção com a operação do cliente.
+          "group fixed z-[110] flex h-14 w-14 max-w-[calc(100vw-1.5rem)] cursor-pointer items-center overflow-hidden rounded-full shadow-[0_18px_50px_-12px_rgba(15,23,42,.35)] outline-none transition-[background-color,box-shadow,transform] duration-200 ease-out hover:-translate-y-1 active:translate-y-0 active:scale-95 focus-visible:ring-4 focus-visible:ring-brand-400/35",
           position === "left" ? "left-3 md:left-5" : "right-3 md:right-5",
-          "ring-1 ring-brand-700/40 dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
+          expanded
+            ? "bg-brand-600 text-white shadow-[0_18px_50px_-12px_rgba(234,88,12,.65)] dark:bg-brand-500"
+            : isSupportTrigger
+              ? "bg-brand-50 text-brand-700 ring-1 ring-brand-200/90 dark:bg-brand-400/15 dark:text-brand-200 dark:ring-brand-300/25"
+              : "bg-white text-slate-950 ring-1 ring-slate-200/90 dark:bg-slate-900 dark:text-white dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
           stacked
             ? hasMobileDock
               ? "bottom-[calc(9.65rem+env(safe-area-inset-bottom))] md:bottom-[5.5rem]"
@@ -65,16 +127,24 @@ export function FloatingAssistantChat({
             : hasMobileDock
               ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))] md:bottom-5"
               : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
-          "transition-all duration-300 ease-out hover:-translate-y-1 hover:bg-brand-700 active:translate-y-0 active:scale-95",
           open && "pointer-events-none translate-y-20 opacity-0",
         )}
       >
-        <span className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white text-brand-700 ring-1 ring-black/5 dark:bg-slate-900 dark:text-brand-300 dark:ring-white/10">
-          <span className="absolute right-0 top-0 h-3 w-3 rounded-full border-2 border-brand-600 bg-emerald-400 transition-colors group-hover:border-brand-700" />
-          {open ? <CloseIcon /> : <BrandLogo adaptive variant="mark" className="h-8 w-8" />}
+        <span className="relative grid h-14 w-14 shrink-0 place-items-center">
+          <span className={clsx(
+            "absolute inset-1.5 rounded-full transition-colors duration-200",
+            expanded ? "bg-white/12" : isSupportTrigger ? "bg-brand-100 dark:bg-brand-400/15" : "bg-slate-50 dark:bg-white/5",
+          )} />
+          <span className="relative grid h-10 w-10 place-items-center">
+            {isSupportTrigger ? <SupportIcon /> : <BrandLogo adaptive variant="mark" className="h-8 w-8" />}
+          </span>
+          <span className={clsx(
+            "absolute right-1.5 top-1.5 h-3 w-3 rounded-full border-2 bg-emerald-400 transition-colors",
+            expanded ? "border-brand-600 dark:border-brand-500" : isSupportTrigger ? "border-brand-50 dark:border-slate-900" : "border-white dark:border-slate-900",
+          )} />
         </span>
-        <span className="min-w-0 flex-1 pr-2 text-left">
-          <span className="block truncate text-[10px] font-bold uppercase tracking-[0.16em] text-brand-100 group-hover:text-brand-50">{triggerEyebrow}</span>
+        <span ref={triggerTextRef} className="pointer-events-none min-w-0 flex-1 pr-4 text-left opacity-0 invisible" aria-hidden={!expanded}>
+          <span className="block truncate text-[10px] font-bold uppercase tracking-[0.16em] text-brand-100">{triggerEyebrow}</span>
           <span className="block truncate text-sm font-bold leading-tight">{triggerLabel}</span>
         </span>
       </button>
@@ -117,6 +187,17 @@ export function FloatingAssistantChat({
         <div className="min-h-0 flex-1">{children}</div>
       </div>
     </>
+  );
+}
+
+function SupportIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="h-7 w-7" aria-hidden="true">
+      <path d="M4.5 13.25v-1.5a7.5 7.5 0 0 1 15 0v1.5" />
+      <path d="M5 13.25h1.75A1.25 1.25 0 0 1 8 14.5v2A1.25 1.25 0 0 1 6.75 17.75H5A1.5 1.5 0 0 1 3.5 16.25v-1.5A1.5 1.5 0 0 1 5 13.25Z" />
+      <path d="M19 13.25h-1.75A1.25 1.25 0 0 0 16 14.5v2a1.25 1.25 0 0 0 1.25 1.25H19a1.5 1.5 0 0 0 1.5-1.5v-1.5a1.5 1.5 0 0 0-1.5-1.5Z" />
+      <path d="M16 19.25c-.9.8-2.2 1.25-4 1.25" />
+    </svg>
   );
 }
 
