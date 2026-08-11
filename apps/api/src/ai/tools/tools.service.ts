@@ -7,7 +7,7 @@ import { AI_PROVIDER, AIProvider } from "../providers/ai-provider.interface";
 import { UsageService } from "../../usage/usage.service";
 import { WhatsAppOrdersService } from "../../orders/whatsapp-orders.service";
 import { JwtPayload } from "../../common/interfaces/jwt-payload.interface";
-import { TemporaryTestModeService } from "../../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../../common/legacy-test-data/legacy-test-data.service";
 
 /**
  * Implementação das ferramentas listadas em tool-definitions.ts. Cada método recebe
@@ -25,7 +25,7 @@ export class ToolsService {
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly usage: UsageService,
     private readonly whatsappOrders?: WhatsAppOrdersService,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly legacyTestData?: LegacyTestDataService,
   ) {}
 
   private db() {
@@ -328,8 +328,8 @@ export class ToolsService {
     const neighborhood = data.neighborhood?.trim();
     const tokens = data.terms?.length ? data.terms : searchTokens(query);
 
-    const visibility = await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer);
-    const companyWhere: any = { isActive: true, ...(visibility ?? {}) };
+    const visibility = this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false };
+    const companyWhere: any = { isActive: true, ...visibility };
     if (city) companyWhere.city = { contains: city };
     const companySearch = buildCompanySearch(tokens);
     if (companySearch.length) companyWhere.OR = companySearch;

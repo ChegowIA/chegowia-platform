@@ -21,7 +21,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { NfceService } from "../fiscal/nfce/nfce.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { DeliveryQuoteDto } from "./dto/delivery-quote.dto";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 const ORDER_INCLUDE = {
   items: true,
@@ -137,7 +137,7 @@ export class OrdersService {
     private readonly realtime: RealtimeGateway,
     private readonly geography: GeographyService,
     private readonly nfce: NfceService,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly legacyTestData?: LegacyTestDataService,
   ) {}
 
   private db() {
@@ -153,7 +153,7 @@ export class OrdersService {
       where: {
         slug: dto.companySlug,
         isActive: true,
-        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhereForUserId(customerId)) ?? {}),
+        ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(customerId) ?? { isTestOnly: false }),
       },
       include: { settings: true },
     });
@@ -261,7 +261,7 @@ export class OrdersService {
       where: {
         slug: dto.companySlug,
         isActive: true,
-        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhereForUserId(customerId)) ?? {}),
+        ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(customerId) ?? { isTestOnly: false }),
       },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");

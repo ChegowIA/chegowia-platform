@@ -3,13 +3,13 @@ import { PromotionStatus } from "@prisma/client";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 @Injectable()
 export class PromotionsService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly legacyTestData?: LegacyTestDataService,
   ) {}
 
   private db() {
@@ -29,7 +29,7 @@ export class PromotionsService {
     const city = params.city?.trim();
     const companyWhere: any = {
       isActive: true,
-      ...((await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer)) ?? {}),
+      ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
     };
     if (city) companyWhere.city = { contains: city };
     return this.db().promotion.findMany({

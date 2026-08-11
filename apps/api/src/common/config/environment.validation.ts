@@ -1,5 +1,3 @@
-import { isIP } from "node:net";
-
 const PLACEHOLDER_VALUES = new Set([
   "dev-secret",
   "change-me",
@@ -24,7 +22,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const production = env.NODE_ENV === "production";
   const whatsappCloudEnabled = env.WHATSAPP_CLOUD_API_ENABLED === "true";
   const embeddedSignupEnabled = env.META_EMBEDDED_SIGNUP_ENABLED === "true";
-  const temporaryTestModeEnabled = env.TEMP_TEST_MODE_ENABLED === "true";
   const required = ["DATABASE_URL", "JWT_ACCESS_SECRET", "APP_URL", "CORS_ORIGIN"];
 
   if (production && embeddedSignupEnabled && !whatsappCloudEnabled) {
@@ -250,27 +247,5 @@ export function validateEnvironment(config: Record<string, unknown>) {
     throw new Error("ENABLE_SWAGGER não deve ser ativado no ambiente público de produção.");
   }
 
-  if (temporaryTestModeEnabled) {
-    const rawAllowedIps = (env.TEMP_TEST_ALLOWED_CREATION_IPS ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (!rawAllowedIps.length) {
-      throw new Error("TEMP_TEST_ALLOWED_CREATION_IPS precisa conter ao menos um IP público válido enquanto o modo de testes estiver ativo.");
-    }
-    if (rawAllowedIps.some((ip) => isIP(normalizeIp(ip)) === 0)) {
-      throw new Error("TEMP_TEST_ALLOWED_CREATION_IPS contém um IP inválido.");
-    }
-    const catalogEmail = env.TEMP_TEST_CATALOG_EMAIL?.trim().toLowerCase() ?? "";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(catalogEmail)) {
-      throw new Error("TEMP_TEST_CATALOG_EMAIL precisa ser um e-mail válido enquanto o modo de testes estiver ativo.");
-    }
-  }
-
   return config;
-}
-
-function normalizeIp(value: string) {
-  const withoutZone = value.trim().toLowerCase().split("%", 1)[0] ?? "";
-  return withoutZone.startsWith("::ffff:") ? withoutZone.slice("::ffff:".length) : withoutZone;
 }

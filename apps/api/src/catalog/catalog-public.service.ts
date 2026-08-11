@@ -4,7 +4,7 @@ import { PUBLIC_PRODUCT_TYPES, inferPublicProductType } from "./public-product-t
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 /** Teto do varrimento da home. Ver o comentário de `getMarketplace`. */
 const MARKETPLACE_SCAN_LIMIT = 600;
@@ -31,7 +31,7 @@ const MARKETPLACE_PRODUCT_INCLUDE = {
 export class CatalogPublicService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly legacyTestData?: LegacyTestDataService,
   ) {}
 
   private db() {
@@ -41,7 +41,7 @@ export class CatalogPublicService {
   private async publicCompanyWhere(viewer?: JwtPayload) {
     return {
       isActive: true,
-      ...((await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer)) ?? {}),
+      ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
     };
   }
 

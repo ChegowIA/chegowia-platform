@@ -19,7 +19,7 @@ import { PublicDiscoveryDto } from "./dto/public-discovery.dto";
 import { UsageService } from "../usage/usage.service";
 import { SearchIntentService } from "./search/search-intent.service";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 const SENSITIVE_TOOLS = new Set(["createPromotionDraft"]);
 const WHATSAPP_ORDER_TOOL_NAMES = new Set(WHATSAPP_ORDER_TOOLS.map((tool) => tool.name));
@@ -51,7 +51,7 @@ export class AiService {
     private readonly toolsService: ToolsService,
     private readonly usage: UsageService,
     private readonly searchIntent: SearchIntentService,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly legacyTestData?: LegacyTestDataService,
   ) {}
 
   private db() {
@@ -337,7 +337,7 @@ export class AiService {
       where: {
         slug: companySlug,
         isActive: true,
-        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhereForUserId(userId)) ?? {}),
+        ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(userId) ?? { isTestOnly: false }),
       },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");

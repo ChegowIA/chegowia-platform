@@ -19,7 +19,6 @@ import { AI_PROVIDER, AIChatMessage, AIProvider } from "../ai/providers/ai-provi
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { ConnectPlatformWhatsAppCloudDto } from "./dto/connect-platform-whatsapp-cloud.dto";
 import { UpdatePlatformWhatsAppAutomationDto } from "./dto/update-platform-whatsapp-automation.dto";
@@ -48,7 +47,6 @@ export class PlatformWhatsAppService {
     private readonly secrets: MessagingSecretsService,
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly realtime: RealtimeGateway,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -453,7 +451,7 @@ export class PlatformWhatsAppService {
         orderBy: [{ isFeatured: "desc" }, { monthlyPrice: "asc" }],
       }),
     ]);
-    const planPrice = this.temporaryTestMode?.monthlyPriceOverride() ?? Number(plan?.monthlyPrice ?? 159.9);
+    const planPrice = Number(plan?.monthlyPrice ?? 159.9);
     const planName = plan?.name ?? "ChegowIA Profissional";
     const features = Array.isArray(plan?.features)
       ? plan.features.filter((feature: unknown): feature is string => typeof feature === "string").slice(0, 8)

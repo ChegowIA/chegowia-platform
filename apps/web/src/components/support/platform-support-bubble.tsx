@@ -438,7 +438,7 @@ function SupportChoice({ error, loading, onAi, onHuman, onRetry }: { error: stri
           <span className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-600 text-lg text-white">✦</span><span><span className="block text-sm font-black text-slate-950 dark:text-slate-100">Tirar dúvidas com a IA</span><span className="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">Resposta imediata sobre recursos, conta e contratação.</span></span></span>
         </button>
         <button type="button" onClick={onHuman} disabled={loading} className="group rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-lg disabled:cursor-wait disabled:opacity-70 dark:border-slate-700 dark:bg-slate-900">
-          <span className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-lg text-white">♥</span><span><span className="block text-sm font-black text-slate-950 dark:text-slate-100">Falar com uma pessoa</span><span className="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">A IA avisa a equipe e deixa a conversa em modo humano.</span></span></span>
+          <span className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-lg text-white">🤝</span><span><span className="block text-sm font-black text-slate-950 dark:text-slate-100">Falar com uma pessoa</span><span className="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">A IA avisa a equipe e deixa a conversa em modo humano.</span></span></span>
         </button>
       </div>
       {error && (

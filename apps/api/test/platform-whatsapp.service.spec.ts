@@ -43,14 +43,12 @@ describe("Canal institucional do WhatsApp", () => {
       ...((overrides.secrets as Record<string, unknown>) ?? {}),
     };
     const realtime = { emitToSuperAdmins: jest.fn() };
-    const temporaryTestMode = overrides.temporaryTestMode ?? { monthlyPriceOverride: jest.fn(() => null) };
     const instance = new PlatformWhatsAppService(
       prisma as never,
       meta as never,
       secrets as never,
       { chat: jest.fn() } as never,
       realtime as never,
-      temporaryTestMode as never,
     );
     return { instance, prisma, meta, secrets, realtime };
   }
@@ -87,17 +85,15 @@ describe("Canal institucional do WhatsApp", () => {
     expect(JSON.stringify(result)).not.toContain("token-secreto-da-meta-comprido-o-suficiente");
   });
 
-  it("usa o preço temporário vigente no contexto comercial da IA", async () => {
-    const { instance } = serviceWith({}, {
-      temporaryTestMode: { monthlyPriceOverride: jest.fn(() => 0.5) },
-    });
+  it("usa o preço comercial público no contexto da IA", async () => {
+    const { instance } = serviceWith();
 
     const messages = await (instance as any).messagesForAssistant("conversa-1", {
       welcomeMessage: null,
       salesInstructions: null,
     });
 
-    expect(messages[0].content).toContain("R$ 0,50 por mês");
+    expect(messages[0].content).toContain("R$ 159,90 por mês");
     expect(messages[0].content).toContain("https://chegowia.com.br/planos");
     expect(messages[0].content).toContain("nunca peça senha, código de verificação, token, cartão ou dado sensível");
   });

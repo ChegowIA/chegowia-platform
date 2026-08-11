@@ -14,7 +14,7 @@ import { AuthService } from "../auth/auth.service";
 import { isStoreOpen } from "../common/utils/store-hours";
 import { LocalStorageService } from "../common/storage/local-storage.service";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 @Injectable()
 export class CompaniesService {
@@ -22,8 +22,9 @@ export class CompaniesService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly auth: AuthService,
     private readonly storage: LocalStorageService,
-    // Opcional para os testes unitários que instanciam este serviço diretamente.
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    // Opcional apenas para manter testes unitários que instanciam o serviço
+    // diretamente. No app real o módulo global sempre o injeta.
+    private readonly legacyTestData?: LegacyTestDataService,
   ) {}
 
   private db() {
@@ -42,7 +43,7 @@ export class CompaniesService {
     return candidate;
   }
 
-  async create(dto: CreateCompanyDto, options: { isTestOnly?: boolean } = {}) {
+  async create(dto: CreateCompanyDto) {
     const slug = dto.slug ? slugify(dto.slug) : await this.uniqueSlug(dto.name);
     const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : null;
     if (cnpj) {
@@ -69,7 +70,9 @@ export class CompaniesService {
             deliveryRadiusKm: dto.deliveryRadiusKm ?? 10,
             avgDeliveryTimeMinutes: dto.avgDeliveryTimeMinutes ?? 40,
             logoUrl: dto.logoUrl,
-            isTestOnly: options.isTestOnly ?? false,
+            // Cadastros novos sempre são comerciais. Apenas registros
+            // históricos marcados explicitamente como teste seguem ocultos.
+            isTestOnly: false,
             settings: { create: {} },
           },
           include: { settings: true },
@@ -250,7 +253,7 @@ export class CompaniesService {
   async publicList(params: { city?: string; neighborhood?: string; search?: string }, viewer?: JwtPayload) {
     const where: any = {
       isActive: true,
-      ...(await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer) ?? {}),
+      ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
     };
     if (params.city) where.city = { contains: params.city };
     if (params.search) where.name = { contains: params.search };
@@ -284,7 +287,7 @@ export class CompaniesService {
       where: {
         slug,
         isActive: true,
-        ...(await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer) ?? {}),
+        ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
       },
       select: {
         id: true,

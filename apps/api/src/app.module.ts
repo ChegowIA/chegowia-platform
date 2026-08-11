@@ -35,7 +35,7 @@ import { FiscalModule } from "./fiscal/fiscal.module";
 import { CashModule } from "./cash/cash.module";
 import { ObservabilityModule } from "./common/observability/observability.module";
 import { MetricsInterceptor } from "./common/observability/metrics.interceptor";
-import { TemporaryTestModeModule } from "./common/test-mode/test-mode.module";
+import { LegacyTestDataModule } from "./common/legacy-test-data/legacy-test-data.module";
 import { PlatformSupportModule } from "./platform-support/platform-support.module";
 
 @Module({
@@ -48,7 +48,7 @@ import { PlatformSupportModule } from "./platform-support/platform-support.modul
       },
     ]),
     PrismaModule,
-    TemporaryTestModeModule,
+    LegacyTestDataModule,
     MailModule,
     ObservabilityModule,
     LocalStorageModule,

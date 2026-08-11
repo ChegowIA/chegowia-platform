@@ -89,7 +89,7 @@ describe("teste gratuito de empresas", () => {
     process.env.BILLING_ENFORCEMENT = previousEnforcement;
   });
 
-  it("expõe R$ 0,50 para novas contratações somente durante o modo temporário", async () => {
+  it("expõe R$ 159,90 para novas contratações após encerrar a homologação", async () => {
     const prisma = {
       softwarePlan: {
         findMany: jest.fn().mockResolvedValue([
@@ -97,19 +97,17 @@ describe("teste gratuito de empresas", () => {
         ]),
       },
     };
-    const temporaryMode = { monthlyPriceOverride: jest.fn().mockReturnValue(0.5) };
     const service = new BillingService(
       prisma as never,
       {} as never,
       {} as never,
       {} as never,
       {} as never,
-      temporaryMode as never,
     );
     service.onModuleDestroy();
 
     await expect(service.listPlans()).resolves.toEqual([
-      expect.objectContaining({ id: "plano-1", monthlyPrice: 0.5 }),
+      expect.objectContaining({ id: "plano-1", monthlyPrice: 159.9 }),
     ]);
   });
 });

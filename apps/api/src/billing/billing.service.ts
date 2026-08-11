@@ -32,7 +32,6 @@ import { AuthService } from "../auth/auth.service";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 
 const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
@@ -51,8 +50,6 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     private readonly auth: AuthService,
     private readonly usage: UsageService,
     private readonly mail: MailService,
-    // Opcional para manter os construtores diretos dos testes unitários.
-    private readonly temporaryTestMode?: TemporaryTestModeService,
   ) {}
 
   private db() { return this.prisma as any; }
@@ -86,12 +83,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
-  /** Preço exibido e escolhido por novas empresas durante a homologação. */
+  /** Preço comercial exibido e escolhido por novas empresas. */
   private effectivePlanMonthlyPrice(plan: { monthlyPrice: unknown }) {
-    return this.temporaryTestMode?.monthlyPriceOverride() ?? Number(plan.monthlyPrice);
+    return Number(plan.monthlyPrice);
   }
 
-  /** Assinaturas existentes mantêm o preço registrado na entrada do teste. */
+  /** Assinaturas existentes mantêm o preço congelado no momento da adesão. */
   private effectiveSubscriptionMonthlyPrice(subscription: {
     monthlyPriceSnapshot?: unknown;
     plan: { monthlyPrice: unknown };
@@ -137,11 +134,6 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updatePlan(id: string, data: { monthlyPrice?: number; stripePriceId?: string; isActive?: boolean }) {
-    if (this.temporaryTestMode?.isEnabled()) {
-      throw new BadRequestException(
-        "O preço de R$ 0,50 está sendo aplicado pelo modo temporário de testes. Desative esse modo antes de alterar o preço comercial do plano.",
-      );
-    }
     const plan = await this.db().softwarePlan.findUnique({ where: { id } });
     if (!plan) throw new NotFoundException("Plano não encontrado.");
     const nextMonthlyPrice = data.monthlyPrice ?? Number(plan.monthlyPrice);
@@ -227,7 +219,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       aiFeedback: null,
       aiAnalysis: undefined,
       stripeSessionId: null,
-      isTestOnly: this.temporaryTestMode?.shouldMarkNewCompanyAsTestOnly() ?? false,
+      isTestOnly: false,
       monthlyPriceSnapshot: this.effectivePlanMonthlyPrice(plan),
     };
     /**
@@ -921,9 +913,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           phone: application.phone,
           city: application.city,
           state: application.state,
-          isTestOnly: Boolean(
-            application.isTestOnly || this.temporaryTestMode?.shouldMarkNewCompanyAsTestOnly(),
-          ),
+          // Uma candidatura antiga marcada como teste não é promovida
+          // silenciosamente ao provisionar. A revisão é explícita.
+          isTestOnly: Boolean(application.isTestOnly),
           settings: { create: { plan: application.plan.slug } },
         },
       });
@@ -1110,9 +1102,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           phone: application.phone,
           city: application.city,
           state: application.state,
-          isTestOnly: Boolean(
-            application.isTestOnly || this.temporaryTestMode?.shouldMarkNewCompanyAsTestOnly(),
-          ),
+          // Preserva a marcação histórica de teste até decisão explícita.
+          isTestOnly: Boolean(application.isTestOnly),
           settings: { create: { plan: application.plan.slug } },
         },
       });

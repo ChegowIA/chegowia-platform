@@ -32,7 +32,7 @@ import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-provider.interface";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
+import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
@@ -49,7 +49,7 @@ export class MessagingService {
     private readonly ai: AiService,
     private readonly usage: UsageService,
     private readonly realtime: RealtimeGateway,
-    private readonly temporaryTestMode?: TemporaryTestModeService,
+    private readonly legacyTestData?: LegacyTestDataService,
     private readonly platformWhatsApp?: PlatformWhatsAppService,
   ) {}
 
@@ -1032,7 +1032,7 @@ export class MessagingService {
       where: {
         slug: companySlug,
         isActive: true,
-        ...((await this.temporaryTestMode?.publicCompanyVisibilityWhere(viewer)) ?? {}),
+        ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
       },
     });
     if (!company?.whatsapp) throw new NotFoundException("Empresa não tem WhatsApp configurado.");

@@ -15,7 +15,6 @@ import {
   UsageSource,
 } from "@prisma/client";
 import { AIChatMessage, AIProvider, AI_PROVIDER } from "../ai/providers/ai-provider.interface";
-import { TemporaryTestModeService } from "../common/test-mode/test-mode.service";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
@@ -41,7 +40,6 @@ export class PlatformSupportService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly realtime: RealtimeGateway,
-    private readonly temporaryTestMode: TemporaryTestModeService,
   ) {}
 
   private db() {
@@ -432,7 +430,7 @@ export class PlatformSupportService {
         orderBy: [{ isFeatured: "desc" }, { monthlyPrice: "asc" }],
       }),
     ]);
-    const monthlyPrice = this.temporaryTestMode.monthlyPriceOverride() ?? Number(plan?.monthlyPrice ?? 159.9);
+    const monthlyPrice = Number(plan?.monthlyPrice ?? 159.9);
     const features = Array.isArray(plan?.features)
       ? plan.features.filter((item: unknown): item is string => typeof item === "string").slice(0, 9)
       : [];

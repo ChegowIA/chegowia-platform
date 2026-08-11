@@ -140,7 +140,7 @@ export function FloatingAssistantChat({
             "absolute inset-1.5 rounded-full transition-colors duration-200",
             // O logo da marca é alaranjado: no estado expandido ele precisa de
             // uma base branca real para nunca se perder dentro da cápsula.
-            expanded ? "bg-white shadow-sm" : isSupportTrigger ? "bg-brand-100 dark:bg-slate-800" : "bg-white",
+            expanded ? "bg-white shadow-sm dark:bg-slate-50" : isSupportTrigger ? "bg-brand-100 dark:bg-slate-800" : "bg-white dark:bg-slate-50",
           )} />
           <span className={clsx("relative grid h-10 w-10 place-items-center", isSupportTrigger && "text-brand-700 dark:text-brand-300")}>
             {isSupportTrigger ? <SupportIcon /> : <BrandLogo adaptive variant="mark" className="h-8 w-8" />}

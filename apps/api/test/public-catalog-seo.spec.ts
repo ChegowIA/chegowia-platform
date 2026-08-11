@@ -52,7 +52,7 @@ describe("catálogo público para SEO", () => {
     await service.getSitemapEntries();
 
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { isActive: true },
+      where: { isActive: true, isTestOnly: false },
       select: expect.objectContaining({
         products: expect.objectContaining({
           where: {
