@@ -125,7 +125,10 @@ export class AuthController {
   async verifyMfa(@Body() dto: VerifyMfaDto, @Res({ passthrough: true }) res: Response) {
     const result = await this.authService.verifyMfa(dto.challengeId, dto.code);
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
-    return { accessToken: result.accessToken, user: result.user };
+    // Em produção o superadmin sempre passa por MFA, então esta é a resposta que
+    // decide se o seletor de contexto aparece. Omitir o campo aqui fazia o login
+    // multiacesso não existir justamente para quem ele foi feito.
+    return { accessToken: result.accessToken, user: result.user, multiContext: result.multiContext };
   }
 
   @Public()
