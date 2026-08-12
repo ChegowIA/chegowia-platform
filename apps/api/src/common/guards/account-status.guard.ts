@@ -74,7 +74,11 @@ export class AccountStatusGuard implements CanActivate {
     }
     if (!user.emailVerifiedAt) throw new ForbiddenException("Confirme seu e-mail para continuar.");
 
-    if (identity.role === Role.REVENDEDOR) {
+    // Um contexto assumido não tem perfil de revendedor nem vínculo de
+    // funcionário: quem assume é a conta de plataforma, cuja legitimidade já foi
+    // conferida acima. Exigir os perfis aqui inviabilizaria justamente os papéis
+    // que o multiacesso existe para inspecionar.
+    if (identity.role === Role.REVENDEDOR && !identity.assumed) {
       const profile = await (this.prisma as any).resellerProfile.findUnique({
         where: { userId: identity.sub },
         select: { isActive: true },

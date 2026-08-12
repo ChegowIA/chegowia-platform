@@ -71,7 +71,7 @@ export class AuthController {
     @Body() dto: SwitchContextDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.switchContext(user, dto.companyId ?? null);
+    const result = await this.authService.switchContext(user, dto.companyId ?? null, dto.role);
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
     return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
   }

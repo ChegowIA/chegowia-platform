@@ -29,6 +29,16 @@ export class PermissionsGuard implements CanActivate {
     const { user } = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (!user) throw new ForbiddenException("Não autenticado.");
     if (user.role === Role.SUPER_ADMIN || user.role === Role.ADMIN) return true;
+    /**
+     * Contexto assumido pelo superadmin multiacesso: as permissões de papel
+     * operacional vêm do EmployeeProfile, que a conta de plataforma não tem —
+     * sem esta saída, entrar como cozinha ou motoboy daria uma tela vazia.
+     *
+     * Não é afrouxamento: o AccountStatusGuard revalida a cada requisição que a
+     * conta por trás do token ainda é superadmin e continua na lista autorizada
+     * por ambiente. Quem chega aqui já teria acesso irrestrito como plataforma.
+     */
+    if (user.assumed) return true;
     const employeeProfile = await (this.prisma as any).employeeProfile.findUnique({
       where: { userId: user.sub },
       include: { rolePermissions: { include: { permission: true } } },

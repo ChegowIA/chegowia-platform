@@ -167,9 +167,22 @@ export class AuthService {
   }
 
   /**
-   * Contextos que este usuário pode assumir: a plataforma (papel real) e cada
-   * empresa ativa, sempre como ADMIN. Não oferecemos papéis operacionais porque
-   * ADMIN já engloba as permissões deles dentro da empresa.
+   * Papéis que o multiacesso pode assumir dentro de uma empresa. A ordem é a de
+   * uso: administrar, atender, produzir, entregar, servir.
+   */
+  private static readonly COMPANY_ROLES: Role[] = [
+    Role.ADMIN,
+    Role.FUNCIONARIO,
+    Role.COZINHA,
+    Role.MOTOBOY,
+    Role.GARCOM,
+  ];
+
+  /**
+   * Contextos que este usuário pode assumir: a plataforma, cada papel dentro de
+   * cada empresa ativa, e os papéis que existem fora de empresa (revendedor e
+   * cliente). É o que permite ver o sistema exatamente como cada pessoa vê, sem
+   * manter uma conta de teste por papel.
    */
   async availableContexts(identity: JwtPayload) {
     const user = await this.db().user.findUnique({ where: { id: identity.sub } });
@@ -183,15 +196,18 @@ export class AuthService {
     });
     return {
       multiContext: true as const,
+      companyRoles: AuthService.COMPANY_ROLES,
       contexts: [
         { kind: "PLATFORM" as const, role: Role.SUPER_ADMIN, companyId: null, label: "Plataforma ChegowIA" },
         ...companies.map((company: any) => ({
           kind: "COMPANY" as const,
-          role: Role.ADMIN,
           companyId: company.id,
           label: company.name,
           slug: company.slug,
+          roles: AuthService.COMPANY_ROLES,
         })),
+        { kind: "STANDALONE" as const, role: Role.REVENDEDOR, companyId: null, label: "Revendedor" },
+        { kind: "STANDALONE" as const, role: Role.CLIENTE, companyId: null, label: "Cliente" },
       ],
     };
   }
@@ -200,16 +216,38 @@ export class AuthService {
    * Emite uma sessão no contexto escolhido. A elegibilidade é reconferida aqui
    * contra o banco e o ambiente — nunca contra o que veio do navegador.
    */
-  async switchContext(identity: JwtPayload, companyId: string | null) {
+  async switchContext(identity: JwtPayload, companyId: string | null, role?: Role) {
     const user = await this.db().user.findUnique({ where: { id: identity.sub } });
     if (!user || !user.isActive || !this.isMultiContextUser(user)) {
       throw new ForbiddenException("Esta conta não pode trocar de contexto.");
     }
 
-    if (!companyId) {
+    // Sem empresa e sem papel: voltar à plataforma.
+    if (!companyId && (!role || role === Role.SUPER_ADMIN)) {
       const tokens = await this.issueTokens(user);
       this.logger.warn(`Contexto de plataforma retomado por ${user.email}.`);
       return { ...tokens, user: await this.publicUser(user), assumed: null };
+    }
+
+    // Papéis que existem fora de empresa. Aceitá-los com companyId seria
+    // incoerente: nenhuma rota deles usa tenant.
+    if (!companyId) {
+      if (role !== Role.REVENDEDOR && role !== Role.CLIENTE) {
+        throw new BadRequestException("Escolha uma empresa para este tipo de acesso.");
+      }
+      const assumed: AssumedContext = { role, companyId: null };
+      const tokens = await this.issueTokens(user, assumed);
+      this.logger.warn(`Contexto assumido: ${user.email} entrou como ${role}.`);
+      return {
+        ...tokens,
+        user: { ...(await this.publicUser(user)), role, companyId: null },
+        assumed: { companyId: null, companyName: null, role },
+      };
+    }
+
+    const chosenRole = role ?? Role.ADMIN;
+    if (!AuthService.COMPANY_ROLES.includes(chosenRole)) {
+      throw new BadRequestException("Este papel não pode ser assumido dentro de uma empresa.");
     }
 
     const company = await this.db().company.findUnique({
@@ -220,14 +258,16 @@ export class AuthService {
       throw new NotFoundException("Empresa não encontrada ou inativa.");
     }
 
-    const assumed: AssumedContext = { role: Role.ADMIN, companyId: company.id };
+    const assumed: AssumedContext = { role: chosenRole, companyId: company.id };
     const tokens = await this.issueTokens(user, assumed);
     // Assumir uma empresa é ação sensível: fica no log com quem, onde e quando.
-    this.logger.warn(`Contexto assumido: ${user.email} entrou como ADMIN da empresa ${company.name} (${company.id}).`);
+    this.logger.warn(
+      `Contexto assumido: ${user.email} entrou como ${chosenRole} da empresa ${company.name} (${company.id}).`,
+    );
     return {
       ...tokens,
-      user: { ...(await this.publicUser(user)), role: Role.ADMIN, companyId: company.id },
-      assumed: { companyId: company.id, companyName: company.name },
+      user: { ...(await this.publicUser(user)), role: chosenRole, companyId: company.id },
+      assumed: { companyId: company.id, companyName: company.name, role: chosenRole },
     };
   }
 
