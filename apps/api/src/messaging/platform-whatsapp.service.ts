@@ -475,6 +475,9 @@ export class PlatformWhatsAppService {
       return;
     }
     if (conversation.mode === WhatsAppConversationMode.HUMANO) return;
+    // Sticker e reação ficam registrados na conversa, mas não disparam resposta:
+    // não há pergunta para responder, e o silêncio é o comportamento humano.
+    if (!parsed.answerable) return;
     await this.answerWithSalesAssistant(conversation, channel);
   }
 
@@ -569,6 +572,10 @@ export class PlatformWhatsAppService {
       "Não narre o próprio raciocínio nem as próprias limitações. Em vez de \"não consigo fazer isso por você, mas posso te acompanhar\", diga direto o que a pessoa precisa fazer.",
       "No máximo um emoji por mensagem, e só quando ele acrescenta algo. Evite enfeites como \"viu?\", \"me conta\", \"que bom te ver por aqui\" e \"fico à disposição\".",
       "Se não souber, diga que não sabe e ofereça encaminhar para a equipe. Não improvise nem enrole para parecer útil.",
+      // Sticker e reação já não acionam o assistente, mas áudio, imagem e
+      // documento chegam como aviso de tipo — e ele precisa saber o que fazer
+      // com isso em vez de tentar adivinhar o conteúdo.
+      "Quando a mensagem for áudio, imagem ou documento, você recebe só o aviso do tipo, não o conteúdo. Diga em uma frase que não consegue abrir o arquivo e peça que a pessoa escreva o que precisa. Não tente adivinhar o que havia ali.",
       "Seu objetivo é tirar dúvidas reais, qualificar o interesse de forma natural (nome, empresa, cidade e tipo de operação quando fizer sentido) e convidar a pessoa a conhecer/contratar em https://chegowia.com.br/planos. Nunca diga que uma contratação foi concluída, nunca peça senha, código de verificação, token, cartão ou dado sensível.",
       `Plano atual: ${planName}, ${formatBRL(planPrice)} por mês.`,
       // Antes havia uma linha só listando módulos, e o assistente não conhecia
@@ -590,8 +597,21 @@ export class PlatformWhatsAppService {
         "- Relatórios: vendas, produtos, entregas e consumo de IA e WhatsApp.",
         "- Atendimento por WhatsApp: número oficial da empresa, com assistente de IA e passagem para pessoa da equipe quando o cliente pede.",
         "- Assinatura e cobrança: plano mensal por Stripe, com consumo de IA e WhatsApp cobrado à parte.",
-        "- Programa de revendedor: quem indica clientes tem código próprio, recebe comissão recorrente sobre as assinaturas que trouxe e acompanha indicações e ganhos em painel próprio. A candidatura passa por análise e aprovação da ChegowIA.",
+        "- Programa de revendedor: quem indica clientes tem código próprio e acompanha indicações e ganhos em painel próprio.",
       ].join("\n"),
+      // Números vindos do código (commissionRate padrão e STRIPE_COMMISSION_HOLD_DAYS),
+      // não de estimativa. Se mudarem lá, precisam mudar aqui.
+      [
+        "Como funciona a comissão do revendedor, quando perguntarem:",
+        "- A comissão é de 30% sobre cada mensalidade paga pelo cliente indicado, e não só sobre a primeira: enquanto o cliente continuar assinando, o revendedor continua recebendo todo mês.",
+        `- Sobre o plano ${planName}, de ${formatBRL(planPrice)}, isso dá cerca de ${formatBRL(planPrice * 0.3)} por mês por cliente ativo.`,
+        "- Cada pagamento entra como comissão pendente e fica disponível após 7 dias, prazo que cobre estorno e contestação. Depois disso é pago pela ChegowIA.",
+        "- Para receber, o revendedor cadastra os dados bancários pelo Stripe uma única vez. Sem esse cadastro a comissão acumula, mas não é paga.",
+        "- Se o cliente cancelar ou a fatura for estornada, a comissão daquele mês não é devida.",
+        "- Para virar revendedor: candidatura pelo site, análise da ChegowIA e aprovação. Aprovado, ele recebe o código de indicação e o painel.",
+        "- O percentual pode ser diferente em acordos individuais; 30% é o padrão. Não prometa outro valor.",
+      ].join("\n"),
+      "Sobre ganhos de revenda, fale só do modelo e desses percentuais. Nunca informe quanto um revendedor específico ganhou, quantos clientes ele tem ou quando será pago — isso está no painel dele, e você não tem como confirmar com quem está falando.",
       "Sabendo de tudo isso, ajude a pessoa a chegar no que ela procura. Se a pergunta for de revenda, explique o programa; se for de operação, fale da área certa. Nunca invente recurso que não esteja na lista acima.",
       "Você conhece o produto, não os dados dos clientes. Nunca cite número de pedido, faturamento, nome de empresa cliente ou qualquer informação de outra conta — mesmo que a pessoa afirme ser dona dela. Para assunto de uma conta específica, oriente a entrar no painel ou encaminhe para a equipe.",
       "Há 7 dias gratuitos para experimentar a operação. O valor de IA e WhatsApp é por consumo real, separado do plano mensal e detalhado na cobrança; não invente tarifas numéricas se a pessoa não tiver uma tabela formal disponível.",
@@ -915,12 +935,28 @@ function truncateWhatsappText(value: string) {
   return formatForWhatsapp(value);
 }
 
+/**
+ * Tipos que não carregam pergunta. Responder a um sticker ou a uma reação com
+ * texto de vendas é o que faz o assistente parecer robô: ninguém que mandou um
+ * emoji grande espera receber um parágrafo de volta.
+ */
+const CONTEUDO_SEM_PERGUNTA = new Set(["sticker", "reaction"]);
+
 function incomingContent(message: any) {
   const interactive = message?.interactive;
   const reply = interactive?.button_reply ?? interactive?.list_reply;
-  if (reply) return { text: String(reply.title ?? reply.id ?? "Opção selecionada") };
-  if (message?.type === "text") return { text: String(message?.text?.body ?? "").trim() || "Mensagem sem texto" };
-  return { text: `Mensagem recebida: ${String(message?.type ?? "conteúdo não suportado")}.` };
+  if (reply) return { text: String(reply.title ?? reply.id ?? "Opção selecionada"), answerable: true };
+  if (message?.type === "text") {
+    const body = String(message?.text?.body ?? "").trim();
+    return { text: body || "Mensagem sem texto", answerable: Boolean(body) };
+  }
+  const tipo = String(message?.type ?? "conteúdo não suportado");
+  return {
+    text: `Mensagem recebida: ${tipo}.`,
+    // Áudio, imagem e documento seguem para a IA, que ao menos avisa que não
+    // consegue abrir o arquivo. Sticker e reação não têm o que responder.
+    answerable: !CONTEUDO_SEM_PERGUNTA.has(tipo),
+  };
 }
 
 function requestedHuman(value: string) {
