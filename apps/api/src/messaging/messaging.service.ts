@@ -688,6 +688,24 @@ export class MessagingService {
    * O canal é resolvido pelo nome do app (`app`), que é o identificador que o
    * Gupshup envia no v2 e é único na plataforma deles.
    */
+  /**
+   * Porta única do Gupshup. O painel deles deixa escolher o formato do payload
+   * por webhook, e escolher errado fazia a mensagem ser aceita e descartada em
+   * silêncio. Em vez de exigir que a URL combine com o dropdown, reconhecemos o
+   * formato pelo próprio corpo — assim qualquer combinação funciona.
+   */
+  async handleGupshupWebhookAnyFormat(payload: any) {
+    if (isMetaFormatCallback(payload)) return this.handleGupshupWebhook(payload);
+    if (typeof payload?.app === "string") return this.handleGupshupSelfServeWebhook(payload);
+
+    // Nem um nem outro: registrar as chaves do topo é o que permite descobrir um
+    // formato novo sem precisar reproduzir o problema.
+    this.logger.warn(
+      `Callback Gupshup em formato não reconhecido. Chaves recebidas: ${Object.keys(payload ?? {}).join(", ") || "nenhuma"}.`,
+    );
+    return { ignored: true };
+  }
+
   async handleGupshupSelfServeWebhook(payload: any) {
     const appName = typeof payload?.app === "string" ? payload.app : null;
     if (!appName) return { ignored: true };
@@ -1613,6 +1631,16 @@ function metaValueFromGupshupV2(payload: any): any | null {
     contacts: [{ profile: { name: sender.name ? String(sender.name) : undefined }, wa_id: from }],
     messages: [message],
   };
+}
+
+/**
+ * Distingue o envelope no formato Meta (v3) do formato nativo do Gupshup (v2).
+ * O v3 carrega `entry`/`changes` — estrutura que o v2 não tem — enquanto o v2 se
+ * identifica por `app` mais `payload`.
+ */
+function isMetaFormatCallback(payload: any) {
+  if (payload?.object === "whatsapp_business_account") return true;
+  return Array.isArray(payload?.entry);
 }
 
 /**

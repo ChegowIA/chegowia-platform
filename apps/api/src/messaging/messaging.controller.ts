@@ -49,8 +49,12 @@ export class MessagingController {
   }
 
   /**
-   * Callback v3 do Gupshup. A autenticação é o segredo que a própria plataforma
-   * gravou na URL registrada na Partner API — o Gupshup não assina o corpo.
+   * Callback do Gupshup. A autenticação é o segredo que a própria plataforma
+   * gravou na URL registrada — o Gupshup não assina o corpo como a Meta.
+   *
+   * Aceita tanto o formato Meta (v3) quanto o nativo do Gupshup: o painel deles
+   * deixa trocar o formato por webhook, e exigir que a URL combine com esse
+   * ajuste só produzia mensagem aceita e descartada em silêncio.
    */
   @Public()
   @SkipThrottle()
@@ -59,13 +63,12 @@ export class MessagingController {
     if (!this.messagingService.verifyGupshupWebhookToken(token)) {
       throw new UnauthorizedException("Assinatura do webhook inválida.");
     }
-    return this.messagingService.handleGupshupWebhook(payload);
+    return this.messagingService.handleGupshupWebhookAnyFormat(payload);
   }
 
   /**
-   * Callback do modo self-serve, em formato v2 do Gupshup. Endpoint separado do
-   * v3 para não precisar adivinhar o formato pelo corpo — cada modo registra a
-   * sua URL no painel/Partner API.
+   * Mesmo tratamento da rota acima. Mantida como endereço separado porque já há
+   * webhooks registrados no painel do Gupshup apontando para cá.
    */
   @Public()
   @SkipThrottle()
@@ -74,7 +77,7 @@ export class MessagingController {
     if (!this.messagingService.verifyGupshupWebhookToken(token)) {
       throw new UnauthorizedException("Assinatura do webhook inválida.");
     }
-    return this.messagingService.handleGupshupSelfServeWebhook(payload);
+    return this.messagingService.handleGupshupWebhookAnyFormat(payload);
   }
 
   @Roles(Role.ADMIN)
@@ -98,7 +101,6 @@ export class MessagingController {
     return this.messagingService.startGupshupConnection(companyId);
   }
 
-  /** Consultado pelo painel enquanto o empresário conclui o fluxo na Meta. */
   /**
    * Vínculo manual do modo self-serve: o app é criado no painel do Gupshup e o
    * superadmin traz aqui o nome, o id e o link de cadastro do cliente.

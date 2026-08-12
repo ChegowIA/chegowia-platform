@@ -135,6 +135,51 @@ describe("webhook self-serve do Gupshup", () => {
     ]);
   });
 
+  /**
+   * O painel do Gupshup deixa trocar o formato do payload por webhook. Quando a
+   * URL registrada não combinava com esse ajuste, a mensagem era aceita e
+   * descartada sem rastro — foi assim que a primeira conexão real falhou. A porta
+   * agora reconhece os dois formatos pelo corpo.
+   */
+  describe("detecção de formato", () => {
+    it("encaminha payload no formato Meta para o tratamento v3, mesmo na rota do self-serve", async () => {
+      const findUnique = jest.fn().mockResolvedValue(null);
+      const { service } = buildService(findUnique);
+      (service as any).handleGupshupWebhook = jest.fn().mockResolvedValue({ received: true });
+
+      await service.handleGupshupWebhookAnyFormat({
+        object: "whatsapp_business_account",
+        gs_app_id: "app-123",
+        entry: [{ changes: [{ field: "messages", value: {} }] }],
+      });
+
+      expect((service as any).handleGupshupWebhook).toHaveBeenCalled();
+    });
+
+    it("encaminha payload nativo do Gupshup para o tratamento v2", async () => {
+      const findUnique = jest.fn().mockResolvedValue(null);
+      const { service } = buildService(findUnique);
+      (service as any).handleGupshupSelfServeWebhook = jest.fn().mockResolvedValue({ received: true });
+
+      await service.handleGupshupWebhookAnyFormat({ app: "chegowia", type: "message", payload: {} });
+
+      expect((service as any).handleGupshupSelfServeWebhook).toHaveBeenCalled();
+    });
+
+    it("registra as chaves recebidas quando não reconhece o formato", async () => {
+      const findUnique = jest.fn();
+      const { service } = buildService(findUnique);
+      const warn = jest.spyOn((service as any).logger, "warn").mockImplementation(() => undefined);
+
+      await expect(service.handleGupshupWebhookAnyFormat({ foo: 1, bar: 2 })).resolves.toEqual({
+        ignored: true,
+      });
+
+      // Sem isto, um formato novo se manifesta apenas como silêncio.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("foo, bar"));
+    });
+  });
+
   it("descarta eventos que não são mensagem nem status", async () => {
     const findUnique = jest.fn().mockResolvedValue(channel);
     const { service } = buildService(findUnique);
