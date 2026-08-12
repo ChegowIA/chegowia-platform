@@ -240,7 +240,27 @@ export class GupshupWhatsAppProvider {
         message: JSON.stringify(message),
       }).toString(),
     });
-    return { messageId: readString(raw?.messageId) ?? null, raw };
+    /**
+     * A API v1 do Gupshup responde HTTP 200 mesmo quando recusa, sinalizando o
+     * problema apenas no corpo (`status: "error"`). Confiar no código HTTP fazia
+     * a mensagem ser gravada como enviada sem `providerMessageId`, de modo que
+     * nenhum evento de status a encontrava depois: ela ficava "enviada" para
+     * sempre sem nunca ter saído.
+     */
+    const messageId = readString(raw?.messageId);
+    const status = readString(raw?.status);
+    if (!messageId || (status && status.toLowerCase() !== "submitted")) {
+      const detail = readString(raw?.message) ?? readString(raw?.reason) ?? status;
+      this.logger.warn(
+        `Gupshup aceitou a requisição mas não enviou (${params.appName ?? "app"}): ${JSON.stringify(raw).slice(0, 300)}`,
+      );
+      throw new BadGatewayException(
+        detail && detail.length < 160
+          ? `O Gupshup não enviou a mensagem: ${detail}`
+          : "O Gupshup não enviou a mensagem. Confira o número de origem e o nome do aplicativo.",
+      );
+    }
+    return { messageId, raw };
   }
 
   private async sendMessage(appId: string, appToken: string, payload: Record<string, unknown>): Promise<GupshupSendResult> {
