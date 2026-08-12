@@ -235,8 +235,15 @@ export class PlatformWhatsAppService {
 
   async updateProfile(dto: UpdateWhatsAppProfileDto) {
     const { channel, appToken } = await this.gupshupChannelWithToken();
+    const changed = Object.values(dto).some((value) => value !== undefined && value !== null && value !== "");
+    // Nada preenchido: evita uma ida ao BSP que não muda nada e cujo erro
+    // apareceria como se a gravação tivesse falhado.
+    if (!changed) return this.getProfile();
+
     await this.gupshup.updateBusinessProfile({ appId: channel.gupshupAppId, appToken, profile: dto });
-    return this.getProfile();
+    // A gravação já aconteceu. Se a releitura falhar, devolver erro faria o
+    // empresário achar que perdeu a edição e tentar de novo.
+    return this.getProfile().catch(() => ({ ...dto, savedButNotReloaded: true }));
   }
 
   async updateProfilePhoto(file: { buffer: Buffer; mimeType: string; fileName: string }) {
@@ -657,12 +664,7 @@ export class PlatformWhatsAppService {
   ) {
     const body = truncateWhatsappText(content);
     try {
-      const sent = await this.meta.sendText({
-        phoneNumberId: channel.metaPhoneNumberId,
-        accessToken: this.accessTokenFor(channel),
-        to: conversation.customerPhone,
-        body,
-      });
+      const sent = await this.sendThroughProvider(channel, conversation.customerPhone, body);
       return this.persistOutbound(conversation, channel, {
         providerMessageId: sent.messageId,
         body,
@@ -870,6 +872,33 @@ export class PlatformWhatsAppService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Resolve por onde a resposta sai. O corpo é o mesmo nos dois caminhos — as
+   * Passthrough APIs do Gupshup reproduzem o formato da Meta — então só o
+   * transporte e a credencial mudam.
+   */
+  private async sendThroughProvider(channel: any, to: string, body: string) {
+    if (channel.provider === WhatsAppProvider.GUPSHUP) {
+      if (channel.status !== MessagingChannelStatus.ATIVO || !channel.gupshupAppName) {
+        throw new BadRequestException("O WhatsApp institucional ainda não está conectado pelo Gupshup.");
+      }
+      return this.gupshup.sendText({
+        appId: channel.gupshupAppId ?? "",
+        appToken: await this.gupshupAppTokenFor(channel),
+        source: channelNumber(channel),
+        appName: channel.gupshupAppName,
+        to,
+        body,
+      });
+    }
+    return this.meta.sendText({
+      phoneNumberId: channel.metaPhoneNumberId,
+      accessToken: this.accessTokenFor(channel),
+      to,
+      body,
+    });
   }
 
   private accessTokenFor(channel: any) {

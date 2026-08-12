@@ -496,12 +496,19 @@ export class MessagingService {
 
   async updateWhatsAppProfile(companyId: string, dto: UpdateWhatsAppProfileDto) {
     const { channel, appToken } = await this.gupshupChannelWithToken(companyId);
+    const changed = Object.values(dto).some((value) => value !== undefined && value !== null && value !== "");
+    // Nada preenchido: evita uma ida ao BSP que não muda nada e cujo erro
+    // apareceria como se a gravação tivesse falhado.
+    if (!changed) return this.getWhatsAppProfile(companyId);
+
     await this.gupshup.updateBusinessProfile({
       appId: channel.gupshupAppId,
       appToken,
       profile: dto,
     });
-    return this.getWhatsAppProfile(companyId);
+    // A gravação já aconteceu. Se a releitura falhar, devolver erro faria o
+    // empresário achar que perdeu a edição e tentar de novo.
+    return this.getWhatsAppProfile(companyId).catch(() => ({ ...dto, savedButNotReloaded: true }));
   }
 
   async updateWhatsAppProfilePhoto(

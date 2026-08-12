@@ -134,6 +134,8 @@ export function WhatsAppProfileSettings({
     },
   });
 
+  const hasContent = Object.values(form).some((value) => value.trim().length > 0);
+
   if (isError) return null;
   if (isLoading) {
     return (
@@ -262,7 +264,13 @@ export function WhatsAppProfileSettings({
       </CardContent>
 
       <CardActions description="As mudanças valem para todos os clientes que abrirem a conversa.">
-        <Button onClick={() => save.mutate()} isLoading={save.isPending} disabled={save.isPending}>
+        {/* Salvar com tudo vazio só produziria uma recusa do BSP que parece
+            falha de gravação. */}
+        <Button
+          onClick={() => save.mutate()}
+          isLoading={save.isPending}
+          disabled={save.isPending || !hasContent}
+        >
           Salvar perfil
         </Button>
       </CardActions>
