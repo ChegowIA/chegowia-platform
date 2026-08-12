@@ -343,6 +343,36 @@ export class MessagingService {
   }
 
   /**
+   * Registra o pedido de WhatsApp do empresário.
+   *
+   * No self-serve o aplicativo é criado à mão no painel do Gupshup, então o que
+   * este botão faz é sinalizar ao superadmin que há trabalho esperando. Repetir o
+   * pedido não cria fila nem reinicia nada: mantemos a primeira data, que é a
+   * que importa para saber há quanto tempo a empresa espera.
+   */
+  async requestWhatsappAccess(companyId: string) {
+    const current = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    const channel = await this.db().messagingChannel.upsert({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+      create: {
+        companyId,
+        type: MessagingChannelType.WHATSAPP,
+        provider: WhatsAppProvider.GUPSHUP,
+        status: MessagingChannelStatus.INATIVO,
+        config: {},
+        accessRequestedAt: new Date(),
+      },
+      update: {
+        accessRequestedAt: current?.accessRequestedAt ?? new Date(),
+      },
+    });
+    this.logger.warn(`Empresa ${companyId} solicitou acesso ao WhatsApp.`);
+    return this.channelSummary(channel);
+  }
+
+  /**
    * Vincula um app do Gupshup criado à mão no painel deles. É o caminho do modo
    * self-serve: sem Partner API não há como criar o app por código, mas o resto
    * do sistema (envio, webhook, perfil) funciona igual.
@@ -1471,6 +1501,7 @@ export class MessagingService {
       gupshup: {
         appId: channel.gupshupAppId ?? null,
         appName: channel.gupshupAppName ?? null,
+        accessRequestedAt: channel.accessRequestedAt ?? null,
         // Link que o empresário abre para concluir o cadastro com o Facebook
         // dele. No self-serve vem colado pelo superadmin; no partner é gerado.
         signupLink: config.gupshupSignupLink ?? null,
@@ -1501,7 +1532,7 @@ export class MessagingService {
       welcomeMessage: null,
       provider: WhatsAppProvider.META,
       connected: false,
-      gupshup: { appId: null, appName: null, signupLink: null },
+      gupshup: { appId: null, appName: null, signupLink: null, accessRequestedAt: null },
       integration: {
         phoneNumberId: null,
         businessAccountId: null,

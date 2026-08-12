@@ -72,6 +72,20 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {/* O pedido é o gatilho do trabalho manual: sem destacá-lo, o superadmin
+            só descobre que alguém espera quando o cliente cobra. */}
+        {channel?.gupshup?.accessRequestedAt && !channel.connected && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30">
+            <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
+              Esta empresa solicitou o WhatsApp
+            </p>
+            <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+              Pedido em {new Date(channel.gupshup.accessRequestedAt).toLocaleString("pt-BR")}. Crie o
+              aplicativo no Gupshup e traga os dados abaixo para liberar o botão de conexão no painel dela.
+            </p>
+          </div>
+        )}
+
         <p className="text-sm text-slate-600 dark:text-slate-300">
           Crie o aplicativo no painel do Gupshup, copie o link de <strong>Direct Facebook Registration</strong> e
           cole aqui. O empresário conclui o cadastro com o Facebook dele, sem passar suas credenciais.

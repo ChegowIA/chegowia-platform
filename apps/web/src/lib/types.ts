@@ -356,6 +356,8 @@ export interface MessagingChannel {
     appName?: string | null;
     /** Link que o empresário abre para concluir o cadastro com o Facebook dele. */
     signupLink?: string | null;
+    /** Quando o empresário pediu o WhatsApp; dispara o trabalho manual do superadmin. */
+    accessRequestedAt?: string | null;
   };
   integration: {
     phoneNumberId?: string | null;

@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { ProductImage } from "@/components/catalog/product-image";
-import { WhatsAppCloudSettings } from "@/components/messaging/whatsapp-cloud-settings";
 import { WhatsAppGupshupSettings } from "@/components/messaging/whatsapp-gupshup-settings";
 import { ChangePasswordCard } from "@/components/auth/change-password-card";
 
@@ -455,16 +454,16 @@ export default function ConfiguracoesPage() {
         </CardActions>
       </Card>
 
-      {/*
-        Os dois caminhos convivem: a conexão pelo Gupshup aparece quando a
-        plataforma está nesse modo, e a da Meta continua para quem já conectou
-        por lá. Cada componente se esconde sozinho quando não se aplica.
-      */}
       {/* Vale para qualquer papel que use o painel, não só o administrador. */}
       <ChangePasswordCard />
 
+      {/*
+        Só o caminho do Gupshup aparece para o empresário. A conexão direta pela
+        Meta continua no código e nas rotas, para quem já está conectado por lá,
+        mas expor as duas obrigaria o dono da loja a escolher entre provedores
+        que ele não tem como avaliar.
+      */}
       <WhatsAppGupshupSettings />
-      <WhatsAppCloudSettings />
     </div>
   );
 }

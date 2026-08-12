@@ -1610,6 +1610,10 @@ model MessagingChannel {
   gupshupAppName               String?                @unique
   gupshupAppTokenEncrypted     String?                @db.Text
   gupshupAppTokenExpiresAt     DateTime?
+  // Momento em que o empresário pediu o WhatsApp. No self-serve o aplicativo é
+  // criado à mão pelo superadmin, então é este campo que sinaliza que há
+  // trabalho esperando por ele.
+  accessRequestedAt            DateTime?
   metaPhoneNumberId            String?                @unique
   metaBusinessAccountId        String?
   metaBusinessPortfolioId      String?

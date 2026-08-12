@@ -93,6 +93,18 @@ export class MessagingController {
     return this.messagingService.gupshupConfiguration();
   }
 
+  /**
+   * Pedido de WhatsApp do empresário. No self-serve o aplicativo é criado à mão
+   * pelo superadmin, então este botão existe para sinalizar que há trabalho
+   * esperando — e para o empresário saber que o pedido chegou.
+   */
+  @Roles(Role.ADMIN)
+  @Post("channel/whatsapp/request")
+  @Throttle({ default: { limit: 5, ttl: 60 * 60_000 } })
+  requestWhatsappAccess(@CurrentUser("companyId") companyId: string) {
+    return this.messagingService.requestWhatsappAccess(companyId);
+  }
+
   /** Cria o app no BSP e devolve o link oficial de Embedded Signup do Gupshup. */
   @Roles(Role.ADMIN)
   @Post("channel/whatsapp/gupshup/connect")
