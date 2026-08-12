@@ -17,6 +17,7 @@ import { Card, CardActions, CardContent } from "@/components/ui/card";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PlatformGupshupLink } from "@/components/messaging/platform-gupshup-link";
+import { WhatsAppProfileSettings } from "@/components/messaging/whatsapp-profile-settings";
 
 type PlatformChannel = {
   id: string | null;
@@ -285,6 +286,17 @@ export default function SuperAdminAtendimentoPage() {
         está habilitado nesta instalação.
       */}
       {connectionOpen && <PlatformGupshupLink />}
+
+      {/*
+        Perfil do número comercial. Fica fora do bloco de conexão porque é edição
+        do dia a dia, não configuração inicial — e com o número fora do aplicativo
+        é o único lugar onde foto e descrição podem ser mexidas. O componente se
+        esconde sozinho quando o canal não está no Gupshup.
+      */}
+      <WhatsAppProfileSettings
+        basePath="/platform/whatsapp/channel"
+        title="Perfil do WhatsApp institucional"
+      />
 
       {connectionOpen && (
         <Card className="overflow-hidden">

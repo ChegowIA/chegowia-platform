@@ -57,7 +57,17 @@ const EMPTY_FORM = {
  * descrição e contatos — por isso ele fica junto da Central de atendimento, e não
  * escondido nas configurações técnicas.
  */
-export function WhatsAppProfileSettings() {
+export function WhatsAppProfileSettings({
+  basePath = "/messaging/channel/whatsapp",
+  title = "Perfil do WhatsApp",
+}: {
+  /**
+   * Empresa e canal institucional expõem o mesmo perfil em rotas distintas, e o
+   * formulário é idêntico — só muda de onde os dados vêm.
+   */
+  basePath?: string;
+  title?: string;
+} = {}) {
   const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -65,8 +75,8 @@ export function WhatsAppProfileSettings() {
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const { data: profile, isLoading, isError } = useQuery({
-    queryKey: ["whatsapp-profile"],
-    queryFn: async () => (await api.get<WhatsAppProfile>("/messaging/channel/whatsapp/profile")).data,
+    queryKey: ["whatsapp-profile", basePath],
+    queryFn: async () => (await api.get<WhatsAppProfile>(`${basePath}/profile`)).data,
     // O endpoint recusa quando o canal não está conectado por um BSP que
     // gerencie o perfil; nesse caso a seção simplesmente não aparece.
     retry: false,
@@ -85,7 +95,7 @@ export function WhatsAppProfileSettings() {
     });
   }, [profile]);
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["whatsapp-profile"] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["whatsapp-profile", basePath] });
 
   const save = useMutation({
     mutationFn: async () => {
@@ -94,7 +104,7 @@ export function WhatsAppProfileSettings() {
       const payload = Object.fromEntries(
         Object.entries(form).filter(([, value]) => value.trim().length > 0),
       );
-      return (await api.patch<WhatsAppProfile>("/messaging/channel/whatsapp/profile", payload)).data;
+      return (await api.patch<WhatsAppProfile>(`${basePath}/profile`, payload)).data;
     },
     onSuccess: () => {
       setError(null);
@@ -111,7 +121,7 @@ export function WhatsAppProfileSettings() {
     mutationFn: async (file: File) => {
       const body = new FormData();
       body.append("file", file);
-      return (await api.post<WhatsAppProfile>("/messaging/channel/whatsapp/profile/photo", body)).data;
+      return (await api.post<WhatsAppProfile>(`${basePath}/profile/photo`, body)).data;
     },
     onSuccess: () => {
       setError(null);
@@ -138,7 +148,7 @@ export function WhatsAppProfileSettings() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Perfil do WhatsApp</CardTitle>
+        <CardTitle>{title}</CardTitle>
       </CardHeader>
 
       <CardContent className="space-y-5">

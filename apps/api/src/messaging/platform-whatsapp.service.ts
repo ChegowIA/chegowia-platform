@@ -28,6 +28,7 @@ import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
+import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 
 const PLATFORM_CHANNEL_KEY = "chegowia-institucional";
 const MAX_WHATSAPP_TEXT_LENGTH = 4096;
@@ -207,6 +208,80 @@ export class PlatformWhatsAppService {
       }
       throw error;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Perfil comercial do número institucional
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Perfil que o interessado vê ao abrir a conversa com a ChegowIA. Com o número
+   * fora do aplicativo WhatsApp Business, este painel é o único lugar onde foto,
+   * descrição e contatos podem ser editados.
+   */
+  async getProfile() {
+    const { channel, appToken } = await this.gupshupChannelWithToken();
+    const [profile, photoUrl] = await Promise.all([
+      this.gupshup.getBusinessProfile({ appId: channel.gupshupAppId, appToken }),
+      this.gupshup.getProfilePhotoUrl({ appId: channel.gupshupAppId, appToken }).catch(() => null),
+    ]);
+    return {
+      ...profile,
+      profilePictureUrl: photoUrl,
+      displayName: channel.metaVerifiedName ?? channel.gupshupAppName ?? null,
+      number: channelNumber(channel),
+    };
+  }
+
+  async updateProfile(dto: UpdateWhatsAppProfileDto) {
+    const { channel, appToken } = await this.gupshupChannelWithToken();
+    await this.gupshup.updateBusinessProfile({ appId: channel.gupshupAppId, appToken, profile: dto });
+    return this.getProfile();
+  }
+
+  async updateProfilePhoto(file: { buffer: Buffer; mimeType: string; fileName: string }) {
+    const { channel, appToken } = await this.gupshupChannelWithToken();
+    await this.gupshup.updateProfilePhoto({ appId: channel.gupshupAppId, appToken, file });
+    return this.getProfile();
+  }
+
+  /**
+   * O perfil só é editável por aqui quando o número está no ar por um BSP que o
+   * gerencie. Canais Meta continuam sendo editados no Business Manager, que é
+   * onde a credencial deles vive.
+   */
+  private async gupshupChannelWithToken() {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({
+      where: { key: PLATFORM_CHANNEL_KEY },
+    });
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP || !channel.gupshupAppId) {
+      throw new BadRequestException(
+        "O perfil do WhatsApp só pode ser editado aqui quando o número está conectado pelo Gupshup.",
+      );
+    }
+    return { channel, appToken: await this.gupshupAppTokenFor(channel) };
+  }
+
+  /**
+   * No self-serve a autenticação é a apikey da conta, resolvida no provider — não
+   * existe token por aplicativo. No partner o token vale 24h e é renovado sob
+   * demanda, guardado cifrado para não custar uma ida à Partner API por chamada.
+   */
+  private async gupshupAppTokenFor(channel: any): Promise<string> {
+    if (this.gupshup.mode() === "SELF_SERVE") return "";
+    const expiresAt = channel.gupshupAppTokenExpiresAt as Date | null;
+    if (channel.gupshupAppTokenEncrypted && expiresAt && expiresAt.getTime() > Date.now()) {
+      return this.secrets.decrypt(channel.gupshupAppTokenEncrypted);
+    }
+    const renewed = await this.gupshup.fetchAppToken(channel.gupshupAppId);
+    await this.db().platformWhatsAppChannel.update({
+      where: { id: channel.id },
+      data: {
+        gupshupAppTokenEncrypted: this.secrets.encrypt(renewed.token),
+        gupshupAppTokenExpiresAt: renewed.expiresAt,
+      },
+    });
+    return renewed.token;
   }
 
   async updateAutomation(dto: UpdatePlatformWhatsAppAutomationDto) {
