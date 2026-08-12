@@ -29,7 +29,7 @@ export function SuperAdminShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app-shell flex min-h-screen bg-[#f6f7f9] text-slate-950 dark:bg-[#080d18] dark:text-slate-100">
-      <aside className="hidden w-64 shrink-0 bg-slate-950 text-white md:flex md:flex-col">
+      <aside className="sticky top-0 hidden h-dvh self-start w-64 shrink-0 overflow-y-auto bg-slate-950 text-white md:flex md:flex-col">
         <div className="px-4 py-5">
           <Link href="/super-admin/dashboard" className="inline-flex">
             <BrandLogo light className="h-9 w-40" />

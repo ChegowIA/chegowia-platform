@@ -24,7 +24,7 @@ export function ResellerShell({ children }: { children: React.ReactNode }) {
   const logout = useLogout();
   return (
     <div className="app-shell flex min-h-screen bg-[#f5f6f8] text-slate-950 dark:bg-[#080d18] dark:text-slate-100">
-      <aside className="hidden w-64 shrink-0 flex-col bg-slate-950 text-white md:flex">
+      <aside className="sticky top-0 hidden h-dvh self-start w-64 shrink-0 flex-col overflow-y-auto bg-slate-950 text-white md:flex">
         <div className="p-4 pt-5">
           <Link href="/revendedor/dashboard" className="inline-flex"><BrandLogo light className="h-9 w-40" /></Link>
           <div className="mt-5 rounded-2xl border border-white/10 bg-white/[.05] p-3">
