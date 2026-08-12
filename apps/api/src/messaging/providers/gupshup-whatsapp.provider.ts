@@ -235,7 +235,7 @@ export class GupshupWhatsAppProvider {
       body: new URLSearchParams({
         channel: "whatsapp",
         source: normalizePhone(params.source),
-        destination: normalizePhone(params.to),
+        destination: brazilianMobileDestination(normalizePhone(params.to)),
         "src.name": params.appName,
         message: JSON.stringify(message),
       }).toString(),
@@ -484,4 +484,23 @@ function readString(value: unknown): string | null {
 
 function normalizePhone(value: string) {
   return value.replace(/\D/g, "");
+}
+
+/**
+ * Devolve o celular brasileiro na forma que o WhatsApp usa hoje: com o nono
+ * dígito.
+ *
+ * O webhook entrega o `wa_id` de números brasileiros antigos sem esse 9. A API
+ * da Meta aceita a forma legada e resolve internamente; a v1 do Gupshup aceita,
+ * responde `submitted` e a mensagem nunca é entregue — falha silenciosa que só
+ * aparece como ausência de mensagem no celular do destinatário.
+ *
+ * A conversão é restrita à faixa de celular (local começando em 6–9). Fixos
+ * brasileiros também têm oito dígitos, mas começam em 2–5, e inserir o 9 neles
+ * produziria um número inexistente.
+ */
+export function brazilianMobileDestination(phone: string) {
+  const legacyMobile = /^55(\d{2})([6-9]\d{7})$/.exec(phone);
+  if (!legacyMobile) return phone;
+  return `55${legacyMobile[1]}9${legacyMobile[2]}`;
 }
