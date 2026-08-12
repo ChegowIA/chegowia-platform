@@ -5,7 +5,7 @@ import { RegisterCustomerDto } from "../src/auth/dto/register-customer.dto";
 import { LoginDto } from "../src/auth/dto/login.dto";
 import { validationMessages } from "../src/common/validation/validation-errors";
 import { UpdateDeliveryStatusDto } from "../src/deliveries/dto/update-delivery-status.dto";
-import { CompleteWhatsAppEmbeddedSignupDto } from "../src/messaging/dto/complete-whatsapp-embedded-signup.dto";
+import { ConnectWhatsAppGupshupDto } from "../src/messaging/dto/connect-whatsapp-gupshup.dto";
 
 describe("DTOs críticos", () => {
   it("exige motivo ao marcar uma entrega como problema", async () => {
@@ -57,25 +57,21 @@ describe("DTOs críticos", () => {
     expect(validationMessages(errors).join(" ")).not.toMatch(/must|invalid|required/i);
   });
 
-  it("aceita somente eventos de conclusão no vínculo automático do WhatsApp", async () => {
-    const valid = plainToInstance(CompleteWhatsAppEmbeddedSignupDto, {
-      code: "codigo-temporario-da-meta",
-      phoneNumberId: "123456789012345",
-      businessAccountId: "987654321098765",
-      event: "FINISH",
-    });
+  it("recusa nome de aplicativo do Gupshup com caractere fora do permitido", async () => {
+    // O nome vai na URL do callback e identifica o canal: aceitar espaço ou
+    // acento produziria vínculo que o webhook nunca encontra.
+    const valid = plainToInstance(ConnectWhatsAppGupshupDto, { appName: "chegowia_empresa-1" });
     expect(await validate(valid)).toHaveLength(0);
 
-    const coexistence = plainToInstance(CompleteWhatsAppEmbeddedSignupDto, {
-      ...valid,
-      event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
-    });
-    expect(await validate(coexistence)).toHaveLength(0);
+    const invalid = plainToInstance(ConnectWhatsAppGupshupDto, { appName: "chegowia empresa" });
+    expect((await validate(invalid)).some((error) => error.property === "appName")).toBe(true);
+  });
 
-    const invalid = plainToInstance(CompleteWhatsAppEmbeddedSignupDto, {
-      ...valid,
-      event: "CANCEL",
+  it("exige protocolo no link de cadastro do cliente", async () => {
+    const dto = plainToInstance(ConnectWhatsAppGupshupDto, {
+      appName: "chegowia1",
+      signupLink: "chegowia.com.br/cadastro",
     });
-    expect((await validate(invalid)).some((error) => error.property === "event")).toBe(true);
+    expect((await validate(dto)).some((error) => error.property === "signupLink")).toBe(true);
   });
 });

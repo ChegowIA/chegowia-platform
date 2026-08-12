@@ -14,7 +14,7 @@ import { formatDateTime } from "@/lib/format";
 import { connectSocket } from "@/lib/socket-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardActions, CardContent } from "@/components/ui/card";
-import { FormField, Input, Textarea } from "@/components/ui/input";
+import { FormField, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PlatformGupshupLink } from "@/components/messaging/platform-gupshup-link";
 import { WhatsAppProfileSettings } from "@/components/messaging/whatsapp-profile-settings";
@@ -28,11 +28,6 @@ type PlatformChannel = {
   salesInstructions: string | null;
   connected: boolean;
   integration: {
-    phoneNumberId: string | null;
-    businessAccountId: string | null;
-    displayPhoneNumber: string | null;
-    verifiedName: string | null;
-    qualityRating: string | null;
     connectedAt?: string | null;
     lastWebhookAt?: string | null;
     lastError?: string | null;
@@ -66,10 +61,7 @@ type PlatformMessage = {
 type PlatformConversationDetail = PlatformConversation & {
   channel: {
     status: "ATIVO" | "INATIVO";
-    metaDisplayPhoneNumber: string | null;
-    metaVerifiedName: string | null;
     automationEnabled: boolean;
-    metaQualityRating: string | null;
   };
   messages: PlatformMessage[];
 };
@@ -84,7 +76,6 @@ const STATUS_LABEL: Record<WhatsAppConversationStatus, string> = {
   [WhatsAppConversationStatus.ENCERRADA]: "Encerrada",
 };
 
-const EMPTY_CONNECTION = { phoneNumberId: "", businessAccountId: "", accessToken: "" };
 const EMPTY_AUTOMATION = {
   automationEnabled: true,
   welcomeMessage: "",
@@ -95,7 +86,6 @@ export default function SuperAdminAtendimentoPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [connectionOpen, setConnectionOpen] = useState(true);
-  const [connectionForm, setConnectionForm] = useState(EMPTY_CONNECTION);
   const [automationForm, setAutomationForm] = useState(EMPTY_AUTOMATION);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -119,13 +109,6 @@ export default function SuperAdminAtendimentoPage() {
 
   useEffect(() => {
     if (!channel) return;
-    setConnectionForm((current) => ({
-      phoneNumberId: current.phoneNumberId || channel.integration.phoneNumberId || "",
-      businessAccountId: current.businessAccountId || channel.integration.businessAccountId || "",
-      // A API nunca devolve a credencial. Mesmo com o canal conectado, ela
-      // permanece vazia até o superadmin decidir trocar o número/token.
-      accessToken: "",
-    }));
     setAutomationForm({
       automationEnabled: channel.automationEnabled,
       welcomeMessage: channel.welcomeMessage || "",
@@ -178,34 +161,6 @@ export default function SuperAdminAtendimentoPage() {
     queryClient.invalidateQueries({ queryKey: ["platform-whatsapp-conversations"] });
     queryClient.invalidateQueries({ queryKey: ["platform-whatsapp-conversation", selectedId] });
   };
-
-  const connect = useMutation({
-    mutationFn: async () => {
-      const payload = {
-        phoneNumberId: connectionForm.phoneNumberId.trim(),
-        businessAccountId: connectionForm.businessAccountId.trim(),
-        accessToken: connectionForm.accessToken.trim(),
-        automationEnabled: automationForm.automationEnabled,
-        welcomeMessage: automationForm.welcomeMessage.trim(),
-        salesInstructions: automationForm.salesInstructions.trim(),
-      };
-      if (!payload.phoneNumberId || !payload.businessAccountId || !payload.accessToken) {
-        throw new Error("Informe o Phone Number ID, a conta WhatsApp Business e o token de sistema da Meta.");
-      }
-      return (await api.put<PlatformChannel>("/platform/whatsapp/channel", payload)).data;
-    },
-    onSuccess: (saved) => {
-      setError(null);
-      setConnectionForm({
-        phoneNumberId: saved.integration.phoneNumberId || "",
-        businessAccountId: saved.integration.businessAccountId || "",
-        accessToken: "",
-      });
-      setConnectionOpen(false);
-      refreshChannel();
-    },
-    onError: (cause) => setError(cause instanceof Error ? cause.message : apiErrorMessage(cause)),
-  });
 
   const saveAutomation = useMutation({
     mutationFn: async () => (await api.patch<PlatformChannel>("/platform/whatsapp/automation", {
@@ -298,33 +253,6 @@ export default function SuperAdminAtendimentoPage() {
         title="Perfil do WhatsApp institucional"
       />
 
-      {connectionOpen && (
-        <Card className="overflow-hidden">
-          <div className="border-b border-slate-100 bg-emerald-50/80 px-5 py-4 dark:border-slate-800 dark:bg-emerald-950/20">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">Conexão segura da Meta</p>
-            <h2 className="mt-1 text-xl font-black text-slate-950 dark:text-slate-100">Cadastre o WhatsApp institucional</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">Use um Phone Number ID que não esteja vinculado a qualquer empresa cliente. A credencial é validada na Meta, cifrada no servidor e nunca volta para o navegador depois de salva.</p>
-          </div>
-          <CardContent className="grid gap-4 pt-5 lg:grid-cols-2">
-            <FormField label="Phone Number ID da Meta">
-              <Input inputMode="numeric" placeholder="Ex.: 123456789012345" value={connectionForm.phoneNumberId} onChange={(event) => setConnectionForm((form) => ({ ...form, phoneNumberId: event.target.value.replace(/\D/g, "") }))} />
-            </FormField>
-            <FormField label="WhatsApp Business Account ID">
-              <Input inputMode="numeric" placeholder="Ex.: 123456789012345" value={connectionForm.businessAccountId} onChange={(event) => setConnectionForm((form) => ({ ...form, businessAccountId: event.target.value.replace(/\D/g, "") }))} />
-            </FormField>
-            <div className="lg:col-span-2">
-              <FormField label="Token de sistema/permanente da Meta">
-                <Input type="password" autoComplete="new-password" placeholder={channel?.connected ? "Deixe vazio se não quiser trocar o token" : "Cole o token gerado na Meta"} value={connectionForm.accessToken} onChange={(event) => setConnectionForm((form) => ({ ...form, accessToken: event.target.value }))} />
-              </FormField>
-              <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Não cole App Secret aqui. Este campo aceita somente o token do número/usuário de sistema com acesso ao WhatsApp Business.</p>
-            </div>
-          </CardContent>
-          <CardActions description="Ao salvar, a ChegowIA confirma o ativo na Meta, assina os webhooks da conta e impede que o mesmo número seja reutilizado em um painel de empresa.">
-            <Button type="button" isLoading={connect.isPending} onClick={() => connect.mutate()}>{channel?.connected ? "Validar e atualizar conexão" : "Conectar número institucional"}</Button>
-          </CardActions>
-        </Card>
-      )}
-
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="overflow-hidden">
           <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
@@ -353,7 +281,7 @@ export default function SuperAdminAtendimentoPage() {
           <CardContent className="space-y-5 p-5">
             <div><p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-300">Visão comercial</p><p className="mt-1 text-xl font-black">O que a IA já sabe responder</p></div>
             <ul className="space-y-3 text-sm leading-6 text-slate-300"><li className="flex gap-2"><span className="text-emerald-300">✓</span><span>Como pedidos, cardápio, mesas, delivery, equipe, relatórios e atendimento por WhatsApp se conectam.</span></li><li className="flex gap-2"><span className="text-emerald-300">✓</span><span>O plano atual, teste gratuito de 7 dias e o caminho de contratação.</span></li><li className="flex gap-2"><span className="text-emerald-300">✓</span><span>Que IA e WhatsApp são cobrados por consumo real, separados da mensalidade.</span></li><li className="flex gap-2"><span className="text-emerald-300">✓</span><span>Quando transferir para uma pessoa da equipe sem continuar pressionando a venda.</span></li></ul>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4"><p className="text-[11px] font-black uppercase tracking-wide text-slate-400">Canal conectado</p><p className="mt-1 break-all text-sm font-black text-white">{channel?.integration.displayPhoneNumber || channel?.number || "Aguardando cadastro"}</p><p className="mt-1 text-xs text-slate-400">{channel?.integration.verifiedName || "Nome comercial será confirmado pela Meta"}</p>{channel?.integration.lastWebhookAt && <p className="mt-3 text-xs text-emerald-200">Webhook recebido: {formatDateTime(channel.integration.lastWebhookAt)}</p>}{channel?.integration.lastError && <p className="mt-3 text-xs leading-5 text-rose-200">Última falha: {channel.integration.lastError}</p>}</div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-4"><p className="text-[11px] font-black uppercase tracking-wide text-slate-400">Canal conectado</p><p className="mt-1 break-all text-sm font-black text-white">{channel?.number || "Aguardando cadastro"}</p><p className="mt-1 text-xs text-slate-400">{channel?.connected ? "Conectado pelo Gupshup" : "Nome comercial é confirmado no cadastro"}</p>{channel?.integration.lastWebhookAt && <p className="mt-3 text-xs text-emerald-200">Webhook recebido: {formatDateTime(channel.integration.lastWebhookAt)}</p>}{channel?.integration.lastError && <p className="mt-3 text-xs leading-5 text-rose-200">Última falha: {channel.integration.lastError}</p>}</div>
           </CardContent>
         </Card>
       </section>
@@ -400,7 +328,7 @@ function ConversationList({ conversations, selectedId, loading, onSelect }: { co
 
 function ConversationHeader({ conversation, pending, clearing, onSetMode, onSetStatus, onClear }: { conversation?: PlatformConversationDetail; pending: boolean; clearing: boolean; onSetMode: (mode: WhatsAppConversationMode) => void; onSetStatus: (status: WhatsAppConversationStatus) => void; onClear: () => void }) {
   if (!conversation) return <div className="h-20 shrink-0 animate-pulse bg-slate-100 dark:bg-slate-800" />;
-  return <div className="shrink-0 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-lg font-black text-slate-900 dark:text-slate-100">{conversation.customerName || formatPhone(conversation.customerPhone)}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatPhone(conversation.customerPhone)} · {conversation.channel?.metaDisplayPhoneNumber || "WhatsApp ChegowIA"}</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.VIRTUAL ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.VIRTUAL)}>IA</Button><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.HUMANO ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.HUMANO)}>Humano</Button><Button size="sm" variant="outline" disabled={pending || clearing} onClick={() => onSetStatus(conversation.status === WhatsAppConversationStatus.ABERTA ? WhatsAppConversationStatus.ENCERRADA : WhatsAppConversationStatus.ABERTA)}>{conversation.status === WhatsAppConversationStatus.ABERTA ? "Encerrar" : "Reabrir"}</Button><Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onClear}>Limpar</Button></div></div><div className="mt-3 flex flex-wrap gap-2"><span className={clsx("rounded-full px-2.5 py-1 text-xs font-bold", conversation.mode === WhatsAppConversationMode.HUMANO ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" : "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300")}>{MODE_LABEL[conversation.mode]}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-400">{STATUS_LABEL[conversation.status]}</span></div></div>;
+  return <div className="shrink-0 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-lg font-black text-slate-900 dark:text-slate-100">{conversation.customerName || formatPhone(conversation.customerPhone)}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatPhone(conversation.customerPhone)} · WhatsApp ChegowIA</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.VIRTUAL ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.VIRTUAL)}>IA</Button><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.HUMANO ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.HUMANO)}>Humano</Button><Button size="sm" variant="outline" disabled={pending || clearing} onClick={() => onSetStatus(conversation.status === WhatsAppConversationStatus.ABERTA ? WhatsAppConversationStatus.ENCERRADA : WhatsAppConversationStatus.ABERTA)}>{conversation.status === WhatsAppConversationStatus.ABERTA ? "Encerrar" : "Reabrir"}</Button><Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onClear}>Limpar</Button></div></div><div className="mt-3 flex flex-wrap gap-2"><span className={clsx("rounded-full px-2.5 py-1 text-xs font-bold", conversation.mode === WhatsAppConversationMode.HUMANO ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" : "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300")}>{MODE_LABEL[conversation.mode]}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-400">{STATUS_LABEL[conversation.status]}</span></div></div>;
 }
 
 function ChatMessage({ message }: { message: PlatformMessage }) {
@@ -413,7 +341,7 @@ function AssistantContext({ conversation, channel }: { conversation?: PlatformCo
 }
 
 function EmptyConversation({ connected, onConfigure }: { connected: boolean; onConfigure: () => void }) {
-  return <CardContent className="grid h-full min-h-[620px] place-items-center p-8 text-center xl:min-h-0"><div className="max-w-sm"><p className="text-xl font-black text-slate-900 dark:text-slate-100">{connected ? "Aguardando um novo interessado" : "Cadastre o WhatsApp da ChegowIA"}</p><p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{connected ? "As mensagens recebidas pelo número institucional surgirão ao vivo nesta central." : "Conecte um Phone Number ID próprio da plataforma. Ele não pode ser compartilhado com uma empresa cliente."}</p><Button type="button" className="mt-5" onClick={onConfigure}>{connected ? "Ver configuração" : "Cadastrar número"}</Button></div></CardContent>;
+  return <CardContent className="grid h-full min-h-[620px] place-items-center p-8 text-center xl:min-h-0"><div className="max-w-sm"><p className="text-xl font-black text-slate-900 dark:text-slate-100">{connected ? "Aguardando um novo interessado" : "Cadastre o WhatsApp da ChegowIA"}</p><p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{connected ? "As mensagens recebidas pelo número institucional surgirão ao vivo nesta central." : "Vincule o aplicativo do Gupshup da plataforma. Ele não pode ser compartilhado com uma empresa cliente."}</p><Button type="button" className="mt-5" onClick={onConfigure}>{connected ? "Ver configuração" : "Cadastrar número"}</Button></div></CardContent>;
 }
 
 function Info({ label, value }: { label: string; value: string }) {

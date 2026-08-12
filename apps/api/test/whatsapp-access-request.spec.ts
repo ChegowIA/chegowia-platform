@@ -24,7 +24,6 @@ describe("pedido de acesso ao WhatsApp", () => {
       prisma as never,
       {} as never,
       {} as never,
-      {} as never,
       { isConfigured: jest.fn().mockReturnValue(true) } as never,
       mail as never,
       {} as never,
@@ -70,7 +69,7 @@ describe("pedido de acesso ao WhatsApp", () => {
 
     // Para o empresário o pedido foi feito; o registro no banco é o que importa.
     await expect(service.requestWhatsappAccess("empresa-1")).resolves.toEqual(
-      expect.objectContaining({ provider: "GUPSHUP" }),
+      expect.objectContaining({ connected: false }),
     );
   });
 
@@ -81,7 +80,7 @@ describe("pedido de acesso ao WhatsApp", () => {
     });
 
     await expect(service.requestWhatsappAccess("empresa-1")).resolves.toEqual(
-      expect.objectContaining({ provider: "GUPSHUP" }),
+      expect.objectContaining({ connected: false }),
     );
   });
 });

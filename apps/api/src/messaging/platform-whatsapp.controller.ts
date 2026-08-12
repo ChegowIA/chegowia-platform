@@ -5,7 +5,6 @@ import { Throttle } from "@nestjs/throttler";
 import { Role } from "@prisma/client";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
-import { ConnectPlatformWhatsAppCloudDto } from "./dto/connect-platform-whatsapp-cloud.dto";
 import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { SendWhatsAppMessageDto } from "./dto/send-whatsapp-message.dto";
@@ -29,12 +28,6 @@ export class PlatformWhatsAppController {
   @Get("channel")
   channel() {
     return this.platformWhatsApp.getChannel();
-  }
-
-  @Put("channel")
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  connect(@Body() dto: ConnectPlatformWhatsAppCloudDto) {
-    return this.platformWhatsApp.connectCloud(dto);
   }
 
   /** Vínculo manual do modo self-serve do Gupshup para o número institucional. */

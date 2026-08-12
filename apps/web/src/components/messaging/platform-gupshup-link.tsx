@@ -11,7 +11,6 @@ import { GupshupCallbackUrls } from "@/components/messaging/gupshup-callback-url
 
 type PlatformChannelGupshup = {
   connected: boolean;
-  provider: "META" | "GUPSHUP";
   number?: string | null;
   gupshup: { appId?: string | null; appName?: string | null; signupLink?: string | null };
 };
@@ -77,13 +76,11 @@ export function PlatformGupshupLink() {
 
   if (!config?.enabled) return null;
 
-  const usingGupshup = channel?.provider === "GUPSHUP";
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>WhatsApp institucional pelo Gupshup</CardTitle>
-        {usingGupshup && channel?.connected ? (
+        {channel?.connected ? (
           <Badge tone="success">Conectado</Badge>
         ) : (
           <Badge tone="warning">Pendente</Badge>

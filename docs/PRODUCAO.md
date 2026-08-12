@@ -100,62 +100,71 @@ autenticação R$ 0,0350, marketing R$ 0,3217 por mensagem entregue. O DeepSeek 
 convertido pela PTAX de venda 5,0773. Revise as taxas antes de ativar cobrança live
 quando houver mudança de câmbio, modelo, país destinatário ou faixa de volume Meta.
 
-## 5. WhatsApp Cloud API (Meta)
+## 5. WhatsApp pelo Gupshup
 
-Esta é uma configuração **única da ChegowIA**. Depois dela, cada empresário faz o
-próprio vínculo pelo botão **Conectar e manter meu WhatsApp** no painel; ele não
-recebe IDs, token, webhook ou PIN técnico. O painel solicita o fluxo de coexistência
-da Meta, para o número continuar ativo no WhatsApp Business App e também atender pela
-Cloud API.
+O canal de WhatsApp é atendido pelo Gupshup, que é o BSP homologado pela Meta. A
+plataforma não fala com a Cloud API da Meta diretamente: quem responde à Meta
+pelo aplicativo é o Gupshup, o que dispensa App Review próprio da ChegowIA.
 
-1. No App Meta da plataforma, adicione o produto **WhatsApp** e **Facebook Login for
-   Business**. Crie uma configuração do tipo **WhatsApp Embedded Signup** e guarde o
-   `Configuration ID`. Nos domínios/redirecionamentos permitidos do Facebook Login for
-   Business, inclua `https://chegowia.com.br` e
-   `https://chegowia.com.br/painel/configuracoes` (ou o domínio/rota equivalentes do
-   ambiente publicado).
+**Consequência que precisa estar clara para o cliente:** o número conectado sai
+do aplicativo WhatsApp Business. O Gupshup não oferece coexistência, então o
+atendimento passa a acontecer só pela plataforma.
+
+1. Crie a conta em `gupshup.io` e pegue a **apikey** (nível da conta, não do app).
 2. Defina no ambiente:
 
    ```text
-   WHATSAPP_CLOUD_API_ENABLED=true
-   META_EMBEDDED_SIGNUP_ENABLED=true
-   META_APP_ID=<app-id-meta>
-   META_EMBEDDED_SIGNUP_CONFIG_ID=<configuration-id-do-embedded-signup>
-   API_PUBLIC_URL=https://SEU_DOMINIO
-   META_APP_SECRET=<app-secret>
-   WHATSAPP_WEBHOOK_VERIFY_TOKEN=<segredo-aleatorio-com-16+-caracteres>
+   GUPSHUP_ENABLED=true
+   GUPSHUP_MODE=SELF_SERVE
+   GUPSHUP_API_KEY=<apikey da conta>
+   GUPSHUP_WEBHOOK_TOKEN=<openssl rand -hex 32>
    WHATSAPP_TOKEN_ENCRYPTION_KEY=<openssl rand -base64 32>
+   API_PUBLIC_URL=https://SEU_DOMINIO
    ```
 
-   No `compose.production.yml` deste projeto, `API_PUBLIC_URL=https://chegowia.com.br`
-   pode ser o mesmo domínio do front-end: o Caddy encaminha `/api/*` para a API Nest.
+   `GUPSHUP_WEBHOOK_TOKEN` viaja na URL do callback e é a única prova de origem —
+   o Gupshup não assina o corpo como a Meta fazia. Trocá-lo exige atualizar a URL
+   no painel deles no mesmo momento, senão o callback passa a responder 401.
 
-3. No dashboard Meta, cadastre:
+   `WHATSAPP_TOKEN_ENCRYPTION_KEY` cifra o token de cada aplicativo em repouso.
+   Trocar essa chave torna ilegíveis os canais já conectados: só reconectando.
 
-   ```text
-   https://SEU_DOMINIO/api/messaging/webhooks/meta
-   ```
+3. **Ative o alerta de saldo baixo** na carteira do Gupshup. Todos os clientes
+   consomem a mesma carteira, e saldo negativo faz o Gupshup aceitar a mensagem
+   (`status: submitted`) sem entregá-la — falha silenciosa que derruba todos os
+   números ao mesmo tempo.
 
-   Use o mesmo verify token do ambiente e assine o campo `messages`.
-4. Antes de liberar a função aos clientes, conclua a revisão/Advanced Access da Meta
-   para `business_management`, `whatsapp_business_management` e
-   `whatsapp_business_messaging`. A Meta posiciona o Embedded Signup para Solution
-   Partners, Tech Providers ou Tech Partners; confirme/obtenha esse enquadramento para
-   a ChegowIA antes de abrir o botão a terceiros. Para cobrar o uso WhatsApp pela
-   ChegowIA, confirme também com a Meta se
-   a conta usa crédito compartilhado de Solution Partner/BSP; se cada WABA pagar a
-   Meta diretamente, não cobre o mesmo valor outra vez no Stripe.
-5. No painel da empresa, faça um teste real do botão **Conectar e manter meu
-   WhatsApp** com uma conta Meta Business de teste que já use o WhatsApp Business
-   App. O servidor troca o código temporário por token, confirma a posse do
-   WABA/número, não registra novamente números em coexistência e assina o app nos
-   eventos. A Meta determina quais números são elegíveis; não use a conexão manual
-   para tentar manter o app.
-6. Envie mensagens de teste para validar os botões de escolha IA/humano, a entrega de
-   webhook, o inbox, a troca de modo e a linha de consumo da empresa correta.
+### Conectar cada empresa (modo self-serve)
 
-O endpoint recusa assinaturas `X-Hub-Signature-256` inválidas. O número Meta é único
-na base, evitando que um webhook seja associado à empresa errada.
+No self-serve não há API para criar aplicativo por cliente, então o passo é
+manual e o pedido do empresário é o gatilho.
+
+1. A empresa clica em **Solicitar acesso ao WhatsApp** no painel dela. Isso avisa
+   a equipe por e-mail (`OPS_ALERT_EMAIL`) e em tempo real no super-admin.
+2. No painel do Gupshup, crie um app do tipo **Access API** com nome único, sem
+   espaço nem acento.
+3. Na aba **Webhooks** do app, cole a URL de callback que o card do super-admin
+   exibe. Ela aceita tanto o formato Meta (v3) quanto o nativo do Gupshup.
+4. Inicie o onboarding do número. No passo do Facebook, copie o link de
+   **Direct Facebook Registration** e pare — não conclua você.
+5. Em **Super-admin → Empresas → [empresa]**, preencha nome do aplicativo, App ID
+   e o link de cadastro.
+6. A empresa conclui pelo botão **Conectar meu WhatsApp**, com o Facebook dela.
+   Você nunca acessa a conta do cliente.
+7. Preencha o **número** no card para ativar o canal.
+
+O App ID é obrigatório para editar o perfil do WhatsApp (foto, descrição,
+contatos) pelo painel — sem ele essa seção não aparece.
+
+### Custo por mensagem
+
+O Gupshup cobra a taxa de plataforma dele em **toda** mensagem, inclusive nas
+recebidas e nas de serviço. Medido em produção: USD 0,001 por mensagem. Sobre isso
+vem a tarifa da Meta, que é zero na mensagem de serviço e varia por categoria de
+template. A tabela de `UsageRate` já reflete essa soma.
+
+Atenção ao medir consumo: mensagens **recebidas** consomem carteira mas não são
+faturadas hoje, porque o registro de uso acontece só no envio.
 
 ## 6. Primeira implantação
 

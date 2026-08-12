@@ -350,7 +350,7 @@ export interface MessagingChannel {
   automationEnabled: boolean;
   welcomeMessage?: string | null;
   connected: boolean;
-  provider: "META" | "GUPSHUP";
+  provider: "GUPSHUP";
   gupshup: {
     appId?: string | null;
     appName?: string | null;
@@ -360,22 +360,13 @@ export interface MessagingChannel {
     accessRequestedAt?: string | null;
   };
   integration: {
-    phoneNumberId?: string | null;
-    businessAccountId?: string | null;
-    businessPortfolioId?: string | null;
-    displayPhoneNumber?: string | null;
-    verifiedName?: string | null;
-    qualityRating?: string | null;
     connectedAt?: string | null;
-    accessTokenExpiresAt?: string | null;
-    embeddedSignupAt?: string | null;
     lastWebhookAt?: string | null;
     lastError?: string | null;
   };
   webhook: {
     url: string;
-    verificationConfigured: boolean;
-    signatureConfigured: boolean;
+    tokenConfigured: boolean;
     encryptionConfigured: boolean;
   };
 }

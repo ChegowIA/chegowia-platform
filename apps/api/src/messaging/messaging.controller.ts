@@ -9,9 +9,7 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { RequirePermission } from "../common/decorators/require-permission.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
-import { ConnectWhatsAppCloudDto } from "./dto/connect-whatsapp-cloud.dto";
 import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
-import { CompleteWhatsAppEmbeddedSignupDto } from "./dto/complete-whatsapp-embedded-signup.dto";
 import { SendWhatsAppMessageDto } from "./dto/send-whatsapp-message.dto";
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
@@ -24,29 +22,6 @@ import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 @Controller("messaging")
 export class MessagingController {
   constructor(private readonly messagingService: MessagingService) {}
-
-  // A verificação é feita uma vez ao cadastrar o endpoint na Meta. O token nunca
-  // é retornado; apenas o challenge assinado/validado é devolvido.
-  @Public()
-  @SkipThrottle()
-  @Get("webhooks/meta")
-  verifyMetaWebhook(@Query() query: Record<string, unknown>) {
-    return this.messagingService.verifyWebhookChallenge(query);
-  }
-
-  @Public()
-  @SkipThrottle()
-  @Post("webhooks/meta")
-  receiveMetaWebhook(
-    @Headers("x-hub-signature-256") signature: string | undefined,
-    @Req() request: Request & { rawBody?: Buffer },
-    @Body() payload: unknown,
-  ) {
-    if (!request.rawBody || !this.messagingService.verifyWebhookSignature(request.rawBody, signature)) {
-      throw new UnauthorizedException("Assinatura do webhook inválida.");
-    }
-    return this.messagingService.handleMetaWebhook(payload);
-  }
 
   /**
    * Callback do Gupshup. A autenticação é o segredo que a própria plataforma
@@ -187,34 +162,11 @@ export class MessagingController {
     });
   }
 
-  /** Configuração pública do popup; App Secret e token nunca saem do servidor. */
-  @Roles(Role.ADMIN)
-  @Get("channel/whatsapp/embedded-signup")
-  embeddedSignupConfiguration() {
-    return this.messagingService.embeddedSignupConfiguration();
-  }
-
-  @Roles(Role.ADMIN)
-  @Post("channel/whatsapp/embedded-signup")
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  completeEmbeddedSignup(
-    @CurrentUser("companyId") companyId: string,
-    @Body() dto: CompleteWhatsAppEmbeddedSignupDto,
-  ) {
-    return this.messagingService.completeWhatsAppEmbeddedSignup(companyId, dto);
-  }
-
   /** Compatibilidade para o número usado nos links wa.me existentes. */
   @Roles(Role.ADMIN)
   @Patch("channel/whatsapp")
   setWhatsapp(@CurrentUser("companyId") companyId: string, @Body("number") number: string) {
     return this.messagingService.upsertWhatsappNumber(companyId, number);
-  }
-
-  @Roles(Role.ADMIN)
-  @Put("channel/whatsapp/cloud")
-  connectCloud(@CurrentUser("companyId") companyId: string, @Body() dto: ConnectWhatsAppCloudDto) {
-    return this.messagingService.connectWhatsappCloud(companyId, dto);
   }
 
   @Roles(Role.ADMIN)

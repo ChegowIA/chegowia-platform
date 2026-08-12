@@ -20,13 +20,8 @@ function looksLikePlaceholder(value: string) {
 export function validateEnvironment(config: Record<string, unknown>) {
   const env = { ...config } as Record<string, string | undefined>;
   const production = env.NODE_ENV === "production";
-  const whatsappCloudEnabled = env.WHATSAPP_CLOUD_API_ENABLED === "true";
-  const embeddedSignupEnabled = env.META_EMBEDDED_SIGNUP_ENABLED === "true";
+  const gupshupEnabled = env.GUPSHUP_ENABLED === "true";
   const required = ["DATABASE_URL", "JWT_ACCESS_SECRET", "APP_URL", "CORS_ORIGIN"];
-
-  if (production && embeddedSignupEnabled && !whatsappCloudEnabled) {
-    throw new Error("META_EMBEDDED_SIGNUP_ENABLED exige WHATSAPP_CLOUD_API_ENABLED=true.");
-  }
 
   if (production) {
     required.push(
@@ -49,16 +44,14 @@ export function validateEnvironment(config: Record<string, unknown>) {
       // fiscal fica inutilizável — melhor falhar no boot do que na emissão.
       "FISCAL_ENCRYPTION_KEY",
     );
-    if (whatsappCloudEnabled) {
+    if (gupshupEnabled) {
       required.push(
         "API_PUBLIC_URL",
-        "META_APP_SECRET",
-        "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+        "GUPSHUP_API_KEY",
+        // Autentica o callback: sem ele qualquer um poderia injetar conversa.
+        "GUPSHUP_WEBHOOK_TOKEN",
         "WHATSAPP_TOKEN_ENCRYPTION_KEY",
       );
-    }
-    if (embeddedSignupEnabled) {
-      required.push("META_APP_ID", "META_EMBEDDED_SIGNUP_CONFIG_ID");
     }
   }
 
@@ -173,21 +166,23 @@ export function validateEnvironment(config: Record<string, unknown>) {
       throw new Error("UPLOAD_ROOT e PRIVATE_UPLOAD_ROOT precisam ser caminhos absolutos.");
     }
 
-    if (whatsappCloudEnabled) {
+    if (gupshupEnabled) {
       let apiUrl: URL;
       try {
         apiUrl = new URL(env.API_PUBLIC_URL!);
       } catch {
-        throw new Error("API_PUBLIC_URL precisa ser uma URL HTTPS válida para receber o webhook da Meta.");
+        throw new Error("API_PUBLIC_URL precisa ser uma URL HTTPS válida para receber o callback do Gupshup.");
       }
       if (apiUrl.protocol !== "https:" || apiUrl.username || apiUrl.password) {
         throw new Error("API_PUBLIC_URL precisa usar HTTPS e não pode conter credenciais.");
       }
-      if ((env.META_APP_SECRET ?? "").length < 16 || looksLikePlaceholder(env.META_APP_SECRET ?? "")) {
-        throw new Error("META_APP_SECRET precisa ser o App Secret real da aplicação Meta.");
+      if ((env.GUPSHUP_API_KEY ?? "").length < 16 || looksLikePlaceholder(env.GUPSHUP_API_KEY ?? "")) {
+        throw new Error("GUPSHUP_API_KEY precisa ser a chave real da conta no Gupshup.");
       }
-      if ((env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "").length < 16 || looksLikePlaceholder(env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "")) {
-        throw new Error("WHATSAPP_WEBHOOK_VERIFY_TOKEN precisa ter pelo menos 16 caracteres aleatórios.");
+      // O Gupshup não assina o corpo do callback como a Meta fazia; este segredo
+      // na URL é a única prova de origem, então precisa de entropia real.
+      if ((env.GUPSHUP_WEBHOOK_TOKEN ?? "").length < 16 || looksLikePlaceholder(env.GUPSHUP_WEBHOOK_TOKEN ?? "")) {
+        throw new Error("GUPSHUP_WEBHOOK_TOKEN precisa ter pelo menos 16 caracteres aleatórios.");
       }
       const encryptionKey = env.WHATSAPP_TOKEN_ENCRYPTION_KEY ?? "";
       const decodedKey = /^[a-f0-9]{64}$/i.test(encryptionKey)
@@ -195,14 +190,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
         : Buffer.from(encryptionKey, "base64");
       if (decodedKey.length !== 32) {
         throw new Error("WHATSAPP_TOKEN_ENCRYPTION_KEY deve codificar exatamente 32 bytes.");
-      }
-      if (embeddedSignupEnabled) {
-        if (!/^\d{5,32}$/.test(env.META_APP_ID ?? "")) {
-          throw new Error("META_APP_ID precisa ser o identificador numérico do App Meta.");
-        }
-        if (!/^\d{5,32}$/.test(env.META_EMBEDDED_SIGNUP_CONFIG_ID ?? "")) {
-          throw new Error("META_EMBEDDED_SIGNUP_CONFIG_ID precisa ser o identificador da configuração do Embedded Signup.");
-        }
       }
     }
   }

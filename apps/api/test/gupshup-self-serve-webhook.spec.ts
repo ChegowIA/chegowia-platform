@@ -28,7 +28,6 @@ describe("webhook self-serve do Gupshup", () => {
       {} as never,
       {} as never,
       {} as never,
-      {} as never,
     );
     return { service, prisma };
   }

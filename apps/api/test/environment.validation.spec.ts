@@ -115,23 +115,33 @@ describe("validateEnvironment", () => {
     })).toThrow("diretório separado");
   });
 
-  it("exige a configuração Meta completa ao liberar o cadastro automático", () => {
+  it("exige a configuração completa do Gupshup ao habilitar o WhatsApp", () => {
     expect(() => validateEnvironment({
       ...validProduction,
-      META_EMBEDDED_SIGNUP_ENABLED: "true",
-    })).toThrow("META_EMBEDDED_SIGNUP_ENABLED exige WHATSAPP_CLOUD_API_ENABLED=true");
+      GUPSHUP_ENABLED: "true",
+    })).toThrow(/GUPSHUP_API_KEY|GUPSHUP_WEBHOOK_TOKEN|WHATSAPP_TOKEN_ENCRYPTION_KEY/);
 
-    const metaReady = {
+    const gupshupReady = {
       ...validProduction,
-      WHATSAPP_CLOUD_API_ENABLED: "true",
-      META_EMBEDDED_SIGNUP_ENABLED: "true",
+      GUPSHUP_ENABLED: "true",
       API_PUBLIC_URL: "https://api.chegowia.com.br",
-      META_APP_SECRET: "s".repeat(32),
-      META_APP_ID: "123456789012345",
-      META_EMBEDDED_SIGNUP_CONFIG_ID: "987654321098765",
-      WHATSAPP_WEBHOOK_VERIFY_TOKEN: "t".repeat(24),
+      GUPSHUP_API_KEY: "k".repeat(32),
+      GUPSHUP_WEBHOOK_TOKEN: "t".repeat(64),
       WHATSAPP_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
     };
-    expect(validateEnvironment(metaReady)).toEqual(metaReady);
+    expect(validateEnvironment(gupshupReady)).toEqual(gupshupReady);
+  });
+
+  it("recusa segredo de webhook curto, que é a única prova de origem do callback", () => {
+    // O Gupshup não assina o corpo como a Meta fazia; se este segredo for fraco,
+    // qualquer um consegue injetar conversa no inbox.
+    expect(() => validateEnvironment({
+      ...validProduction,
+      GUPSHUP_ENABLED: "true",
+      API_PUBLIC_URL: "https://api.chegowia.com.br",
+      GUPSHUP_API_KEY: "k".repeat(32),
+      GUPSHUP_WEBHOOK_TOKEN: "curto",
+      WHATSAPP_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
+    })).toThrow("GUPSHUP_WEBHOOK_TOKEN");
   });
 });

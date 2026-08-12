@@ -46,8 +46,8 @@ export type GupshupBusinessProfile = {
  * Cliente da Partner API do Gupshup.
  *
  * O envio e o webhook usam as Passthrough APIs, que reproduzem o formato da
- * Meta — por isso o corpo montado aqui é idêntico ao do MetaWhatsAppProvider e
- * o parser de callback é compartilhado. O que diverge é o transporte: a Partner
+ * Meta — por isso o corpo montado aqui segue o mesmo desenho da Cloud API e o
+ * parser de callback é compartilhado. O que diverge é o transporte: a Partner
  * API recebe form-urlencoded com os objetos aninhados serializados em JSON.
  *
  * Autenticação tem dois níveis: um token de parceiro (conta da plataforma, vale

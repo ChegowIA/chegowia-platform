@@ -99,10 +99,19 @@ async function main() {
     { metric: UsageMetric.IA_TOKENS_ENTRADA, provider: "DeepSeek V4 Flash", label: "IA — entrada sem cache (1M tokens)", unitSize: 1_000_000, providerUnitCost: 0.710822, markupPercent: 200 },
     { metric: UsageMetric.IA_TOKENS_ENTRADA_CACHE, provider: "DeepSeek V4 Flash", label: "IA — entrada com cache (1M tokens)", unitSize: 1_000_000, providerUnitCost: 0.014216, markupPercent: 200 },
     { metric: UsageMetric.IA_TOKENS_SAIDA, provider: "DeepSeek V4 Flash", label: "IA — saída (1M tokens)", unitSize: 1_000_000, providerUnitCost: 1.421644, markupPercent: 200 },
-    { metric: UsageMetric.WHATSAPP_SERVICO, provider: "Meta WhatsApp Brasil", label: "WhatsApp — mensagem de serviço", unitSize: 1, providerUnitCost: 0, markupPercent: 30 },
-    { metric: UsageMetric.WHATSAPP_TEMPLATE_UTILIDADE, provider: "Meta WhatsApp Brasil", label: "WhatsApp — template de utilidade", unitSize: 1, providerUnitCost: 0.035, markupPercent: 30 },
-    { metric: UsageMetric.WHATSAPP_TEMPLATE_MARKETING, provider: "Meta WhatsApp Brasil", label: "WhatsApp — template de marketing", unitSize: 1, providerUnitCost: 0.3217, markupPercent: 30 },
-    { metric: UsageMetric.WHATSAPP_TEMPLATE_AUTENTICACAO, provider: "Meta WhatsApp Brasil", label: "WhatsApp — template de autenticação", unitSize: 1, providerUnitCost: 0.035, markupPercent: 30 },
+    // WhatsApp: o custo é a soma de duas cobranças. O Gupshup cobra a taxa de
+    // plataforma dele em TODA mensagem, inclusive na de serviço e na recebida —
+    // medido na carteira: 14 mensagens consumiram USD 0,014, ou seja USD 0,001
+    // cada, o que dá BRL 0,005077 na PTAX de referência. Em cima disso vem a
+    // tarifa da Meta, que é zero na mensagem de serviço e varia por categoria de
+    // template.
+    //
+    // Antes deste ajuste a mensagem de serviço custava zero na tabela, então a
+    // plataforma pagava o Gupshup e faturava nada em cima do caso mais comum.
+    { metric: UsageMetric.WHATSAPP_SERVICO, provider: "Gupshup + Meta Brasil", label: "WhatsApp — mensagem de serviço", unitSize: 1, providerUnitCost: 0.005077, markupPercent: 30 },
+    { metric: UsageMetric.WHATSAPP_TEMPLATE_UTILIDADE, provider: "Gupshup + Meta Brasil", label: "WhatsApp — template de utilidade", unitSize: 1, providerUnitCost: 0.040077, markupPercent: 30 },
+    { metric: UsageMetric.WHATSAPP_TEMPLATE_MARKETING, provider: "Gupshup + Meta Brasil", label: "WhatsApp — template de marketing", unitSize: 1, providerUnitCost: 0.326777, markupPercent: 30 },
+    { metric: UsageMetric.WHATSAPP_TEMPLATE_AUTENTICACAO, provider: "Gupshup + Meta Brasil", label: "WhatsApp — template de autenticação", unitSize: 1, providerUnitCost: 0.040077, markupPercent: 30 },
   ];
   /**
    * A margem é a receita da plataforma sobre o consumo — sem ela o repasse é

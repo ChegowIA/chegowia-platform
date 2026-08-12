@@ -147,13 +147,15 @@ describe("atribuição de consumo à empresa", () => {
 
   describe("canais sem contexto de tenant", () => {
     it("o WhatsApp resolve a empresa por um identificador único global", () => {
-      // `metaPhoneNumberId` é @unique no schema inteiro, não por empresa: é o
-      // que impede uma mensagem cair na empresa errada num webhook público.
+      // O aplicativo do Gupshup identifica o canal no callback público, por id e
+      // por nome. Ambos são @unique no schema inteiro, não por empresa: é o que
+      // impede uma mensagem cair na empresa errada.
       const schema = readFileSync(join(__dirname, "..", "prisma", "schema.prisma"), "utf8");
       const modelo = schema.slice(schema.indexOf("model MessagingChannel"));
       const bloco = modelo.slice(0, modelo.indexOf("\n}"));
 
-      expect(bloco).toMatch(/metaPhoneNumberId\s+String\?\s+@unique/);
+      expect(bloco).toMatch(/gupshupAppId\s+String\?\s+@unique/);
+      expect(bloco).toMatch(/gupshupAppName\s+String\?\s+@unique/);
     });
 
     it("a conversa do cliente nasce da loja visitada, não de dado enviado por ele", () => {

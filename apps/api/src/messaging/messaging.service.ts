@@ -25,16 +25,13 @@ import { tenantContext } from "../common/tenant/tenant-context";
 import { AiService } from "../ai/ai.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { UsageService } from "../usage/usage.service";
-import { ConnectWhatsAppCloudDto } from "./dto/connect-whatsapp-cloud.dto";
 import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
-import { CompleteWhatsAppEmbeddedSignupDto } from "./dto/complete-whatsapp-embedded-signup.dto";
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MailService } from "../common/mail/mail.service";
 import { formatForWhatsapp } from "./whatsapp-text-format";
-import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-provider.interface";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
@@ -49,7 +46,6 @@ export class MessagingService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     @Inject(MESSAGING_PROVIDER) private readonly provider: MessagingProvider,
-    private readonly meta: MetaWhatsAppProvider,
     private readonly gupshup: GupshupWhatsAppProvider,
     private readonly secrets: MessagingSecretsService,
     private readonly mail: MailService,
@@ -85,152 +81,6 @@ export class MessagingService {
       update: { config: { ...channelConfig(current), number: normalizedNumber } },
     });
     return this.channelSummary(channel);
-  }
-
-  async connectWhatsappCloud(companyId: string, dto: ConnectWhatsAppCloudDto) {
-    this.assertCloudApiEnabled();
-    const accessToken = dto.accessToken.trim();
-    const phoneNumberId = dto.phoneNumberId.trim();
-    const businessAccountId = dto.businessAccountId.trim();
-    if (await this.isInstitutionalPhoneNumber(phoneNumberId)) {
-      throw new ConflictException("Este Phone Number ID está reservado ao canal institucional da ChegowIA.");
-    }
-    const details = await this.meta.getPhoneNumber(phoneNumberId, accessToken);
-    if (details.id !== phoneNumberId) {
-      throw new BadRequestException("O identificador do número retornado pela Meta não confere.");
-    }
-    // A conexão técnica é usada principalmente para número de teste/suporte. Sem
-    // assinar o WABA, o app até consegue enviar, mas não recebe o webhook e não
-    // cria a conversa na Central de atendimento para a demonstração/revisão Meta.
-    await this.meta.subscribeAppToBusinessAccount({ businessAccountId, accessToken });
-
-    return this.saveWhatsappCloudConnection({
-      companyId,
-      phoneNumberId,
-      businessAccountId,
-      accessToken,
-      displayPhoneNumber: details.displayPhoneNumber,
-      verifiedName: details.verifiedName,
-      qualityRating: details.qualityRating,
-      automationEnabled: dto.automationEnabled,
-      welcomeMessage: dto.welcomeMessage,
-      source: "MANUAL",
-    });
-  }
-
-  /**
-   * Informações públicas necessárias para abrir o popup oficial da Meta. Não há
-   * token nem App Secret nesta resposta.
-   */
-  embeddedSignupConfiguration() {
-    const appId = process.env.META_APP_ID?.trim() || null;
-    const configurationId = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID?.trim() || null;
-    const featureEnabled = process.env.META_EMBEDDED_SIGNUP_ENABLED === "true";
-    const cloudEnabled = process.env.WHATSAPP_CLOUD_API_ENABLED === "true";
-    const secretConfigured = Boolean(process.env.META_APP_SECRET?.trim());
-    const enabled = featureEnabled && cloudEnabled && secretConfigured && Boolean(appId && configurationId);
-    return {
-      enabled,
-      appId: enabled ? appId : null,
-      configurationId: enabled ? configurationId : null,
-      graphApiVersion: process.env.META_GRAPH_API_VERSION ?? "v22.0",
-      reason: enabled ? null : "A conexão automática com a Meta ainda está sendo preparada pela plataforma.",
-    };
-  }
-
-  /**
-   * Finaliza o Embedded Signup. O código vindo do popup é de uso único e é
-   * trocado por token somente aqui, depois de validar o WABA e o número na Meta.
-   */
-  async completeWhatsAppEmbeddedSignup(companyId: string, dto: CompleteWhatsAppEmbeddedSignupDto) {
-    const setup = this.embeddedSignupConfiguration();
-    const appSecret = process.env.META_APP_SECRET?.trim();
-    if (!setup.enabled || !setup.appId || !appSecret) {
-      throw new BadRequestException("A conexão automática com a Meta ainda não está disponível.");
-    }
-
-    const phoneNumberId = dto.phoneNumberId.trim();
-    const businessAccountId = dto.businessAccountId.trim();
-    // `metaPhoneNumberId` é globalmente único. A consulta usa bypass apenas para
-    // detectar colisão antes de chamar a Meta; nenhum dado desse outro tenant sai.
-    const existingOwner = await this.globalPhoneNumberOwner(phoneNumberId);
-    if (existingOwner && existingOwner.companyId !== companyId) {
-      throw new ConflictException("Este número da Meta já está vinculado a outra empresa.");
-    }
-    if (await this.isInstitutionalPhoneNumber(phoneNumberId)) {
-      throw new ConflictException("Este Phone Number ID está reservado ao canal institucional da ChegowIA.");
-    }
-
-    try {
-      const credential = await this.meta.exchangeEmbeddedSignupCode({
-        appId: setup.appId,
-        appSecret,
-        code: dto.code.trim(),
-      });
-      const businessPortfolioId = dto.businessPortfolioId?.trim() || null;
-      if (businessPortfolioId) {
-        // Não confiamos apenas no ID entregue ao navegador pela Meta. A API
-        // confirma que a credencial trocada no servidor realmente pode ler o
-        // Business Portfolio escolhido antes de vincular qualquer ativo a este
-        // tenant.
-        const businessPortfolio = await this.meta.getBusinessPortfolio(businessPortfolioId, credential.accessToken);
-        if (businessPortfolio.id !== businessPortfolioId) {
-          throw new BadRequestException("A Meta não confirmou o Business Portfolio escolhido para esta conexão.");
-        }
-      }
-
-      const belongsToBusiness = await this.meta.businessHasPhoneNumber({
-        businessAccountId,
-        phoneNumberId,
-        accessToken: credential.accessToken,
-      });
-      if (!belongsToBusiness) {
-        throw new BadRequestException("A Meta não confirmou que o número escolhido pertence a esta conta do WhatsApp Business.");
-      }
-
-      const details = await this.meta.getPhoneNumber(phoneNumberId, credential.accessToken);
-      if (details.id !== phoneNumberId) {
-        throw new BadRequestException("O identificador do número retornado pela Meta não confere.");
-      }
-
-      // Números novos da Cloud API precisam ser registrados com PIN 2FA. Os fluxos
-      // de coexistência/migração já possuem registro e não devem receber novo PIN.
-      const registrationPin = dto.event === "FINISH" ? String(randomInt(100_000, 1_000_000)) : null;
-      if (registrationPin) {
-        await this.meta.registerPhoneNumber({
-          phoneNumberId,
-          accessToken: credential.accessToken,
-          pin: registrationPin,
-        });
-      }
-      await this.meta.subscribeAppToBusinessAccount({
-        businessAccountId,
-        accessToken: credential.accessToken,
-      });
-
-      const expiresAt = credential.expiresInSeconds
-        ? new Date(Date.now() + credential.expiresInSeconds * 1000)
-        : null;
-      return this.saveWhatsappCloudConnection({
-        companyId,
-        phoneNumberId,
-        businessAccountId,
-        businessPortfolioId,
-        accessToken: credential.accessToken,
-        accessTokenExpiresAt: expiresAt,
-        registrationPin,
-        displayPhoneNumber: details.displayPhoneNumber,
-        verifiedName: details.verifiedName,
-        qualityRating: details.qualityRating,
-        source: "EMBEDDED_SIGNUP",
-      });
-    } catch (error) {
-      if (error instanceof BadRequestException || error instanceof ConflictException) throw error;
-      // Não repassamos detalhes do Graph API ao empresário; eles podem incluir
-      // informações do ativo Meta e não ajudam no caminho guiado.
-      this.logger.warn(`Falha ao concluir Embedded Signup para a empresa ${companyId}.`);
-      throw new BadRequestException("A Meta não conseguiu concluir a conexão agora. Feche a janela e tente novamente.");
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -292,12 +142,6 @@ export class MessagingService {
     const existing = await this.db().messagingChannel.findUnique({
       where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
     });
-    if (existing?.provider === WhatsAppProvider.META && existing.metaPhoneNumberId) {
-      throw new ConflictException(
-        "Esta empresa já está conectada pela Meta. Desconecte o número atual antes de migrar para o Gupshup.",
-      );
-    }
-
     // Reaproveita o app quando o empresário reabre o assistente no meio do
     // caminho; criar outro deixaria um app órfão consumindo cota do parceiro.
     let appId = existing?.provider === WhatsAppProvider.GUPSHUP ? existing.gupshupAppId : null;
@@ -564,7 +408,7 @@ export class MessagingService {
     return {
       ...profile,
       profilePictureUrl: photoUrl,
-      displayName: channel.metaVerifiedName ?? channel.gupshupAppName ?? null,
+      displayName: channel.gupshupAppName ?? null,
       number: channelConfig(channel).number ?? null,
     };
   }
@@ -613,90 +457,6 @@ export class MessagingService {
     return { channel, appToken };
   }
 
-  private assertCloudApiEnabled() {
-    if (process.env.NODE_ENV === "production" && process.env.WHATSAPP_CLOUD_API_ENABLED !== "true") {
-      throw new BadRequestException("A conexão com a WhatsApp Cloud API ainda não está habilitada.");
-    }
-  }
-
-  private globalPhoneNumberOwner(phoneNumberId: string) {
-    return tenantContext.run({ companyId: null, bypass: true }, () => {
-      return this.db().messagingChannel.findUnique({ where: { metaPhoneNumberId: phoneNumberId } });
-    });
-  }
-
-  private async isInstitutionalPhoneNumber(phoneNumberId: string) {
-    return this.platformWhatsApp
-      ? this.platformWhatsApp.isPhoneNumberRegistered(phoneNumberId)
-      : false;
-  }
-
-  private async saveWhatsappCloudConnection(params: {
-    companyId: string;
-    phoneNumberId: string;
-    businessAccountId: string | null;
-    businessPortfolioId?: string | null;
-    accessToken: string;
-    accessTokenExpiresAt?: Date | null;
-    registrationPin?: string | null;
-    displayPhoneNumber?: string | null;
-    verifiedName?: string | null;
-    qualityRating?: string | null;
-    automationEnabled?: boolean;
-    welcomeMessage?: string;
-    source: "MANUAL" | "EMBEDDED_SIGNUP";
-  }) {
-    const current = await this.db().messagingChannel.findUnique({
-      where: { companyId_type: { companyId: params.companyId, type: MessagingChannelType.WHATSAPP } },
-    });
-    const displayNumber = params.displayPhoneNumber ?? channelConfig(current).number ?? null;
-    const commonData = {
-      status: MessagingChannelStatus.ATIVO,
-      config: displayNumber
-        ? { ...channelConfig(current), number: normalizePhone(displayNumber) }
-        : channelConfig(current),
-      metaPhoneNumberId: params.phoneNumberId,
-      metaBusinessAccountId: params.businessAccountId,
-      metaBusinessPortfolioId: params.businessPortfolioId ?? null,
-      metaAccessTokenEncrypted: this.secrets.encrypt(params.accessToken),
-      metaAccessTokenExpiresAt: params.accessTokenExpiresAt ?? null,
-      metaRegistrationPinEncrypted: params.registrationPin ? this.secrets.encrypt(params.registrationPin) : null,
-      metaDisplayPhoneNumber: params.displayPhoneNumber ?? null,
-      metaVerifiedName: params.verifiedName ?? null,
-      metaQualityRating: params.qualityRating ?? null,
-      ...(params.automationEnabled === undefined ? {} : { automationEnabled: params.automationEnabled }),
-      ...(params.welcomeMessage === undefined ? {} : { welcomeMessage: params.welcomeMessage.trim() || null }),
-      ...(params.source === "EMBEDDED_SIGNUP" ? { metaEmbeddedSignupAt: new Date() } : { metaEmbeddedSignupAt: null }),
-      connectedAt: new Date(),
-      lastError: null,
-    };
-    try {
-      const channel = await this.db().messagingChannel.upsert({
-        where: { companyId_type: { companyId: params.companyId, type: MessagingChannelType.WHATSAPP } },
-        create: {
-          companyId: params.companyId,
-          type: MessagingChannelType.WHATSAPP,
-          ...commonData,
-          automationEnabled: params.automationEnabled ?? true,
-          welcomeMessage: params.welcomeMessage?.trim() || null,
-        },
-        update: commonData,
-      });
-      if (displayNumber) {
-        await this.db().company.updateMany({
-          where: { id: params.companyId, whatsapp: null },
-          data: { whatsapp: normalizePhone(displayNumber) },
-        });
-      }
-      return this.channelSummary(channel);
-    } catch (error) {
-      if (isUniqueConstraint(error)) {
-        throw new ConflictException("Este número da Meta já está vinculado a outra empresa.");
-      }
-      throw error;
-    }
-  }
-
   async updateWhatsappAutomation(companyId: string, dto: UpdateWhatsAppAutomationDto) {
     const channel = await this.db().messagingChannel.findUnique({
       where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
@@ -713,41 +473,13 @@ export class MessagingService {
   }
 
   webhookSetup() {
+    const token = process.env.GUPSHUP_WEBHOOK_TOKEN?.trim();
     return {
-      url: `${publicApiUrl()}/api/messaging/webhooks/meta`,
-      verificationConfigured: Boolean(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN),
-      signatureConfigured: Boolean(process.env.META_APP_SECRET),
+      url: `${publicApiUrl()}/api/messaging/webhooks/gupshup`,
+      // O Gupshup não assina o corpo: o segredo na URL é a prova de origem.
+      tokenConfigured: Boolean(token),
       encryptionConfigured: this.secrets.isConfigured(),
     };
-  }
-
-  verifyWebhookChallenge(query: Record<string, unknown>) {
-    const mode = String(query["hub.mode"] ?? "");
-    const verifyToken = String(query["hub.verify_token"] ?? "");
-    const challenge = String(query["hub.challenge"] ?? "");
-    const expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
-    if (!expected || !challenge || mode !== "subscribe" || !safeEqual(verifyToken, expected)) {
-      throw new UnauthorizedException("Verificação do webhook recusada.");
-    }
-    return challenge;
-  }
-
-  verifyWebhookSignature(rawBody: Buffer, signature?: string) {
-    const secret = process.env.META_APP_SECRET;
-    if (!secret || !signature?.startsWith("sha256=")) return false;
-    const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
-    return safeEqual(signature, expected);
-  }
-
-  async handleMetaWebhook(payload: any) {
-    if (payload?.object !== "whatsapp_business_account") return { ignored: true };
-    for (const entry of payload.entry ?? []) {
-      for (const change of entry?.changes ?? []) {
-        if (change?.field !== "messages") continue;
-        await this.handleMetaMessagesChange(change.value ?? {});
-      }
-    }
-    return { received: true };
   }
 
   /**
@@ -891,8 +623,6 @@ export class MessagingService {
         channel: {
           select: {
             id: true,
-            metaDisplayPhoneNumber: true,
-            metaVerifiedName: true,
             automationEnabled: true,
             status: true,
           },
@@ -931,10 +661,7 @@ export class MessagingService {
           select: {
             id: true,
             status: true,
-            metaDisplayPhoneNumber: true,
-            metaVerifiedName: true,
             automationEnabled: true,
-            metaQualityRating: true,
           },
         },
         company: {
@@ -1070,33 +797,6 @@ export class MessagingService {
       include: { channel: true },
     });
     return this.sendText(updated, updated.channel, content, userId, "text");
-  }
-
-  private async handleMetaMessagesChange(value: any) {
-    const phoneNumberId = value?.metadata?.phone_number_id;
-    if (!phoneNumberId) return;
-    const channel = await this.db().messagingChannel.findUnique({
-      where: { metaPhoneNumberId: String(phoneNumberId) },
-      include: {
-        company: {
-          select: {
-            id: true,
-            name: true,
-            settings: { select: { aiEnabled: true } },
-            subscription: { select: { status: true, trialEndsAt: true } },
-          },
-        },
-      },
-    });
-    if (!channel) {
-      const handledByPlatform = this.platformWhatsApp
-        ? await this.platformWhatsApp.handleMetaMessagesChange(value)
-        : false;
-      if (handledByPlatform) return;
-      this.logger.warn(`Webhook WhatsApp ignorado: número Meta não vinculado (${String(phoneNumberId)}).`);
-      return;
-    }
-    await this.processMessagesChangeForChannel(channel, value, String(phoneNumberId));
   }
 
   /**
@@ -1442,42 +1142,17 @@ export class MessagingService {
     this.realtime.emitToCompany(conversation.companyId, "whatsapp.message.sent", { conversationId: conversation.id, messageId: message.id });
   }
 
-  private accessTokenFor(channel: any) {
-    if (
-      channel.status !== MessagingChannelStatus.ATIVO
-      || !channel.metaPhoneNumberId
-      || !channel.metaAccessTokenEncrypted
-    ) {
-      throw new BadRequestException("Este canal não está conectado à WhatsApp Cloud API.");
-    }
-    return this.secrets.decrypt(channel.metaAccessTokenEncrypted);
-  }
-
-  /**
-   * Resolve para onde a mensagem sai. O corpo é idêntico nos dois caminhos —
-   * as Passthrough APIs do Gupshup reproduzem o formato da Meta — então só o
-   * transporte e a credencial mudam.
-   */
+  /** Credenciais e identidade de origem para o envio pelo Gupshup. */
   private async dispatcherFor(channel: any) {
-    if (channel.provider === WhatsAppProvider.GUPSHUP) {
-      const appId = channel.gupshupAppId ?? "";
-      const appToken = await this.gupshupAppTokenFor(channel);
-      const params = {
-        appId,
-        appToken,
-        source: channelConfig(channel).number ?? null,
-        appName: channel.gupshupAppName ?? null,
-      };
-      return {
-        text: (to: string, body: string) => this.gupshup.sendText({ ...params, to, body }),
-        choiceMenu: (to: string, body: string) => this.gupshup.sendChoiceMenu({ ...params, to, body }),
-      };
-    }
-    const accessToken = this.accessTokenFor(channel);
-    const phoneNumberId = channel.metaPhoneNumberId;
+    const params = {
+      appId: channel.gupshupAppId ?? "",
+      appToken: await this.gupshupAppTokenFor(channel),
+      source: channelConfig(channel).number ?? null,
+      appName: channel.gupshupAppName ?? null,
+    };
     return {
-      text: (to: string, body: string) => this.meta.sendText({ phoneNumberId, accessToken, to, body }),
-      choiceMenu: (to: string, body: string) => this.meta.sendChoiceMenu({ phoneNumberId, accessToken, to, body }),
+      text: (to: string, body: string) => this.gupshup.sendText({ ...params, to, body }),
+      choiceMenu: (to: string, body: string) => this.gupshup.sendChoiceMenu({ ...params, to, body }),
     };
   }
 
@@ -1534,15 +1209,11 @@ export class MessagingService {
     return {
       id: channel.id,
       status: channel.status,
-      number: config.number ?? channel.metaDisplayPhoneNumber ?? null,
+      number: config.number ?? null,
       automationEnabled: Boolean(channel.automationEnabled),
       welcomeMessage: channel.welcomeMessage ?? null,
-      provider: channel.provider ?? WhatsAppProvider.META,
-      // Cada BSP tem sua própria prova de que o canal está de pé: na Meta é o
-      // par número + token; no Gupshup é o app já promovido a "live" pela Meta.
-      connected: channel.provider === WhatsAppProvider.GUPSHUP
-        ? Boolean(channel.gupshupAppId && channel.status === MessagingChannelStatus.ATIVO)
-        : Boolean(channel.metaPhoneNumberId && channel.metaAccessTokenEncrypted && channel.status === MessagingChannelStatus.ATIVO),
+      // O canal está de pé quando existe aplicativo vinculado e ele foi ativado.
+      connected: Boolean(channel.gupshupAppId && channel.status === MessagingChannelStatus.ATIVO),
       gupshup: {
         appId: channel.gupshupAppId ?? null,
         appName: channel.gupshupAppName ?? null,
@@ -1552,15 +1223,7 @@ export class MessagingService {
         signupLink: config.gupshupSignupLink ?? null,
       },
       integration: {
-        phoneNumberId: channel.metaPhoneNumberId ?? null,
-        businessAccountId: channel.metaBusinessAccountId ?? null,
-        businessPortfolioId: channel.metaBusinessPortfolioId ?? null,
-        displayPhoneNumber: channel.metaDisplayPhoneNumber ?? null,
-        verifiedName: channel.metaVerifiedName ?? null,
-        qualityRating: channel.metaQualityRating ?? null,
         connectedAt: channel.connectedAt ?? null,
-        accessTokenExpiresAt: channel.metaAccessTokenExpiresAt ?? null,
-        embeddedSignupAt: channel.metaEmbeddedSignupAt ?? null,
         lastWebhookAt: channel.lastWebhookAt ?? null,
         lastError: channel.lastError ?? null,
       },
@@ -1575,19 +1238,10 @@ export class MessagingService {
       number: null,
       automationEnabled: true,
       welcomeMessage: null,
-      provider: WhatsAppProvider.META,
       connected: false,
       gupshup: { appId: null, appName: null, signupLink: null, accessRequestedAt: null },
       integration: {
-        phoneNumberId: null,
-        businessAccountId: null,
-        businessPortfolioId: null,
-        displayPhoneNumber: null,
-        verifiedName: null,
-        qualityRating: null,
         connectedAt: null,
-        accessTokenExpiresAt: null,
-        embeddedSignupAt: null,
         lastWebhookAt: null,
         lastError: null,
       },

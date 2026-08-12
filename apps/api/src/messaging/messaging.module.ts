@@ -3,7 +3,6 @@ import { MESSAGING_PROVIDER } from "./providers/messaging-provider.interface";
 import { LinkWhatsappProvider } from "./providers/link-whatsapp.provider";
 import { MessagingService } from "./messaging.service";
 import { MessagingController } from "./messaging.controller";
-import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { PlatformWhatsAppController } from "./platform-whatsapp.controller";
@@ -22,7 +21,6 @@ const messagingProviderFactory = {
   controllers: [MessagingController, PlatformWhatsAppController],
   providers: [
     messagingProviderFactory,
-    MetaWhatsAppProvider,
     GupshupWhatsAppProvider,
     MessagingSecretsService,
     PlatformWhatsAppService,

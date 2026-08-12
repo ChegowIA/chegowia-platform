@@ -172,7 +172,7 @@ export class UsageService {
     });
   }
 
-  /** A Meta pode informar a categoria final apenas no webhook de status. */
+  /** A categoria final pode chegar só no evento de status do provedor. */
   async repriceWhatsAppUsage(params: {
     companyId: string;
     channelId: string;

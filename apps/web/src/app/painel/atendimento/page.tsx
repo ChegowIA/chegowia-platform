@@ -157,7 +157,7 @@ export default function AtendimentoPage() {
 
       {isAdmin && !channel?.connected && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/30 dark:border-amber-900/60 dark:text-amber-200">
-          Ainda não há um número Meta conectado. Vincule o Phone Number ID e o token da empresa em Configurações para receber conversas aqui.
+          Ainda não há um número conectado. Solicite o WhatsApp em Configurações para começar a receber conversas aqui.
         </div>
       )}
       {error && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">{error}</p>}
@@ -360,7 +360,7 @@ function WhatsAppOrderProgress({ draft }: { draft?: WhatsAppConversationDetail["
 }
 
 function EmptyConversation({ connected, canConfigure }: { connected: boolean; canConfigure: boolean }) {
-  return <CardContent className="grid h-full min-h-[620px] place-items-center p-8 text-center xl:min-h-0"><div className="max-w-sm"><p className="text-xl font-black text-slate-900 dark:text-slate-100">{connected ? "Aguardando uma nova conversa" : "Conecte o WhatsApp da empresa"}</p><p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{connected ? "As mensagens recebidas pelo número Meta aparecerão ao vivo nesta central." : "A configuração leva o Phone Number ID e o token da Meta, vinculados apenas a esta empresa."}</p>{canConfigure && <Link href="/painel/configuracoes" className="mt-5 inline-flex rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white">Ir para configurações</Link>}</div></CardContent>;
+  return <CardContent className="grid h-full min-h-[620px] place-items-center p-8 text-center xl:min-h-0"><div className="max-w-sm"><p className="text-xl font-black text-slate-900 dark:text-slate-100">{connected ? "Aguardando uma nova conversa" : "Conecte o WhatsApp da empresa"}</p><p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{connected ? "As mensagens recebidas pelo seu número aparecerão ao vivo nesta central." : "Peça o acesso em Configurações; a conexão é feita em poucos passos e vale só para esta empresa."}</p>{canConfigure && <Link href="/painel/configuracoes" className="mt-5 inline-flex rounded-xl bg-slate-950 px-4 py-2 text-sm font-bold text-white">Ir para configurações</Link>}</div></CardContent>;
 }
 
 function Info({ label, value }: { label: string; value: string }) {

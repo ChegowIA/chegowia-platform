@@ -37,6 +37,12 @@ describe("Canal institucional do WhatsApp", () => {
       subscribeAppToBusinessAccount: jest.fn().mockResolvedValue(undefined),
       ...((overrides.meta as Record<string, unknown>) ?? {}),
     };
+    const gupshup = {
+      isEnabled: jest.fn().mockReturnValue(true),
+      mode: jest.fn().mockReturnValue("SELF_SERVE"),
+      sendText: jest.fn().mockResolvedValue({ messageId: "gs-1", raw: {} }),
+      ...((overrides.gupshup as Record<string, unknown>) ?? {}),
+    };
     const secrets = {
       encrypt: jest.fn((value: string) => `cifrado:${value}`),
       decrypt: jest.fn(() => "token-decriptado"),
@@ -45,45 +51,38 @@ describe("Canal institucional do WhatsApp", () => {
     const realtime = { emitToSuperAdmins: jest.fn() };
     const instance = new PlatformWhatsAppService(
       prisma as never,
-      meta as never,
-      {} as never,
+      gupshup as never,
       secrets as never,
       { chat: jest.fn() } as never,
       realtime as never,
     );
-    return { instance, prisma, meta, secrets, realtime };
+    return { instance, prisma, gupshup, secrets, realtime };
   }
 
-  it("não permite usar no número institucional um Phone Number ID de empresa cliente", async () => {
-    const { instance, meta } = serviceWith({
+  it("não permite vincular ao institucional um aplicativo de empresa cliente", async () => {
+    // O nome do aplicativo é o que o callback usa para achar o canal: se os dois
+    // apontassem para o mesmo, conversa de cliente cairia no inbox institucional.
+    const { instance } = serviceWith({
       messagingChannel: { findUnique: jest.fn().mockResolvedValue({ id: "canal-cliente" }) },
     });
 
-    await expect(instance.connectCloud({
-      phoneNumberId: "123456789012345",
-      businessAccountId: "987654321098765",
-      accessToken: "token-de-teste-comprido-o-suficiente",
-    })).rejects.toBeInstanceOf(ConflictException);
-
-    expect(meta.getPhoneNumber).not.toHaveBeenCalled();
+    await expect(
+      instance.connectGupshupManual({ appName: "chegowiaempresa1" }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it("cifra a credencial e nunca a devolve ao painel do superadmin", async () => {
-    const { instance, secrets, meta } = serviceWith();
+  it("só ativa o canal quando o número é informado", async () => {
+    const { instance } = serviceWith();
 
-    const result = await instance.connectCloud({
-      phoneNumberId: "123456789012345",
-      businessAccountId: "987654321098765",
-      accessToken: "token-secreto-da-meta-comprido-o-suficiente",
-    });
+    const pendente = await instance.connectGupshupManual({ appName: "chegowiainstitucional" });
+    expect(pendente).toEqual(expect.objectContaining({ connected: false }));
 
-    expect(secrets.encrypt).toHaveBeenCalledWith("token-secreto-da-meta-comprido-o-suficiente");
-    expect(meta.subscribeAppToBusinessAccount).toHaveBeenCalledWith({
-      businessAccountId: "987654321098765",
-      accessToken: "token-secreto-da-meta-comprido-o-suficiente",
+    const ativo = await instance.connectGupshupManual({
+      appName: "chegowiainstitucional",
+      appId: "app-1",
+      number: "556231425344",
     });
-    expect(result).toEqual(expect.objectContaining({ connected: true }));
-    expect(JSON.stringify(result)).not.toContain("token-secreto-da-meta-comprido-o-suficiente");
+    expect(ativo).toEqual(expect.objectContaining({ connected: true }));
   });
 
   it("usa o preço comercial público no contexto da IA", async () => {
