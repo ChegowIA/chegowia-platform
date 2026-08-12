@@ -17,6 +17,7 @@ describe("Canal WhatsApp por empresa", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     await service.getWhatsappChannel("empresa-autenticada");
@@ -46,6 +47,7 @@ describe("Canal WhatsApp por empresa", () => {
     const realtime = { emitToCompany: jest.fn() };
     const service = new MessagingService(
       prisma as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

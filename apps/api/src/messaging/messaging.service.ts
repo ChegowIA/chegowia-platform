@@ -32,6 +32,7 @@ import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dt
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
+import { MailService } from "../common/mail/mail.service";
 import { formatForWhatsapp } from "./whatsapp-text-format";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
@@ -51,6 +52,7 @@ export class MessagingService {
     private readonly meta: MetaWhatsAppProvider,
     private readonly gupshup: GupshupWhatsAppProvider,
     private readonly secrets: MessagingSecretsService,
+    private readonly mail: MailService,
     private readonly ai: AiService,
     private readonly usage: UsageService,
     private readonly realtime: RealtimeGateway,
@@ -368,8 +370,51 @@ export class MessagingService {
         accessRequestedAt: current?.accessRequestedAt ?? new Date(),
       },
     });
-    this.logger.warn(`Empresa ${companyId} solicitou acesso ao WhatsApp.`);
+    // Só notifica no primeiro pedido: reclicar o botão não deve gerar e-mail
+    // novo, senão o aviso perde valor justamente quando o cliente está ansioso.
+    if (!current?.accessRequestedAt) {
+      await this.notifyWhatsappAccessRequest(companyId);
+    }
     return this.channelSummary(channel);
+  }
+
+  /**
+   * Avisa a equipe pelos dois caminhos: tempo real, para quem está com o painel
+   * aberto, e e-mail, porque o pedido pode chegar fora do horário e o trabalho
+   * manual do self-serve não acontece sozinho.
+   *
+   * Falha de notificação nunca derruba o pedido: para o empresário o pedido foi
+   * registrado, e é o registro que importa.
+   */
+  private async notifyWhatsappAccessRequest(companyId: string) {
+    const company = await this.db().company.findUnique({
+      where: { id: companyId },
+      select: { name: true, slug: true, city: true, state: true },
+    });
+    const name = company?.name ?? companyId;
+
+    try {
+      this.realtime.emitToSuperAdmins("whatsapp.access.requested", { companyId, companyName: name });
+    } catch (error) {
+      this.logger.warn(`Falha ao emitir aviso em tempo real do pedido de WhatsApp de ${name}.`);
+    }
+
+    try {
+      await this.mail.sendOperationsAlert("Pedido de acesso ao WhatsApp", [
+        `A empresa ${name} solicitou o WhatsApp pela plataforma.`,
+        company?.city ? `Cidade: ${company.city}/${company.state ?? "--"}` : "",
+        "",
+        "Próximo passo: crie o aplicativo no painel do Gupshup, cole a URL de callback e traga o nome, o App ID e o link de cadastro para a página da empresa no super-admin.",
+        `${publicAppUrl()}/super-admin/empresas/${companyId}`,
+      ].filter(Boolean));
+    } catch (error) {
+      // O e-mail é conveniência; o pedido já está no banco e visível no painel.
+      this.logger.error(
+        `Falha ao enviar e-mail do pedido de WhatsApp de ${name}.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+    this.logger.warn(`Empresa ${name} (${companyId}) solicitou acesso ao WhatsApp.`);
   }
 
   /**
@@ -1791,6 +1836,11 @@ function personalizedWelcome(value: string | null | undefined, companyName: stri
 
 function publicApiUrl() {
   return (process.env.API_PUBLIC_URL ?? "http://localhost:3001").replace(/\/$/, "");
+}
+
+/** Endereço do painel, para o aviso levar direto à página onde há trabalho. */
+function publicAppUrl() {
+  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
 }
 
 function safeEqual(left: string, right: string) {

@@ -23,6 +23,7 @@ describe("destinatário brasileiro de número Meta de teste", () => {
       {} as never,
       { decrypt: jest.fn().mockReturnValue("token-teste") } as never,
       {} as never,
+      {} as never,
       usage as never,
       realtime as never,
     );

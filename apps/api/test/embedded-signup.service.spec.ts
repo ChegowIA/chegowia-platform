@@ -59,6 +59,7 @@ describe("Meta Embedded Signup", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     const result = await service.completeWhatsAppEmbeddedSignup("empresa-1", {
@@ -132,6 +133,7 @@ describe("Meta Embedded Signup", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
 
     await service.completeWhatsAppEmbeddedSignup("empresa-1", {
@@ -172,6 +174,7 @@ describe("Meta Embedded Signup", () => {
       meta as never,
       {} as never,
       secrets as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
