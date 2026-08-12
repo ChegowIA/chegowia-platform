@@ -1,5 +1,5 @@
 import { MessagingChannelType, WhatsAppOrderDraftStatus } from "@prisma/client";
-import { MessagingService } from "../src/messaging/messaging.service";
+import { buildMessagingService } from "./support/messaging-services";
 
 describe("Canal WhatsApp por empresa", () => {
   it("consulta o canal pelo tenant da sessão, nunca o primeiro canal da base", async () => {
@@ -8,16 +8,10 @@ describe("Canal WhatsApp por empresa", () => {
         findUnique: jest.fn().mockResolvedValue(null),
       },
     };
-    const service = new MessagingService(
-      prisma as never,
-      {} as never,
-      {} as never,
-      { isConfigured: jest.fn().mockReturnValue(false) } as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
+    const service = buildMessagingService({
+      prisma: prisma,
+      secrets: { isConfigured: jest.fn().mockReturnValue(false) },
+    });
 
     await service.getWhatsappChannel("empresa-autenticada");
 
@@ -44,16 +38,10 @@ describe("Canal WhatsApp por empresa", () => {
       $transaction: jest.fn((callback) => callback(transaction)),
     };
     const realtime = { emitToCompany: jest.fn() };
-    const service = new MessagingService(
-      prisma as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      realtime as never,
-    );
+    const service = buildMessagingService({
+      prisma: prisma,
+      realtime: realtime,
+    });
 
     await expect(service.clearWhatsAppConversation("empresa-a", "conversa-da-empresa-a")).resolves.toEqual({
       id: "conversa-da-empresa-a",

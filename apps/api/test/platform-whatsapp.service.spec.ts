@@ -1,5 +1,5 @@
 import { ConflictException } from "@nestjs/common";
-import { PlatformWhatsAppService } from "../src/messaging/platform-whatsapp.service";
+import { buildPlatformWhatsAppService } from "./support/messaging-services";
 
 describe("Canal institucional do WhatsApp", () => {
   function serviceWith(prismaOverrides: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}) {
@@ -49,13 +49,13 @@ describe("Canal institucional do WhatsApp", () => {
       ...((overrides.secrets as Record<string, unknown>) ?? {}),
     };
     const realtime = { emitToSuperAdmins: jest.fn() };
-    const instance = new PlatformWhatsAppService(
-      prisma as never,
-      gupshup as never,
-      secrets as never,
-      { chat: jest.fn() } as never,
-      realtime as never,
-    );
+    const instance = buildPlatformWhatsAppService({
+      prisma: prisma,
+      gupshup: gupshup,
+      secrets: secrets,
+      aiProvider: { chat: jest.fn() },
+      realtime: realtime,
+    });
     return { instance, prisma, gupshup, secrets, realtime };
   }
 

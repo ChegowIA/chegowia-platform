@@ -1,4 +1,4 @@
-import { MessagingService } from "../src/messaging/messaging.service";
+import { buildMessagingService } from "./support/messaging-services";
 
 /**
  * No self-serve do Gupshup o aplicativo de cada empresa é criado à mão. O pedido
@@ -20,16 +20,12 @@ describe("pedido de acesso ao WhatsApp", () => {
     };
     const mail = { sendOperationsAlert: jest.fn().mockResolvedValue(undefined) };
     const realtime = { emitToSuperAdmins: jest.fn() };
-    const service = new MessagingService(
-      prisma as never,
-      {} as never,
-      {} as never,
-      { isConfigured: jest.fn().mockReturnValue(true) } as never,
-      mail as never,
-      {} as never,
-      {} as never,
-      realtime as never,
-    );
+    const service = buildMessagingService({
+      prisma: prisma,
+      secrets: { isConfigured: jest.fn().mockReturnValue(true) },
+      mail: mail,
+      realtime: realtime,
+    });
     return { service, prisma, mail, realtime };
   }
 

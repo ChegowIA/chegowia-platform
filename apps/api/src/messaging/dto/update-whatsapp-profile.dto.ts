@@ -26,17 +26,41 @@ export const WHATSAPP_BUSINESS_VERTICALS = [
   "OTHER",
 ] as const;
 
+/**
+ * O endereço é estruturado no perfil do WhatsApp, não um texto livre. Enviá-lo
+ * como campo único fazia o provedor descartar tudo em silêncio — o painel dizia
+ * que salvou e nada mudava na conversa do cliente.
+ */
 export class UpdateWhatsAppProfileDto {
-  /** Frase curta que aparece sob o nome no perfil. */
   @IsOptional()
   @IsString()
-  @MaxLength(139)
-  about?: string;
+  @MaxLength(256)
+  addressLine1?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(256)
-  address?: string;
+  addressLine2?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  city?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  pinCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  country?: string;
 
   @IsOptional()
   @IsString()

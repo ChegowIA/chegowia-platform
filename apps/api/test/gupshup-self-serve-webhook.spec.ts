@@ -1,4 +1,4 @@
-import { MessagingService } from "../src/messaging/messaging.service";
+import { buildMessagingService } from "./support/messaging-services";
 
 /**
  * O callback self-serve do Gupshup chega no formato v2 proprietário. Estes testes
@@ -19,16 +19,9 @@ describe("webhook self-serve do Gupshup", () => {
 
   function buildService(findUnique: jest.Mock) {
     const prisma = { messagingChannel: { findUnique, update: jest.fn().mockResolvedValue(channel) } };
-    const service = new MessagingService(
-      prisma as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
+    const service = buildMessagingService({
+      prisma: prisma,
+    });
     return { service, prisma };
   }
 

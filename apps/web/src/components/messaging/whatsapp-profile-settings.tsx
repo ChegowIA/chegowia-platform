@@ -8,8 +8,12 @@ import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/compone
 import { FormField, Input, Select, Textarea } from "@/components/ui/input";
 
 type WhatsAppProfile = {
-  about?: string | null;
-  address?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pinCode?: string | null;
+  country?: string | null;
   description?: string | null;
   email?: string | null;
   website1?: string | null;
@@ -42,9 +46,15 @@ const VERTICALS: Array<{ value: string; label: string }> = [
 ];
 
 const EMPTY_FORM = {
-  about: "",
   description: "",
-  address: "",
+  // O endereço é estruturado no perfil do WhatsApp. Um campo de texto único
+  // fazia o provedor descartar tudo em silêncio.
+  addressLine1: "",
+  addressLine2: "",
+  city: "",
+  state: "",
+  pinCode: "",
+  country: "Brasil",
   email: "",
   website1: "",
   website2: "",
@@ -85,9 +95,13 @@ export function WhatsAppProfileSettings({
   useEffect(() => {
     if (!profile) return;
     setForm({
-      about: profile.about ?? "",
       description: profile.description ?? "",
-      address: profile.address ?? "",
+      addressLine1: profile.addressLine1 ?? "",
+      addressLine2: profile.addressLine2 ?? "",
+      city: profile.city ?? "",
+      state: profile.state ?? "",
+      pinCode: profile.pinCode ?? "",
+      country: profile.country ?? "Brasil",
       email: profile.email ?? "",
       website1: profile.website1 ?? "",
       website2: profile.website2 ?? "",
@@ -200,14 +214,6 @@ export function WhatsAppProfileSettings({
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <FormField label="Recado do perfil">
-            <Input
-              value={form.about}
-              maxLength={139}
-              placeholder="Ex.: Atendimento das 9h às 18h"
-              onChange={(event) => setForm((current) => ({ ...current, about: event.target.value }))}
-            />
-          </FormField>
           <FormField label="Segmento">
             <Select
               value={form.vertical}
@@ -221,17 +227,42 @@ export function WhatsAppProfileSettings({
               ))}
             </Select>
           </FormField>
-          <FormField label="E-mail">
-            <Input
-              type="email"
-              value={form.email}
-              onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
-            />
-          </FormField>
           <FormField label="Endereço">
             <Input
-              value={form.address}
-              onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))}
+              placeholder="Rua e número"
+              value={form.addressLine1}
+              onChange={(event) => setForm((current) => ({ ...current, addressLine1: event.target.value }))}
+            />
+          </FormField>
+          <FormField label="Complemento / bairro">
+            <Input
+              value={form.addressLine2}
+              onChange={(event) => setForm((current) => ({ ...current, addressLine2: event.target.value }))}
+            />
+          </FormField>
+          <FormField label="Cidade">
+            <Input
+              value={form.city}
+              onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))}
+            />
+          </FormField>
+          <FormField label="Estado">
+            <Input
+              placeholder="GO"
+              value={form.state}
+              onChange={(event) => setForm((current) => ({ ...current, state: event.target.value }))}
+            />
+          </FormField>
+          <FormField label="CEP">
+            <Input
+              value={form.pinCode}
+              onChange={(event) => setForm((current) => ({ ...current, pinCode: event.target.value }))}
+            />
+          </FormField>
+          <FormField label="País">
+            <Input
+              value={form.country}
+              onChange={(event) => setForm((current) => ({ ...current, country: event.target.value }))}
             />
           </FormField>
           <FormField label="Site">

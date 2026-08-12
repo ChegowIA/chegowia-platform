@@ -24,6 +24,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { UpdatePlatformWhatsAppAutomationDto } from "./dto/update-platform-whatsapp-automation.dto";
 import { UpdatePlatformWhatsAppConversationDto } from "./dto/update-platform-whatsapp-conversation.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
+import { LocalStorageService } from "../common/storage/local-storage.service";
 import { formatForWhatsapp } from "./whatsapp-text-format";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
@@ -47,6 +48,7 @@ export class PlatformWhatsAppService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly gupshup: GupshupWhatsAppProvider,
     private readonly secrets: MessagingSecretsService,
+    private readonly storage: LocalStorageService,
     @Inject(AI_PROVIDER) private readonly aiProvider: AIProvider,
     private readonly realtime: RealtimeGateway,
   ) {}
@@ -138,7 +140,9 @@ export class PlatformWhatsAppService {
     ]);
     return {
       ...profile,
-      profilePictureUrl: photoUrl,
+      // Ver a nota equivalente no MessagingService: a API nem sempre devolve a
+      // foto, e o painel não pode dar a impressão de que a imagem se perdeu.
+      profilePictureUrl: photoUrl ?? channelConfig(channel).profilePhotoUrl ?? null,
       displayName: channel.gupshupAppName ?? null,
       number: channelNumber(channel),
     };
@@ -160,6 +164,16 @@ export class PlatformWhatsAppService {
   async updateProfilePhoto(file: { buffer: Buffer; mimeType: string; fileName: string }) {
     const { channel, appToken } = await this.gupshupChannelWithToken();
     await this.gupshup.updateProfilePhoto({ appId: channel.gupshupAppId, appToken, file });
+
+    // Só guardamos depois que o provedor aceitou.
+    const storedUrl = await this.storage.savePublicImage(file, "companies", "whatsapp-institucional");
+    const previousUrl = channelConfig(channel).profilePhotoUrl;
+    await this.db().platformWhatsAppChannel.update({
+      where: { id: channel.id },
+      data: { config: { ...channelConfig(channel), profilePhotoUrl: storedUrl } },
+    });
+    if (typeof previousUrl === "string") await this.storage.removePublicUrl(previousUrl);
+
     return this.getProfile();
   }
 

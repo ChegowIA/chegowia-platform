@@ -30,16 +30,46 @@ export type GupshupSendParams = {
   appName?: string | null;
 };
 
-/** Campos aceitos pelo perfil comercial do WhatsApp exposto pelo Gupshup. */
+/**
+ * Perfil comercial do WhatsApp.
+ *
+ * O endereço é estruturado no Gupshup, não um texto único: mandar tudo em um
+ * campo só fazia o restante ser descartado em silêncio. E `about` (o recado do
+ * perfil) não existe neste endpoint — é por isso que ele não aparece aqui.
+ */
 export type GupshupBusinessProfile = {
-  about?: string | null;
-  address?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pinCode?: string | null;
+  country?: string | null;
   description?: string | null;
   email?: string | null;
   website1?: string | null;
   website2?: string | null;
   vertical?: string | null;
   profilePictureUrl?: string | null;
+};
+
+/**
+ * Os nomes que o Gupshup espera diferem dos nossos em três campos, e enviar o
+ * nome errado não dá erro: o campo é simplesmente ignorado. Foi o que fez
+ * e-mail, descrição e endereço não mudarem no WhatsApp mesmo com o painel
+ * dizendo que salvou.
+ */
+const PROFILE_FIELD_NAMES: Record<string, string> = {
+  addressLine1: "addLine1",
+  addressLine2: "addLine2",
+  city: "city",
+  state: "state",
+  pinCode: "pinCode",
+  country: "country",
+  description: "desc",
+  email: "profileEmail",
+  website1: "website1",
+  website2: "website2",
+  vertical: "vertical",
 };
 
 /**
@@ -287,11 +317,16 @@ export class GupshupWhatsAppProvider {
       appToken: params.appToken,
     });
     const profile = result?.profile ?? result;
+    // A resposta usa os nomes do Gupshup; traduzimos de volta para os nossos.
     return {
-      about: readString(profile?.about),
-      address: readString(profile?.address),
-      description: readString(profile?.description),
-      email: readString(profile?.email),
+      addressLine1: readString(profile?.addressLine1) ?? readString(profile?.addLine1),
+      addressLine2: readString(profile?.addressLine2) ?? readString(profile?.addLine2),
+      city: readString(profile?.city),
+      state: readString(profile?.state),
+      pinCode: readString(profile?.pinCode),
+      country: readString(profile?.country),
+      description: readString(profile?.desc) ?? readString(profile?.description),
+      email: readString(profile?.profileEmail) ?? readString(profile?.email),
       website1: readString(profile?.website1) ?? readString(profile?.websites?.[0]),
       website2: readString(profile?.website2) ?? readString(profile?.websites?.[1]),
       vertical: readString(profile?.vertical),
@@ -303,15 +338,35 @@ export class GupshupWhatsAppProvider {
     // Só enviamos o que o empresário mexeu. Mandar campo vazio apagaria dado já
     // aprovado no perfil da Meta sem que ele tenha pedido isso.
     for (const [key, value] of Object.entries(params.profile)) {
-      if (value === undefined || value === null) continue;
-      form[key] = String(value);
+      if (value === undefined || value === null || value === "") continue;
+      const remoteName = PROFILE_FIELD_NAMES[key];
+      if (!remoteName) continue;
+      form[remoteName] = String(value);
     }
     if (Object.keys(form).length === 0) return;
-    await this.appRequest(`/app/${encodeURIComponent(params.appId)}/business/profile`, {
+
+    const result = await this.appRequest(`/app/${encodeURIComponent(params.appId)}/business/profile`, {
       method: "PUT",
       appToken: params.appToken,
       form,
     });
+    this.assertGupshupAccepted(result, "atualizar o perfil");
+  }
+
+  /**
+   * O Gupshup responde HTTP 200 mesmo quando recusa, sinalizando o problema só
+   * no corpo. Confiar no código HTTP fazia o painel dizer "salvo" sem nada ter
+   * mudado no WhatsApp.
+   */
+  private assertGupshupAccepted(result: any, acao: string) {
+    const status = readString(result?.status);
+    if (status && status.toLowerCase() !== "success" && status.toLowerCase() !== "submitted") {
+      const detail = readString(result?.message) ?? status;
+      this.logger.warn(`Gupshup recusou ${acao}: ${JSON.stringify(result).slice(0, 300)}`);
+      throw new BadGatewayException(
+        detail.length < 160 ? `O Gupshup recusou ${acao}: ${detail}` : `O Gupshup recusou ${acao}.`,
+      );
+    }
   }
 
   async getProfilePhotoUrl(params: { appId: string; appToken: string }): Promise<string | null> {
@@ -338,13 +393,14 @@ export class GupshupWhatsAppProvider {
     const url = selfServe
       ? `${this.apiUrl}/wa/app/${encodeURIComponent(params.appId)}/business/profile/photo`
       : `${this.baseUrl}/app/${encodeURIComponent(params.appId)}/business/profile/photo`;
-    await this.performRequest(url, {
+    const result = await this.performRequest(url, {
       method: "PUT",
       // multipart: o boundary é definido pelo FormData, então não fixamos
       // Content-Type aqui.
       headers: selfServe ? { apikey: this.apiKey() } : { Authorization: params.appToken },
       body,
     });
+    this.assertGupshupAccepted(result, "trocar a foto do perfil");
   }
 
   // ---------------------------------------------------------------------------
