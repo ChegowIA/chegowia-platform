@@ -451,7 +451,16 @@ export class PlatformWhatsAppService {
     const providerMessageId = String(status?.id ?? "");
     if (!providerMessageId) return;
     const existing = await this.db().platformWhatsAppMessage.findUnique({ where: { providerMessageId } });
-    if (!existing) return;
+    if (!existing) {
+      // Ver a nota equivalente no MessagingService: falha sem correspondência
+      // deixa a mensagem "enviada" e esconde o motivo real.
+      if (mapProviderStatus(status?.status) === WhatsAppMessageStatus.FALHOU) {
+        this.logger.warn(
+          `Falha de entrega sem mensagem correspondente (${providerMessageId}): ${JSON.stringify(status?.errors ?? status?.status)}`,
+        );
+      }
+      return;
+    }
     const error = status?.errors?.[0];
     const mappedStatus = mapProviderStatus(status?.status);
     const pricingCategory = status?.pricing?.category ? String(status.pricing.category) : undefined;

@@ -1051,7 +1051,16 @@ export class MessagingService {
     const providerMessageId = String(status?.id ?? "");
     if (!providerMessageId) return;
     const existing = await this.db().whatsAppMessage.findUnique({ where: { providerMessageId } });
-    if (!existing) return;
+    if (!existing) {
+      // Uma falha que não conseguimos atribuir é a pior de diagnosticar: a
+      // mensagem fica "enviada" no painel e o motivo do WhatsApp se perde.
+      if (mapProviderStatus(status?.status) === WhatsAppMessageStatus.FALHOU) {
+        this.logger.warn(
+          `Falha de entrega sem mensagem correspondente (${providerMessageId}): ${JSON.stringify(status?.errors ?? status?.status)}`,
+        );
+      }
+      return;
+    }
     const mappedStatus = mapProviderStatus(status?.status);
     const pricingCategory = status?.pricing?.category ? String(status.pricing.category) : undefined;
     const error = status?.errors?.[0];
@@ -1585,7 +1594,14 @@ function metaValueFromGupshupV2(payload: any): any | null {
   if (!inner) return null;
 
   if (payload.type === "message-event") {
-    const providerMessageId = inner.gsId ?? inner.id;
+    /**
+     * `id` é o mesmo identificador que a resposta de envio devolve em
+     * `messageId`, e é o que gravamos na mensagem. `gsId` é interno do Gupshup e
+     * não casa com nada nosso — preferi-lo fazia todo evento de status ser
+     * descartado por não encontrar a mensagem, deixando tudo "enviada" para
+     * sempre e engolindo o motivo real da falha.
+     */
+    const providerMessageId = inner.id ?? inner.gsId;
     if (!providerMessageId) return null;
     return {
       messaging_product: "whatsapp",

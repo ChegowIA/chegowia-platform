@@ -180,6 +180,27 @@ describe("webhook self-serve do Gupshup", () => {
     });
   });
 
+  it("prefere o id do envio ao gsId interno do Gupshup no evento de status", async () => {
+    const findUnique = jest.fn().mockResolvedValue(channel);
+    const { service } = buildService(findUnique);
+    const processed: any[] = [];
+    (service as any).processMessagesChangeForChannel = jest.fn(async (_channel, value) => {
+      processed.push(value);
+    });
+
+    await service.handleGupshupSelfServeWebhook({
+      app: "chegowiaempresa1",
+      type: "message-event",
+      timestamp: 1_760_000_000_000,
+      // `id` é o que a resposta de envio devolve e o que gravamos na mensagem;
+      // `gsId` é interno do Gupshup e não casa com nada nosso. Preferi-lo fazia
+      // todo status ser descartado, deixando a mensagem "enviada" para sempre.
+      payload: { id: "id-do-envio", gsId: "interno-do-gupshup", type: "failed", destination: "5562988887777" },
+    });
+
+    expect(processed[0].statuses[0].id).toBe("id-do-envio");
+  });
+
   it("descarta eventos que não são mensagem nem status", async () => {
     const findUnique = jest.fn().mockResolvedValue(channel);
     const { service } = buildService(findUnique);
