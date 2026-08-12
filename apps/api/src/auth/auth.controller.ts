@@ -149,6 +149,18 @@ export class AuthController {
     return { success: true };
   }
 
+  /**
+   * Troca de senha de quem já está logado. O limite é apertado de propósito: o
+   * endpoint dispara e-mail, e sem trava vira ferramenta de flood contra a
+   * caixa de entrada do próprio usuário.
+   */
+  @Post("change-password")
+  @Throttle({ default: { limit: 3, ttl: 15 * 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  changePassword(@CurrentUser("sub") userId: string) {
+    return this.authService.requestPasswordChange(userId);
+  }
+
   @Get("me")
   async me(@CurrentUser("sub") userId: string) {
     return this.authService.me(userId);

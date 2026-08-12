@@ -340,6 +340,49 @@ export class AuthService {
     };
   }
 
+  /**
+   * Troca de senha para quem já está logado. Não pedimos a senha atual: quem
+   * conclui a troca é quem abre o e-mail da conta, e é essa posse que autoriza.
+   * Uma sessão roubada consegue disparar o e-mail, mas não consegue terminar a
+   * troca sem acesso à caixa de entrada — e o próprio aviso denuncia o ataque.
+   *
+   * Reaproveita o token de redefinição já existente, então o link cai na mesma
+   * tela testada de /redefinir-senha.
+   */
+  async requestPasswordChange(userId: string) {
+    const user = await this.db().user.findUnique({ where: { id: userId } });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException("Sua sessão não é mais válida.");
+    }
+
+    // Invalida pedidos anteriores ainda abertos: dois links válidos ao mesmo
+    // tempo ampliam a janela de uso indevido sem ajudar em nada.
+    await this.db().accountToken.updateMany({
+      where: { userId: user.id, type: AccountTokenType.REDEFINICAO_SENHA, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+
+    const token = await this.createUrlToken(
+      user.id,
+      AccountTokenType.REDEFINICAO_SENHA,
+      PASSWORD_RESET_TTL_MS,
+    );
+    await this.mail.sendPasswordReset(user.email, user.name, token).catch((error) => {
+      this.logger.error(
+        `Falha ao enviar troca de senha para o usuário ${user.id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    });
+
+    return {
+      success: true,
+      // O e-mail vai mascarado para não confirmar o endereço a quem estiver
+      // usando uma sessão que não é sua.
+      emailHint: this.maskEmail(user.email),
+      message: "Enviamos um link para o seu e-mail. Ele vale por 30 minutos.",
+    };
+  }
+
   async resetPassword(token: string, password: string) {
     const record = await this.findUrlToken(token, AccountTokenType.REDEFINICAO_SENHA);
     await this.db().$transaction([

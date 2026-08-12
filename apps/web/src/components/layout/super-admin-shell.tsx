@@ -18,6 +18,7 @@ const NAV_ITEMS = [
   { href: "/super-admin/atendimento", label: "Atendimento ChegowIA" },
   { href: "/super-admin/suporte", label: "Suporte da plataforma" },
   { href: "/super-admin/relatorios", label: "Relatórios globais" },
+  { href: "/super-admin/conta", label: "Minha conta" },
 ];
 
 export function SuperAdminShell({ children }: { children: React.ReactNode }) {

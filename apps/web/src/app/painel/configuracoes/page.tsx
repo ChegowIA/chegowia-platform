@@ -12,6 +12,7 @@ import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { ProductImage } from "@/components/catalog/product-image";
 import { WhatsAppCloudSettings } from "@/components/messaging/whatsapp-cloud-settings";
 import { WhatsAppGupshupSettings } from "@/components/messaging/whatsapp-gupshup-settings";
+import { ChangePasswordCard } from "@/components/auth/change-password-card";
 
 const WEEKDAYS = [
   { key: "segunda", label: "Segunda" },
@@ -459,6 +460,9 @@ export default function ConfiguracoesPage() {
         plataforma está nesse modo, e a da Meta continua para quem já conectou
         por lá. Cada componente se esconde sozinho quando não se aplica.
       */}
+      {/* Vale para qualquer papel que use o painel, não só o administrador. */}
+      <ChangePasswordCard />
+
       <WhatsAppGupshupSettings />
       <WhatsAppCloudSettings />
     </div>

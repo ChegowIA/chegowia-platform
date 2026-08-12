@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormField, Input } from "@/components/ui/input";
 import { OrderStatusBadge } from "@/components/ui/badge";
+import { ChangePasswordCard } from "@/components/auth/change-password-card";
 
 export default function MinhaContaPage() {
   const queryClient = useQueryClient();
@@ -341,6 +342,8 @@ export default function MinhaContaPage() {
                 {exportData.error&&<p className="mt-3 text-xs text-rose-600 dark:text-rose-400">{apiErrorMessage(exportData.error)}</p>}
               </CardContent>
             </Card>
+
+            <ChangePasswordCard />
           </aside>
         </div>
       </main>
