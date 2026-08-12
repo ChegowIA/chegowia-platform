@@ -32,6 +32,7 @@ import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dt
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
+import { formatForWhatsapp } from "./whatsapp-text-format";
 import { MetaWhatsAppProvider } from "./providers/meta-whatsapp.provider";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-provider.interface";
@@ -39,7 +40,6 @@ import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 
-const MAX_WHATSAPP_TEXT_LENGTH = 4096;
 
 @Injectable()
 export class MessagingService {
@@ -1714,8 +1714,13 @@ function maskPhone(phone: string) {
   return `${phone.slice(0, 4)}***${phone.slice(-2)}`;
 }
 
+/**
+ * Ponto único por onde todo texto de saída passa. Além de cortar no limite do
+ * WhatsApp, converte o Markdown que o modelo produz para a formatação que o
+ * aplicativo entende — ver whatsapp-text-format.ts.
+ */
 function truncateWhatsappText(value: string) {
-  return value.trim().slice(0, MAX_WHATSAPP_TEXT_LENGTH);
+  return formatForWhatsapp(value);
 }
 
 function mapProviderStatus(status: unknown): WhatsAppMessageStatus {
