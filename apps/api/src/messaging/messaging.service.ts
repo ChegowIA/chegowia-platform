@@ -247,10 +247,22 @@ export class MessagingService {
       // formulário de vínculo manual em vez do botão de conexão automática.
       automaticOnboarding: enabled && this.gupshup.supportsAutomaticOnboarding(),
       /**
-       * No self-serve não há API para registrar o callback: o superadmin cola
-       * esta URL no painel do Gupshup, por aplicativo. O segredo já vem embutido
+       * No self-serve não há API para registrar o callback: o superadmin cola a
+       * URL no painel do Gupshup, por aplicativo. O segredo já vem embutido
        * porque é ele que autentica o webhook.
+       *
+       * São duas portas porque o painel do Gupshup deixa escolher o formato do
+       * payload, e cada formato tem um parser diferente. Apontar o formato
+       * errado para a porta errada faz o callback chegar e ser descartado em
+       * silêncio — por isso as duas são exibidas com o formato ao lado.
        */
+      callbackUrls: webhookToken
+        ? {
+            meta: `${publicApiUrl()}/api/messaging/webhooks/gupshup?token=${encodeURIComponent(webhookToken)}`,
+            gupshup: `${publicApiUrl()}/api/messaging/webhooks/gupshup/self-serve?token=${encodeURIComponent(webhookToken)}`,
+          }
+        : null,
+      /** Mantido para o painel antigo; equivale ao formato nativo do Gupshup. */
       callbackUrl: selfServe && webhookToken
         ? `${publicApiUrl()}/api/messaging/webhooks/gupshup/self-serve?token=${encodeURIComponent(webhookToken)}`
         : null,
@@ -741,18 +753,31 @@ export class MessagingService {
         },
       });
     });
+    const changes: any[] = [];
+    for (const entry of payload.entry ?? []) {
+      for (const change of entry?.changes ?? []) {
+        if (change?.field === "messages") changes.push(change.value ?? {});
+      }
+    }
+
     if (!channel) {
+      // Pode ser o número institucional da ChegowIA, que vive em tabelas
+      // próprias justamente para não atravessar o isolamento dos tenants.
+      let handledByPlatform = false;
+      for (const value of changes) {
+        if (!this.platformWhatsApp) break;
+        handledByPlatform = await this.platformWhatsApp.handleGupshupMessagesChangeByAppId(appId, value)
+          || handledByPlatform;
+      }
+      if (handledByPlatform) return { received: true };
       this.logger.warn(`Callback Gupshup ignorado: aplicativo não vinculado (${appId}).`);
       return { ignored: true };
     }
 
-    for (const entry of payload.entry ?? []) {
-      for (const change of entry?.changes ?? []) {
-        if (change?.field !== "messages") continue;
-        await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
-          return this.processMessagesChangeForChannel(channel, change.value ?? {}, appId);
-        });
-      }
+    for (const value of changes) {
+      await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
+        return this.processMessagesChangeForChannel(channel, value, appId);
+      });
     }
     return { received: true };
   }

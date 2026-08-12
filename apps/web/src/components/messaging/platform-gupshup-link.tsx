@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormField, Input } from "@/components/ui/input";
+import { GupshupCallbackUrls } from "@/components/messaging/gupshup-callback-urls";
 
 type PlatformChannelGupshup = {
   connected: boolean;
@@ -95,14 +96,7 @@ export function PlatformGupshupLink() {
           URL de callback lá e traga o nome e o id para cá.
         </p>
 
-        {config.callbackUrl && (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
-            <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">URL de callback do aplicativo:</p>
-            <code className="mt-1 block break-all text-xs text-slate-500 dark:text-slate-400">
-              {config.callbackUrl}
-            </code>
-          </div>
-        )}
+        <GupshupCallbackUrls />
 
         <div className="grid gap-4 md:grid-cols-2">
           <FormField label="Nome do aplicativo no Gupshup">

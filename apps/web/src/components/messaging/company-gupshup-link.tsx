@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormField, Input } from "@/components/ui/input";
+import { GupshupCallbackUrls } from "@/components/messaging/gupshup-callback-urls";
 
 const EMPTY_FORM = { appName: "", appId: "", signupLink: "", number: "" };
 
@@ -29,11 +30,6 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
     queryKey: ["super-admin-company-channel", companyId],
     queryFn: async () => (await api.get<MessagingChannel>(`/messaging/companies/${companyId}/whatsapp`)).data,
   });
-  const { data: config } = useQuery({
-    queryKey: ["whatsapp-gupshup-config"],
-    queryFn: async () => (await api.get<{ callbackUrl: string | null }>("/messaging/channel/whatsapp/gupshup")).data,
-  });
-
   useEffect(() => {
     if (!channel) return;
     setForm({
@@ -111,19 +107,7 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
           </FormField>
         </div>
 
-        {config?.callbackUrl && (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900">
-            <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-              Cole esta URL de callback no aplicativo, dentro do painel do Gupshup:
-            </p>
-            <code className="mt-1 block break-all text-xs text-slate-500 dark:text-slate-400">
-              {config.callbackUrl}
-            </code>
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              Sem isso as mensagens recebidas não chegam na Central de atendimento.
-            </p>
-          </div>
-        )}
+        <GupshupCallbackUrls />
 
         {feedback && <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{feedback}</p>}
         {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}

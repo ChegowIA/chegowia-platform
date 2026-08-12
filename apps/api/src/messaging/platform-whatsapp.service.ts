@@ -411,6 +411,17 @@ export class PlatformWhatsAppService {
     return this.processMessagesChange(channel, value);
   }
 
+  /**
+   * Mesma entrega, quando o callback vem no formato Meta (v3): ali o Gupshup
+   * identifica o aplicativo por id, não por nome.
+   */
+  async handleGupshupMessagesChangeByAppId(appId: string, value: any) {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({
+      where: { gupshupAppId: appId },
+    });
+    return this.processMessagesChange(channel, value);
+  }
+
   /** Devolve false quando o canal não é da plataforma, para o chamador seguir procurando. */
   private async processMessagesChange(channel: any, value: any) {
     if (!channel) return false;
