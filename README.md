@@ -32,7 +32,7 @@
 - [Como rodar localmente](#rodando-localmente)
 - [Testes e validação](#testes)
 - [Produção](docs/PRODUCAO.md)
-- [Revenda e Stripe Connect](docs/REVENDA_E_STRIPE.md)
+- [Revenda, assinaturas e cobrança (Asaas)](docs/REVENDA_E_COBRANCA.md)
 
 > Para publicação, segurança, Stripe, armazenamento local e backups, siga o
 > [guia de produção](docs/PRODUCAO.md).

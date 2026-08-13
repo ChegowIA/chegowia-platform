@@ -43,10 +43,13 @@ describe("webhook do Asaas", () => {
       update: jest.fn().mockResolvedValue({}),
     };
     const commissionLedger = { upsert: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
-    const prisma = { stripeEvent, clientSubscription, commissionLedger };
+    // O consumo variável entra na mesma cobrança da mensalidade, então o
+    // pagamento confirmado também o concilia.
+    const usageLedger = { updateMany: jest.fn().mockResolvedValue({ count: 0 }) };
+    const prisma = { stripeEvent, clientSubscription, commissionLedger, usageLedger };
     const service = buildBillingService({ prisma });
     service.onModuleDestroy();
-    return { service, stripeEvent, clientSubscription, commissionLedger };
+    return { service, stripeEvent, clientSubscription, commissionLedger, usageLedger };
   }
 
   const cobrancaPaga = {

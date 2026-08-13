@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   BadRequestException,
   ConflictException,
+  HttpException,
   Inject,
   Injectable,
   Logger,
@@ -35,10 +36,14 @@ import { AsaasProvider } from "./asaas.provider";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
+import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
+import { readSecretKey, sealSecret } from "../common/utils/secret-box";
 
 const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
 const FREE_TRIAL_DAYS = 7;
+/** O revendedor acompanha a subconta pelo painel do próprio Asaas. */
+const ASAAS_RESELLER_DASHBOARD_URL = "https://www.asaas.com/login";
 
 @Injectable()
 export class BillingService implements OnModuleInit, OnModuleDestroy {
@@ -257,7 +262,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return this.apply({ ...dto, resellerCode: reseller.code }, reseller.id);
   }
 
-  async connectOnboarding(userId: string) {
+  async connectOnboarding(userId: string, dto?: AsaasSubaccountDto) {
+    if (this.billingProvider() === "ASAAS") return this.connectOnboardingAsaas(userId, dto);
     if (!this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
     const reseller = await this.db().resellerProfile.findUnique({ where: { userId }, include: { user: true } });
     if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
@@ -335,7 +341,120 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  /**
+   * Abertura da subconta que recebe a comissão. Não existe página hospedada como
+   * no Stripe: a conta nasce pela API com os dados do formulário, e a partir daí
+   * o revendedor acessa o painel do Asaas com o próprio e-mail.
+   */
+  private async connectOnboardingAsaas(userId: string, dto?: AsaasSubaccountDto) {
+    const reseller = await this.db().resellerProfile.findUnique({
+      where: { userId },
+      include: {
+        user: { select: { name: true, email: true, phone: true, document: true } },
+        application: { select: { document: true, phone: true, name: true } },
+      },
+    });
+    if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
+    if (reseller.asaasWalletId) {
+      return { url: ASAAS_RESELLER_DASHBOARD_URL, destination: "dashboard" as const, ready: true };
+    }
+    const rotulos: Array<[keyof AsaasSubaccountDto, string]> = [
+      ["postalCode", "CEP"],
+      ["address", "endereço"],
+      ["addressNumber", "número"],
+      ["province", "bairro"],
+      ["incomeValue", "faturamento mensal"],
+    ];
+    const faltando = rotulos.filter(([campo]) => !dto?.[campo]).map(([, rotulo]) => rotulo);
+    if (!dto || faltando.length) {
+      throw new BadRequestException(
+        `Preencha ${faltando.join(", ")} para abrir sua conta de recebimento.`,
+      );
+    }
+
+    const documento = (reseller.user.document ?? reseller.application?.document ?? "").replace(/\D/g, "");
+    if (documento.length !== 11 && documento.length !== 14) {
+      this.logger.error(`Revendedor ${reseller.id} sem CPF/CNPJ válido; o Asaas não abre subconta sem documento.`);
+      throw new BadRequestException(
+        "Não encontramos um CPF/CNPJ válido no seu cadastro. Fale com o suporte da ChegowIA para corrigir antes de configurar os recebimentos.",
+      );
+    }
+    // Pessoa física sem data de nascimento é recusada pelo Asaas; dizemos isso
+    // aqui em vez de deixar o erro deles chegar cru na tela.
+    if (documento.length === 11 && !dto.birthDate) {
+      throw new BadRequestException("Informe sua data de nascimento para abrir a conta de recebimento.");
+    }
+
+    const telefone = (reseller.user.phone ?? reseller.application?.phone ?? "").replace(/\D/g, "");
+    let subconta: Awaited<ReturnType<AsaasProvider["createSubaccount"]>>;
+    try {
+      subconta = await this.asaas.createSubaccount({
+        name: reseller.user.name ?? reseller.application?.name ?? "Revendedor ChegowIA",
+        email: reseller.user.email,
+        cpfCnpj: documento,
+        ...(telefone ? { mobilePhone: telefone } : {}),
+        ...(documento.length === 11 && dto.birthDate ? { birthDate: dto.birthDate } : {}),
+        ...(documento.length === 14 ? { companyType: "LIMITED" } : {}),
+        incomeValue: dto.incomeValue!,
+        address: dto.address,
+        addressNumber: dto.addressNumber,
+        ...(dto.complement ? { complement: dto.complement } : {}),
+        province: dto.province,
+        postalCode: dto.postalCode,
+      });
+    } catch (error) {
+      // Sem idempotência na API deles, a segunda tentativa de um cadastro que já
+      // foi gravado responde com erro. Recuperar a carteira é o que destrava.
+      const recuperada = await this.asaas.findSubaccountByDocument(documento).catch(() => null);
+      if (!recuperada) throw error;
+      this.logger.warn(`Subconta do revendedor ${reseller.id} já existia no Asaas; carteira recuperada.`);
+      subconta = recuperada;
+    }
+
+    await this.db().resellerProfile.update({
+      where: { id: reseller.id },
+      data: {
+        asaasWalletId: subconta.walletId,
+        asaasAccountId: subconta.id || null,
+        asaasApiKeyEncrypted: this.sealAsaasKey(subconta.apiKey),
+        asaasOnboardingOk: true,
+      },
+    });
+    return { url: ASAAS_RESELLER_DASHBOARD_URL, destination: "dashboard" as const, ready: true, created: true };
+  }
+
+  /**
+   * A chave da subconta volta uma única vez. Só guardamos cifrada, e só quando
+   * há chave de cifra configurada — comissão é transferida pela conta raiz, então
+   * perder essa chave não impede repasse, apenas consultas ao painel da subconta.
+   */
+  private sealAsaasKey(apiKey?: string | null) {
+    if (!apiKey) return null;
+    const key = readSecretKey("ASAAS_SUBACCOUNT_ENCRYPTION_KEY") ?? readSecretKey("FISCAL_ENCRYPTION_KEY");
+    if (!key) {
+      this.logger.warn(
+        "Subconta Asaas criada sem ASAAS_SUBACCOUNT_ENCRYPTION_KEY: a chave da subconta foi descartada em vez de guardada em texto claro.",
+      );
+      return null;
+    }
+    return sealSecret(apiKey, key);
+  }
+
   async connectStatus(userId: string) {
+    if (this.billingProvider() === "ASAAS") {
+      const reseller = await this.db().resellerProfile.findUnique({ where: { userId } });
+      if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
+      return {
+        provider: "ASAAS" as const,
+        configured: true,
+        ready: Boolean(reseller.asaasWalletId),
+        status: reseller.asaasWalletId ? "ATIVO" : "NAO_INICIADO",
+        // O formulário é nosso, não uma página hospedada: a tela precisa saber
+        // que deve coletar estes campos antes de chamar a abertura da conta.
+        requiresForm: !reseller.asaasWalletId,
+        requirementsDue: [],
+      };
+    }
     if (!this.stripe) return { configured: false, ready: false, status: "NAO_CONFIGURADO" };
     const reseller = await this.db().resellerProfile.findUnique({ where: { userId } });
     if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
@@ -376,18 +495,27 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async requestPayout(userId: string) {
-    if (!this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
+    const asaas = this.billingProvider() === "ASAAS";
+    if (!asaas && !this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
     const reseller = await this.db().resellerProfile.findUnique({ where: { userId } });
-    if (!reseller?.stripeAccountId) {
-      throw new BadRequestException("Conclua e aguarde a aprovação da conta Stripe antes de solicitar repasse.");
-    }
-    const account = await this.stripe.accounts.retrieve(reseller.stripeAccountId);
-    if (!this.isStripeAccountReady(account)) {
-      await this.db().resellerProfile.update({
-        where: { id: reseller.id },
-        data: { stripeOnboardingOk: false },
-      });
-      throw new BadRequestException("Sua conta Stripe ainda tem dados pendentes ou não está habilitada para repasses.");
+    if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
+
+    if (asaas) {
+      if (!reseller.asaasWalletId) {
+        throw new BadRequestException("Configure sua conta de recebimento antes de solicitar repasse.");
+      }
+    } else {
+      if (!reseller.stripeAccountId) {
+        throw new BadRequestException("Conclua e aguarde a aprovação da conta Stripe antes de solicitar repasse.");
+      }
+      const account = await this.stripe!.accounts.retrieve(reseller.stripeAccountId);
+      if (!this.isStripeAccountReady(account)) {
+        await this.db().resellerProfile.update({
+          where: { id: reseller.id },
+          data: { stripeOnboardingOk: false },
+        });
+        throw new BadRequestException("Sua conta Stripe ainda tem dados pendentes ou não está habilitada para repasses.");
+      }
     }
 
     await this.releaseMatureCommissions(reseller.id);
@@ -431,7 +559,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async executePayoutBatch(batchId: string, background = false) {
-    if (!this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
+    const viaAsaas = this.billingProvider() === "ASAAS";
+    if (!viaAsaas && !this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
 
     /**
      * Claim atômico antes de qualquer chamada à Stripe — mesmo padrão de
@@ -455,7 +584,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const batch = await this.db().payoutBatch.findUnique({
       where: { id: batchId },
       include: {
-        reseller: { select: { stripeAccountId: true } },
+        reseller: { select: { stripeAccountId: true, asaasWalletId: true } },
         commissions: { select: { id: true } },
       },
     });
@@ -464,7 +593,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (claimed.count !== 1) {
       if (batch.status === PayoutBatchStatus.PAGO) {
         return {
-          transferId: batch.stripeTransferId,
+          transferId: batch.stripeTransferId ?? batch.asaasTransferId,
           amount: Number(batch.amount),
           count: batch.commissions.length,
           alreadyProcessed: true,
@@ -485,8 +614,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       throw new ConflictException("Este lote não está disponível para processamento.");
     }
 
-    if (!batch.reseller.stripeAccountId) {
+    if (!viaAsaas && !batch.reseller.stripeAccountId) {
       const reason = "A conta Stripe do revendedor não está configurada.";
+      await this.failPayoutBatch(batch.id, reason);
+      if (background) return null;
+      throw new BadRequestException(reason);
+    }
+    if (viaAsaas && !batch.reseller.asaasWalletId) {
+      const reason = "A conta de recebimento do revendedor não está configurada.";
       await this.failPayoutBatch(batch.id, reason);
       if (background) return null;
       throw new BadRequestException(reason);
@@ -494,25 +629,28 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     const attempt = batch.attempts;
     try {
-      const transfer = await this.stripe.transfers.create(
-        {
-          amount: Math.round(Number(batch.amount) * 100),
-          currency: batch.currency,
-          destination: batch.reseller.stripeAccountId,
-          metadata: {
-            resellerId: batch.resellerId,
-            payoutBatchId: batch.id,
-            commissionCount: String(batch.commissions.length),
+      const transferId = viaAsaas
+        ? await this.transferPayoutViaAsaas(batch)
+        : (await this.stripe!.transfers.create(
+          {
+            amount: Math.round(Number(batch.amount) * 100),
+            currency: batch.currency,
+            destination: batch.reseller.stripeAccountId!,
+            metadata: {
+              resellerId: batch.resellerId,
+              payoutBatchId: batch.id,
+              commissionCount: String(batch.commissions.length),
+            },
           },
-        },
-        { idempotencyKey: `reseller-payout-batch-${batch.id}` },
-      );
+          { idempotencyKey: `reseller-payout-batch-${batch.id}` },
+        )).id;
+      const identificacao = viaAsaas ? { asaasTransferId: transferId } : { stripeTransferId: transferId };
       await this.db().$transaction([
         this.db().payoutBatch.update({
           where: { id: batch.id },
           data: {
             status: PayoutBatchStatus.PAGO,
-            stripeTransferId: transfer.id,
+            ...identificacao,
             failureReason: null,
             nextAttemptAt: null,
             completedAt: new Date(),
@@ -526,17 +664,19 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           data: {
             status: CommissionStatus.PAGA,
             paidAt: new Date(),
-            stripeTransferId: transfer.id,
+            ...identificacao,
           },
         }),
       ]);
       return {
-        transferId: transfer.id,
+        transferId,
         amount: Number(batch.amount),
         count: batch.commissions.length,
       };
     } catch (error) {
-      const safeReason = this.stripeErrorForUser(error, "Falha ao enviar o repasse.");
+      const safeReason = viaAsaas
+        ? this.asaasErrorForUser(error, "Falha ao enviar o repasse.")
+        : this.stripeErrorForUser(error, "Falha ao enviar o repasse.");
       if (this.isRetryableStripeError(error) && attempt < MAX_PAYOUT_ATTEMPTS) {
         const retryDelayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(attempt - 1, 6));
         await this.db().payoutBatch.update({
@@ -563,6 +703,34 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       if (background) return null;
       throw new BadGatewayException(finalReason);
     }
+  }
+
+  /**
+   * Transferência da comissão para a carteira do revendedor.
+   *
+   * O Asaas não aceita chave de idempotência. Se a transferência sair e a
+   * resposta se perder, a segunda tentativa pagaria de novo — por isso
+   * consultamos pela `externalReference`, que é o id do lote, antes de criar.
+   */
+  private async transferPayoutViaAsaas(batch: { id: string; amount: unknown; reseller: { asaasWalletId: string | null } }) {
+    const referencia = `payout-${batch.id}`;
+    const existente = await this.asaas.findTransferByReference(referencia).catch(() => null);
+    if (existente && existente.status !== "FAILED" && existente.status !== "CANCELLED") {
+      this.logger.warn(`Repasse ${batch.id} já tinha transferência ${existente.id} no Asaas; nenhuma nova foi criada.`);
+      return existente.id;
+    }
+    const transferencia = await this.asaas.transferToWallet({
+      value: Number(batch.amount),
+      walletId: batch.reseller.asaasWalletId!,
+      externalReference: referencia,
+    });
+    return transferencia.id;
+  }
+
+  /** Mensagem do Asaas já vem pronta para o usuário; só evitamos vazar texto longo. */
+  private asaasErrorForUser(error: unknown, fallback: string) {
+    const message = error instanceof HttpException ? error.message : null;
+    return message && message.length > 0 && message.length < 300 ? message : fallback;
   }
 
   private async failPayoutBatch(batchId: string, reason: string) {
@@ -618,7 +786,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     );
     return {
       status: subscription.status,
-      manageable: Boolean(subscription.stripeCustomerId),
+      provider: subscription.asaasSubscriptionId ? "ASAAS" : subscription.stripeCustomerId ? "STRIPE" : null,
+      manageable: Boolean(subscription.stripeCustomerId || subscription.asaasSubscriptionId),
       accessRestricted: trialExpired || (enforcementEnabled && !trialActive && subscription.status !== SubscriptionStatus.ATIVA),
       activationAvailable: trialExpired,
       trial: subscription.trialStartedAt || subscription.trialEndsAt
@@ -653,8 +822,11 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async companyPortal(companyId: string) {
-    if (!this.stripe) throw new BadRequestException("Stripe ainda não configurado.");
     const subscription = await this.db().clientSubscription.findUnique({ where: { companyId } });
+    // A assinatura manda no provedor, não a variável de ambiente: quem contratou
+    // no Stripe continua sendo gerenciado lá mesmo depois da migração.
+    if (subscription?.asaasSubscriptionId) return this.companyPortalAsaas(subscription);
+    if (!this.stripe) throw new BadRequestException("Stripe ainda não configurado.");
     if (!subscription?.stripeCustomerId) {
       throw new BadRequestException("Esta empresa ainda não possui uma assinatura gerenciável no Stripe.");
     }
@@ -669,6 +841,114 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         this.stripeErrorForUser(error, "Não foi possível abrir o portal da assinatura."),
       );
     }
+  }
+
+  /**
+   * O Asaas não tem portal do cliente como o Stripe. O que o empresário precisa
+   * — pagar a cobrança do mês e escolher entre Pix, boleto ou cartão — está na
+   * própria fatura, então é para ela que mandamos.
+   */
+  private async companyPortalAsaas(subscription: any) {
+    const cobrancas = await this.asaas.listSubscriptionPayments(subscription.asaasSubscriptionId);
+    const emAberto = cobrancas.find((item) => ["PENDING", "OVERDUE", "AWAITING_RISK_ANALYSIS"].includes(item.status));
+    if (!emAberto?.invoiceUrl) {
+      throw new BadRequestException(
+        "Não há cobrança em aberto no momento. A próxima fatura fica disponível quando o ciclo virar.",
+      );
+    }
+    return { url: emAberto.invoiceUrl };
+  }
+
+  /**
+   * Histórico de cobranças para a tela de assinatura. Cada linha traz o link da
+   * fatura, que é onde o cliente troca a forma de pagamento — no Asaas o meio é
+   * escolhido na hora de pagar, não guardado antes.
+   */
+  async companyInvoices(companyId: string) {
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { companyId },
+      select: { asaasSubscriptionId: true, stripeCustomerId: true },
+    });
+    if (subscription?.asaasSubscriptionId) {
+      const cobrancas = await this.asaas
+        .listSubscriptionPayments(subscription.asaasSubscriptionId)
+        .catch((error: unknown) => {
+          this.logger.error(`Não foi possível listar cobranças da empresa ${companyId}.`, this.stripeErrorForLog(error));
+          return [];
+        });
+      return {
+        provider: "ASAAS" as const,
+        invoices: cobrancas.map((item) => ({
+          id: item.id,
+          value: Number(item.value ?? 0),
+          dueDate: item.dueDate,
+          status: item.status,
+          paid: ["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"].includes(item.status),
+          url: item.invoiceUrl ?? null,
+        })),
+      };
+    }
+    if (!this.stripe || !subscription?.stripeCustomerId) return { provider: null, invoices: [] };
+    const faturas = await this.stripe.invoices
+      .list({ customer: subscription.stripeCustomerId, limit: 12 })
+      .catch(() => ({ data: [] as Stripe.Invoice[] }));
+    return {
+      provider: "STRIPE" as const,
+      invoices: faturas.data.map((item) => ({
+        id: item.id,
+        value: (item.total ?? 0) / 100,
+        dueDate: item.created ? new Date(item.created * 1000).toISOString().slice(0, 10) : null,
+        status: item.status ?? "",
+        paid: item.status === "paid",
+        url: item.hosted_invoice_url ?? null,
+      })),
+    };
+  }
+
+  /**
+   * Cancelamento pedido pelo próprio empresário. O acesso continua até o fim do
+   * período já pago: cancelar não devolve dinheiro, e cortar na hora seria tirar
+   * algo que ele pagou.
+   */
+  async cancelCompanySubscription(companyId: string) {
+    const subscription = await this.db().clientSubscription.findUnique({ where: { companyId } });
+    if (!subscription) throw new NotFoundException("Assinatura não encontrada para esta empresa.");
+    if (subscription.status === SubscriptionStatus.CANCELADA) {
+      return { status: SubscriptionStatus.CANCELADA, alreadyCanceled: true };
+    }
+
+    if (subscription.asaasSubscriptionId) {
+      await this.asaas.cancelSubscription(subscription.asaasSubscriptionId);
+    } else if (subscription.stripeSubscriptionId && this.stripe) {
+      try {
+        await this.stripe.subscriptions.update(subscription.stripeSubscriptionId, { cancel_at_period_end: true });
+      } catch (error) {
+        throw new BadGatewayException(this.stripeErrorForUser(error, "Não foi possível cancelar a assinatura."));
+      }
+      // Na Stripe o corte acontece no fim do período; o status muda quando o
+      // webhook avisar. Aqui só registramos o pedido.
+      await this.db().clientSubscription.update({
+        where: { id: subscription.id },
+        data: { canceledAt: new Date() },
+      });
+      return { status: subscription.status, endsAt: subscription.currentPeriodEnd, scheduled: true };
+    } else {
+      throw new BadRequestException("Esta empresa não possui uma assinatura ativa para cancelar.");
+    }
+
+    // No Asaas, cancelar a assinatura só impede cobranças futuras; o acesso
+    // segue até o fim do período pago.
+    const fimDoPeriodo = subscription.currentPeriodEnd ?? null;
+    await this.db().clientSubscription.update({
+      where: { id: subscription.id },
+      data: {
+        canceledAt: new Date(),
+        // Sem período pago em curso não há o que preservar.
+        ...(fimDoPeriodo && fimDoPeriodo > new Date() ? {} : { status: SubscriptionStatus.CANCELADA }),
+      },
+    });
+    this.logger.log(`Assinatura ${subscription.id} cancelada a pedido da empresa ${companyId}.`);
+    return { status: SubscriptionStatus.CANCELADA, endsAt: fimDoPeriodo, scheduled: Boolean(fimDoPeriodo && fimDoPeriodo > new Date()) };
   }
 
   /**
@@ -1427,7 +1707,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.processPendingStripeEvents();
       await this.processPendingPayouts();
-      await this.syncVariableUsageToStripe();
+      if (this.billingProvider() === "ASAAS") await this.syncVariableUsageToAsaas();
+      else await this.syncVariableUsageToStripe();
       await this.alertDeadLetters();
     } catch (error) {
       // Chamado por `setInterval` sem quem espere a promessa: uma exceção que
@@ -1557,6 +1838,82 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * na próxima fatura Stripe. O idempotency key é calculado dos IDs do ledger,
    * portanto uma queda entre Stripe e banco não duplica cobrança no retry.
    */
+  /**
+   * Consumo variável no Asaas. Não existe item de fatura como no Stripe: o que
+   * há é a cobrança da assinatura, ainda em aberto, cujo valor pode ser
+   * atualizado. Somamos o consumo a ela, de modo que o cliente receba um boleto
+   * ou Pix só — em vez de uma segunda cobrança avulsa todo mês.
+   *
+   * Somamos ao valor atual da cobrança, não ao valor do plano: cada lançamento
+   * sai da fila ao ser somado, então rodar de novo no mesmo ciclo acrescenta só
+   * o que entrou depois.
+   */
+  private async syncVariableUsageToAsaas() {
+    const pending = await this.usage.pendingBillableEntries().catch((error: unknown) => {
+      this.logger.error("Não foi possível ler o consumo variável pendente.", this.stripeErrorForLog(error));
+      return [];
+    });
+
+    const porEmpresa = new Map<string, any[]>();
+    for (const entry of pending) {
+      porEmpresa.set(entry.companyId, [...(porEmpresa.get(entry.companyId) ?? []), entry]);
+    }
+
+    for (const [companyId, entries] of porEmpresa) {
+      const subscription = await this.db().clientSubscription.findUnique({
+        where: { companyId },
+        select: { asaasSubscriptionId: true, status: true },
+      });
+      if (!subscription?.asaasSubscriptionId || subscription.status !== SubscriptionStatus.ATIVA) continue;
+
+      const total = Math.round(entries.reduce((sum, entry) => sum + Number(entry.billableAmount), 0) * 100) / 100;
+      if (total <= 0) continue;
+
+      try {
+        const cobrancas = await this.asaas.listSubscriptionPayments(subscription.asaasSubscriptionId);
+        // Só cobrança ainda em aberto aceita mudança de valor; paga ou vencida
+        // não. Ficando de fora, o consumo espera o próximo ciclo em vez de
+        // sumir — os lançamentos continuam PENDENTE.
+        const emAberto = cobrancas
+          .filter((item) => ["PENDING", "AWAITING_RISK_ANALYSIS"].includes(item.status))
+          .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)))[0];
+        if (!emAberto) continue;
+
+        const detalhe = entries
+          .map((entry) => `${usageMetricLabel(entry.metric)} ${formatUsageQuantity(Number(entry.quantity))}`)
+          .join(", ");
+        await this.asaas.updatePayment(emAberto.id, {
+          value: Math.round((Number(emAberto.value) + total) * 100) / 100,
+          description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
+        });
+
+        await this.db().usageLedger.updateMany({
+          where: {
+            id: { in: entries.map((entry) => entry.id) },
+            status: UsageLedgerStatus.PENDENTE,
+            trialCoveredAt: null,
+          },
+          data: { status: UsageLedgerStatus.SINCRONIZADO, asaasPaymentId: emAberto.id },
+        });
+      } catch (error) {
+        this.logger.error(
+          `Não foi possível somar o consumo variável da empresa ${companyId} à cobrança do Asaas.`,
+          this.stripeErrorForLog(error),
+        );
+      }
+    }
+  }
+
+  /** Cobrança paga: o consumo que entrou nela deixa de estar pendente. */
+  private async markAsaasUsagePaid(paymentId: string) {
+    await this.db().usageLedger.updateMany({
+      where: { asaasPaymentId: paymentId, status: UsageLedgerStatus.SINCRONIZADO },
+      data: { status: UsageLedgerStatus.FATURADO },
+    }).catch((error: unknown) => {
+      this.logger.error(`Não foi possível conciliar o consumo da cobrança ${paymentId}.`, this.stripeErrorForLog(error));
+    });
+  }
+
   private async syncVariableUsageToStripe() {
     if (!this.stripe) return;
     const pending = await this.usage.pendingBillableEntries().catch((error: unknown) => {
@@ -1738,6 +2095,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     if (evento === "PAYMENT_CONFIRMED" || evento === "PAYMENT_RECEIVED") {
       await this.activateFromAsaasPayment(cobranca);
+      await this.markAsaasUsagePaid(String(cobranca.id));
       return;
     }
     if (evento === "PAYMENT_OVERDUE") {

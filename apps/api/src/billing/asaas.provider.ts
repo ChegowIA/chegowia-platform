@@ -28,6 +28,13 @@ export type AsaasSubscription = {
   customer?: string | null;
 };
 
+export type AsaasTransfer = {
+  id: string;
+  /** PENDING, BANK_PROCESSING, DONE, FAILED, CANCELLED. */
+  status: string;
+  value: number;
+};
+
 export type AsaasSubaccount = {
   id: string;
   walletId: string;
@@ -172,9 +179,12 @@ export class AsaasProvider {
     email: string;
     cpfCnpj: string;
     mobilePhone?: string;
+    birthDate?: string;
+    companyType?: string;
     incomeValue: number;
     address?: string;
     addressNumber?: string;
+    complement?: string;
     province?: string;
     postalCode?: string;
   }): Promise<AsaasSubaccount> {
@@ -183,6 +193,21 @@ export class AsaasProvider {
       throw new BadGatewayException("O Asaas não devolveu a carteira da subconta criada.");
     }
     return { id: String(result.id ?? ""), walletId: String(result.walletId), apiKey: result.apiKey ?? null };
+  }
+
+  /**
+   * Subconta já aberta para o mesmo documento. O Asaas não aceita chave de
+   * idempotência: se a criação falhar depois de gravar do lado deles, a segunda
+   * tentativa devolve "já existe conta com este CPF/CNPJ" e o revendedor ficaria
+   * travado. Aqui recuperamos a carteira em vez de recriar.
+   *
+   * A `apiKey` não volta nesta consulta — ela existe uma única vez, na criação.
+   */
+  async findSubaccountByDocument(cpfCnpj: string): Promise<AsaasSubaccount | null> {
+    const result = await this.request(`/accounts?cpfCnpj=${encodeURIComponent(cpfCnpj)}&limit=1`, { method: "GET" });
+    const found = Array.isArray(result?.data) ? result.data[0] : null;
+    if (!found?.walletId) return null;
+    return { id: String(found.id ?? ""), walletId: String(found.walletId), apiKey: null };
   }
 
   // ---------------------------------------------------------------------------
@@ -194,8 +219,29 @@ export class AsaasProvider {
    * Asaas, é gratuita e imediata — é o que permite manter a carência de 7 dias
    * da comissão sem custo, em vez de repassar no ato pelo split.
    */
-  async transferToWallet(params: { value: number; walletId: string; externalReference?: string }) {
-    return this.request("/transfers", { method: "POST", body: params });
+  async transferToWallet(params: {
+    value: number;
+    walletId: string;
+    externalReference?: string;
+  }): Promise<AsaasTransfer> {
+    const result = await this.request("/transfers", { method: "POST", body: params });
+    if (!result?.id) throw new BadGatewayException("O Asaas não devolveu o identificador da transferência.");
+    return { id: String(result.id), status: String(result.status ?? "PENDING"), value: Number(result.value ?? params.value) };
+  }
+
+  /**
+   * Transferências recentes. Serve para reconciliar depois de uma queda entre a
+   * chamada e a gravação: sem chave de idempotência, é a `externalReference` que
+   * prova se o lote já saiu.
+   */
+  async findTransferByReference(externalReference: string): Promise<AsaasTransfer | null> {
+    const result = await this.request(
+      `/transfers?externalReference=${encodeURIComponent(externalReference)}&limit=1`,
+      { method: "GET" },
+    );
+    const found = Array.isArray(result?.data) ? result.data[0] : null;
+    if (!found?.id) return null;
+    return { id: String(found.id), status: String(found.status ?? "PENDING"), value: Number(found.value ?? 0) };
   }
 
   /** Saldo da conta autenticada; usado para conferir antes de transferir. */

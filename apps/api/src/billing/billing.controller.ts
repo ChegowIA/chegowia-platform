@@ -8,6 +8,7 @@ import { Public } from "../common/decorators/public.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
 import { BillingService } from "./billing.service";
 import { ClientApplicationDto } from "./dto/client-application.dto";
+import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
 import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
 
 @ApiTags("billing")
@@ -66,9 +67,16 @@ export class BillingController {
     return this.billing.createForReseller(userId, dto);
   }
 
+  /**
+   * O corpo só é usado pelo Asaas, que abre a subconta pela API e precisa do
+   * endereço e da renda declarada. No Stripe o onboarding é hospedado e a
+   * chamada segue sem corpo.
+   */
   @Roles(Role.REVENDEDOR)
   @Post("reseller/connect")
-  connect(@CurrentUser("sub") userId: string) { return this.billing.connectOnboarding(userId); }
+  connect(@CurrentUser("sub") userId: string, @Body() dto?: AsaasSubaccountDto) {
+    return this.billing.connectOnboarding(userId, dto);
+  }
 
   @Roles(Role.REVENDEDOR)
   @Get("reseller/connect/status")
@@ -90,6 +98,20 @@ export class BillingController {
   @Post("company/portal")
   companyPortal(@CurrentUser("companyId") companyId: string) {
     return this.billing.companyPortal(companyId);
+  }
+
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Get("company/invoices")
+  companyInvoices(@CurrentUser("companyId") companyId: string) {
+    return this.billing.companyInvoices(companyId);
+  }
+
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Post("company/cancel")
+  companyCancel(@CurrentUser("companyId") companyId: string) {
+    return this.billing.cancelCompanySubscription(companyId);
   }
 
   /** Disponível mesmo com o painel bloqueado ao final do teste. */

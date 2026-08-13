@@ -21,6 +21,10 @@ export function validateEnvironment(config: Record<string, unknown>) {
   const env = { ...config } as Record<string, string | undefined>;
   const production = env.NODE_ENV === "production";
   const gupshupEnabled = env.GUPSHUP_ENABLED === "true";
+  // Provedor que atende contratações novas. Assinatura já criada no Stripe segue
+  // sendo cobrada por ele, então as chaves da Stripe continuam exigidas enquanto
+  // ele for o provedor corrente.
+  const asaasBilling = env.BILLING_PROVIDER === "ASAAS";
   const required = ["DATABASE_URL", "JWT_ACCESS_SECRET", "APP_URL", "CORS_ORIGIN"];
 
   if (production) {
@@ -32,9 +36,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
       // Sem destinatário o alerta de dead-letter vira só uma linha de log:
       // fatura paga sem acesso liberado passaria dias sem ninguém perceber.
       "OPS_ALERT_EMAIL",
-      "STRIPE_SECRET_KEY",
-      "STRIPE_WEBHOOK_SECRET",
-      "STRIPE_CONNECT_WEBHOOK_SECRET",
       "DEEPSEEK_API_KEY",
       "UPLOAD_ROOT",
       "PRIVATE_UPLOAD_ROOT",
@@ -44,6 +45,21 @@ export function validateEnvironment(config: Record<string, unknown>) {
       // fiscal fica inutilizável — melhor falhar no boot do que na emissão.
       "FISCAL_ENCRYPTION_KEY",
     );
+    if (asaasBilling) {
+      required.push(
+        "ASAAS_API_KEY",
+        // Única prova de origem do webhook: o Asaas não assina o corpo.
+        "ASAAS_WEBHOOK_TOKEN",
+        // O callback precisa chegar de fora para a assinatura ser liberada.
+        "API_PUBLIC_URL",
+      );
+    } else {
+      required.push(
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_CONNECT_WEBHOOK_SECRET",
+      );
+    }
     if (gupshupEnabled) {
       required.push(
         "API_PUBLIC_URL",
@@ -104,38 +120,63 @@ export function validateEnvironment(config: Record<string, unknown>) {
 
     const secretKeys = [
       "SMTP_PASSWORD",
-      "STRIPE_SECRET_KEY",
-      "STRIPE_WEBHOOK_SECRET",
-      "STRIPE_CONNECT_WEBHOOK_SECRET",
       "DEEPSEEK_API_KEY",
+      ...(asaasBilling
+        ? ["ASAAS_API_KEY", "ASAAS_WEBHOOK_TOKEN"]
+        : ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_CONNECT_WEBHOOK_SECRET"]),
     ];
     const placeholders = secretKeys.filter((key) => looksLikePlaceholder(env[key] ?? ""));
     if (placeholders.length) {
       throw new Error(`Segredos de produção ainda contêm placeholders: ${placeholders.join(", ")}`);
     }
 
+    if (asaasBilling) {
+      const asaasKey = env.ASAAS_API_KEY ?? "";
+      // A chave carrega o ambiente: a de homologação não move dinheiro de
+      // verdade, e subir com ela em produção deixaria todo mundo "assinando" de
+      // graça sem ninguém perceber.
+      const sandboxAllowed = env.ALLOW_ASAAS_SANDBOX_IN_PRODUCTION === "true";
+      if (!asaasKey.startsWith("$aact_") ) {
+        throw new Error("ASAAS_API_KEY precisa ser a chave da API do Asaas (começa com $aact_).");
+      }
+      if (asaasKey.startsWith("$aact_hmlg_") && !sandboxAllowed) {
+        throw new Error(
+          "Uma chave de homologação do Asaas não pode iniciar em produção. Use a chave de produção ou habilite ALLOW_ASAAS_SANDBOX_IN_PRODUCTION apenas em ambiente de teste.",
+        );
+      }
+      if ((env.ASAAS_WEBHOOK_TOKEN ?? "").trim().length < 20) {
+        throw new Error("ASAAS_WEBHOOK_TOKEN deve ter pelo menos 20 caracteres aleatórios.");
+      }
+    }
+
+    // No Asaas, a Stripe vira opcional: só permanece configurada enquanto houver
+    // assinatura antiga sendo cobrada por ela. Quando estiver presente, porém, o
+    // formato continua sendo conferido — chave meia-boca em produção é pior do
+    // que chave nenhuma.
     const stripeKey = env.STRIPE_SECRET_KEY ?? "";
-    const testModeAllowed = env.ALLOW_STRIPE_TEST_IN_PRODUCTION === "true";
-    if (stripeKey.startsWith("sk_test_") && !testModeAllowed) {
-      throw new Error(
-        "Uma chave Stripe de teste não pode iniciar em produção. Use a chave live ou habilite explicitamente ALLOW_STRIPE_TEST_IN_PRODUCTION apenas em homologação.",
-      );
-    }
-    if (
-      (!testModeAllowed && !/^sk_live_[A-Za-z0-9]{16,}$/.test(stripeKey))
-      || (testModeAllowed && !/^sk_(?:live|test)_[A-Za-z0-9]{16,}$/.test(stripeKey))
-    ) {
-      throw new Error(
-        "STRIPE_SECRET_KEY precisa ser uma chave secreta Stripe válida para este ambiente.",
-      );
-    }
-    if (!/^whsec_[A-Za-z0-9]{16,}$/.test(env.STRIPE_WEBHOOK_SECRET ?? "")) {
-      throw new Error("STRIPE_WEBHOOK_SECRET precisa ser o segredo válido do endpoint de produção.");
-    }
-    if (!/^whsec_[A-Za-z0-9]{16,}$/.test(env.STRIPE_CONNECT_WEBHOOK_SECRET ?? "")) {
-      throw new Error(
-        "STRIPE_CONNECT_WEBHOOK_SECRET precisa ser o segredo válido do endpoint de contas conectadas.",
-      );
+    if (!asaasBilling || stripeKey) {
+      const testModeAllowed = env.ALLOW_STRIPE_TEST_IN_PRODUCTION === "true";
+      if (stripeKey.startsWith("sk_test_") && !testModeAllowed) {
+        throw new Error(
+          "Uma chave Stripe de teste não pode iniciar em produção. Use a chave live ou habilite explicitamente ALLOW_STRIPE_TEST_IN_PRODUCTION apenas em homologação.",
+        );
+      }
+      if (
+        (!testModeAllowed && !/^sk_live_[A-Za-z0-9]{16,}$/.test(stripeKey))
+        || (testModeAllowed && !/^sk_(?:live|test)_[A-Za-z0-9]{16,}$/.test(stripeKey))
+      ) {
+        throw new Error(
+          "STRIPE_SECRET_KEY precisa ser uma chave secreta Stripe válida para este ambiente.",
+        );
+      }
+      if (!/^whsec_[A-Za-z0-9]{16,}$/.test(env.STRIPE_WEBHOOK_SECRET ?? "")) {
+        throw new Error("STRIPE_WEBHOOK_SECRET precisa ser o segredo válido do endpoint de produção.");
+      }
+      if (!/^whsec_[A-Za-z0-9]{16,}$/.test(env.STRIPE_CONNECT_WEBHOOK_SECRET ?? "")) {
+        throw new Error(
+          "STRIPE_CONNECT_WEBHOOK_SECRET precisa ser o segredo válido do endpoint de contas conectadas.",
+        );
+      }
     }
     if ((env.DEEPSEEK_API_KEY ?? "").length < 24) {
       throw new Error("DEEPSEEK_API_KEY parece incompleta.");

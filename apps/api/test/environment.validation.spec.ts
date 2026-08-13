@@ -144,4 +144,60 @@ describe("validateEnvironment", () => {
       WHATSAPP_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString("base64"),
     })).toThrow("GUPSHUP_WEBHOOK_TOKEN");
   });
+
+  describe("cobrança pelo Asaas", () => {
+    // Com BILLING_PROVIDER=ASAAS a Stripe deixa de ser exigida, mas as chaves do
+    // Asaas passam a ser — e a chave carrega o ambiente, então subir em produção
+    // com a de homologação faria todo mundo "assinar" sem pagar.
+    const asaasProducao = {
+      ...validProduction,
+      BILLING_PROVIDER: "ASAAS",
+      API_PUBLIC_URL: "https://api.chegowia.com.br",
+      ASAAS_API_KEY: `$aact_prod_${"a".repeat(40)}`,
+      ASAAS_WEBHOOK_TOKEN: "w".repeat(40),
+      STRIPE_SECRET_KEY: undefined,
+      STRIPE_WEBHOOK_SECRET: undefined,
+      STRIPE_CONNECT_WEBHOOK_SECRET: undefined,
+    };
+
+    it("sobe sem nenhuma chave da Stripe", () => {
+      expect(() => validateEnvironment(asaasProducao)).not.toThrow();
+    });
+
+    it("exige a chave e o token do webhook", () => {
+      expect(() => validateEnvironment({ ...asaasProducao, ASAAS_API_KEY: undefined })).toThrow("ASAAS_API_KEY");
+      expect(() => validateEnvironment({ ...asaasProducao, ASAAS_WEBHOOK_TOKEN: undefined })).toThrow(
+        "ASAAS_WEBHOOK_TOKEN",
+      );
+    });
+
+    it("recusa chave de homologação em produção", () => {
+      expect(() => validateEnvironment({ ...asaasProducao, ASAAS_API_KEY: `$aact_hmlg_${"a".repeat(40)}` })).toThrow(
+        "homologação",
+      );
+    });
+
+    it("aceita a chave de homologação quando liberada explicitamente", () => {
+      expect(() => validateEnvironment({
+        ...asaasProducao,
+        ASAAS_API_KEY: `$aact_hmlg_${"a".repeat(40)}`,
+        ALLOW_ASAAS_SANDBOX_IN_PRODUCTION: "true",
+      })).not.toThrow();
+    });
+
+    it("recusa token de webhook curto", () => {
+      expect(() => validateEnvironment({ ...asaasProducao, ASAAS_WEBHOOK_TOKEN: "curto" })).toThrow(
+        "ASAAS_WEBHOOK_TOKEN",
+      );
+    });
+
+    it("continua conferindo a Stripe enquanto ela estiver configurada", () => {
+      // Migrado, mas ainda cobrando assinatura antiga: chave meia-boca em
+      // produção é pior do que chave nenhuma.
+      expect(() => validateEnvironment({
+        ...asaasProducao,
+        STRIPE_SECRET_KEY: `sk_test_${"a".repeat(32)}`,
+      })).toThrow("teste");
+    });
+  });
 });
