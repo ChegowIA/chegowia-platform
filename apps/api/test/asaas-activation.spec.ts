@@ -266,7 +266,7 @@ describe("conciliação de mensalidade vencida", () => {
   }
 
   it("marca inadimplente quando o Asaas tem cobrança vencida", async () => {
-    const { service, clientSubscription } = build([{ id: "pay_1", status: "OVERDUE", value: 5 }]);
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "OVERDUE", value: 5, dueDate: "2026-08-01" }]);
 
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
 
@@ -276,7 +276,41 @@ describe("conciliação de mensalidade vencida", () => {
   });
 
   it("não bloqueia quem só tem cobrança em aberto dentro do prazo", async () => {
-    const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5 }]);
+    const amanha = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5, dueDate: amanha }]);
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    expect(clientSubscription.update).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia por data passada mesmo sem o rótulo OVERDUE do Asaas", async () => {
+    // O rótulo só aparece na virada do dia deles. Esperar por ele deixaria o
+    // bloqueio na agenda do Asaas, e a cobrança já está vencida de fato.
+    const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5, dueDate: ontem }]);
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    expect(clientSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+    );
+  });
+
+  it("não bloqueia no próprio dia do vencimento", async () => {
+    // Vencer é ter passado do prazo, não chegar nele: quem paga no dia continua
+    // com a operação de pé.
+    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5, dueDate: hoje }]);
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    expect(clientSubscription.update).not.toHaveBeenCalled();
+  });
+
+  it("não bloqueia por cobrança já paga com vencimento antigo", async () => {
+    const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "RECEIVED", value: 5, dueDate: ontem }]);
 
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
 

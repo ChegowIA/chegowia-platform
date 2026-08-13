@@ -1968,7 +1968,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       if (!this.deveConferir(`vencimento:${assinatura.id}`, 15 * 60_000)) continue;
       try {
         const cobrancas = await this.asaas.listSubscriptionPayments(assinatura.asaasSubscriptionId!);
-        if (!cobrancas.some((item) => item.status === "OVERDUE")) continue;
+        if (!cobrancas.some((item) => this.isAsaasPaymentOverdue(item))) continue;
         await this.db().clientSubscription.update({
           where: { id: assinatura.id },
           data: { status: SubscriptionStatus.INADIMPLENTE },
@@ -2111,6 +2111,25 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
     });
     return cobranca.id;
+  }
+
+  /**
+   * Cobrança vencida.
+   *
+   * O rótulo `OVERDUE` só aparece na virada do dia do Asaas, não no instante em
+   * que a data passa. Esperar por ele deixaria o bloqueio na agenda deles — e uma
+   * cobrança em aberto com vencimento no passado está vencida, com ou sem
+   * rótulo. A data é comparada no fuso de São Paulo, que é onde o vencimento é
+   * lido pelo cliente.
+   */
+  private isAsaasPaymentOverdue(cobranca: { status: string; dueDate?: string | null }) {
+    if (cobranca.status === "OVERDUE") return true;
+    if (!["PENDING", "AWAITING_RISK_ANALYSIS"].includes(cobranca.status)) return false;
+    const vencimento = String(cobranca.dueDate ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) return false;
+    // `en-CA` formata como AAAA-MM-DD, que compara direto como texto.
+    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    return vencimento < hoje;
   }
 
   /**
