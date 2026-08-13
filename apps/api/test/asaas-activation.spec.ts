@@ -230,3 +230,66 @@ describe("conciliação de cobrança paga sem ativação", () => {
     expect(clientSubscription.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Vencimento sem webhook.
+ *
+ * O bloqueio do painel depende de a assinatura estar INADIMPLENTE, e quem marca
+ * isso é o evento PAYMENT_OVERDUE. Com o webhook desativado — como esteve na
+ * primeira validação — o cliente seguiria usando sem pagar, e o consumo de IA e
+ * WhatsApp desse período é custo nosso, que não volta.
+ */
+describe("conciliação de mensalidade vencida", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.BILLING_PROVIDER = "ASAAS";
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  function build(cobrancas: any[]) {
+    const clientSubscription = {
+      findMany: jest.fn().mockResolvedValue([
+        { id: "sub-1", companyId: "empresa-1", asaasSubscriptionId: "sub_asaas_1" },
+      ]),
+      update: jest.fn().mockResolvedValue({}),
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      listSubscriptionPayments: jest.fn().mockResolvedValue(cobrancas),
+    };
+    const service = buildBillingService({ prisma: { clientSubscription }, asaas });
+    service.onModuleDestroy();
+    return { service, clientSubscription, asaas };
+  }
+
+  it("marca inadimplente quando o Asaas tem cobrança vencida", async () => {
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "OVERDUE", value: 5 }]);
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    expect(clientSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+    );
+  });
+
+  it("não bloqueia quem só tem cobrança em aberto dentro do prazo", async () => {
+    const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5 }]);
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    expect(clientSubscription.update).not.toHaveBeenCalled();
+  });
+
+  it("só considera assinatura ativa já fora do período pago", async () => {
+    const { service, clientSubscription } = build([]);
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    const filtro = clientSubscription.findMany.mock.calls[0][0].where;
+    expect(filtro.status).toBe("ATIVA");
+    expect(filtro.currentPeriodEnd.lt).toBeInstanceOf(Date);
+  });
+});

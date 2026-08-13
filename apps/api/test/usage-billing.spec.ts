@@ -164,9 +164,29 @@ describe("razão de consumo variável", () => {
 
 describe("resumo mensal para a tela de assinatura", () => {
   function serviceWithEntries(entries: any[]) {
-    const prisma = { usageLedger: { findMany: jest.fn().mockResolvedValue(entries) } };
+    // O status vem do banco em toda linha real; sem ele nos fixtures o resumo
+    // não exercitaria a separação entre consumo já cobrado e a cobrar.
+    const comStatus = entries.map((item) => ({ status: "PENDENTE", ...item }));
+    const prisma = { usageLedger: { findMany: jest.fn().mockResolvedValue(comStatus) } };
     return new UsageService(prisma as never);
   }
+
+  it("separa o consumo que já entrou em cobrança do que ainda vai", async () => {
+    // Cobrança avulsa de consumo sai antes do fim do mês: sem separar, o painel
+    // mostraria o cliente devendo de novo o que já está cobrado.
+    const service = serviceWithEntries([
+      { source: UsageSource.IA, metric: UsageMetric.IA_TOKENS_SAIDA, quantity: 1000, providerAmount: 2.1, billableAmount: 6, usageRateId: "r1", usageRate: rate, status: "SINCRONIZADO" },
+      { source: UsageSource.IA, metric: UsageMetric.IA_TOKENS_SAIDA, quantity: 200, providerAmount: 0.42, billableAmount: 1.2, usageRateId: "r1", usageRate: rate, status: "PENDENTE" },
+    ]);
+
+    const summary = await service.getMonthlySummary("empresa-1", { baseMonthlyPrice: 5 });
+
+    expect(summary.variableTotal).toBeCloseTo(7.2, 2);
+    expect(summary.variableInvoiced).toBeCloseTo(6, 2);
+    expect(summary.variablePending).toBeCloseTo(1.2, 2);
+    // O que ainda pode entrar em fatura: mensalidade mais o consumo não cobrado.
+    expect(summary.estimatedTotal).toBeCloseTo(6.2, 2);
+  });
 
   const rate = { isActive: true };
 

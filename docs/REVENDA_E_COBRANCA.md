@@ -86,7 +86,11 @@ um marcar assinatura como paga.
   webhook usa isso para não tratá-la como mensalidade paga: ela não renova
   vínculo nem gera comissão, porque o valor é quase todo repasse de custo de
   fornecedor.
-- **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`.
+- **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`, e a partir daí o
+  painel bloqueia na hora (sem carência). O `currentPeriodEnd` não participa do
+  bloqueio — quem decide é o status. Uma rotina de fundo também confere no Asaas
+  as assinaturas já fora do período pago, para o bloqueio não depender de o
+  webhook estar ativo.
 - **Dinheiro que volta**: estorno, chargeback e desfazimento de recebimento em
   dinheiro estornam a comissão e marcam `INADIMPLENTE`.
 - **Cobrança apagada no painel** (`PAYMENT_DELETED`): o consumo que estava nela

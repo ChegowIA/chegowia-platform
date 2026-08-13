@@ -1730,6 +1730,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       await this.processPendingPayouts();
       if (this.billingProvider() === "ASAAS") {
         await this.reconcilePendingAsaasPayments();
+        await this.reconcileOverdueAsaasPayments();
         await this.syncVariableUsageToAsaas();
       } else {
         await this.syncVariableUsageToStripe();
@@ -1905,6 +1906,51 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         this.logger.error(
           `Não foi possível conciliar a cobrança da empresa ${assinatura.companyId}.`,
+          this.stripeErrorForLog(error),
+        );
+      }
+    }
+  }
+
+  /**
+   * Mensalidade vencida sem ninguém avisar.
+   *
+   * O bloqueio depende de a assinatura estar `INADIMPLENTE`, e quem faz essa
+   * marcação é o evento `PAYMENT_OVERDUE`. Com o webhook desativado ou falhando,
+   * o cliente continuaria usando sem pagar — e o consumo de IA e WhatsApp desse
+   * período é custo nosso, que não volta.
+   *
+   * Só olha quem já passou do período pago, então o conjunto é pequeno e se
+   * esvazia sozinho: marcada a inadimplência, a assinatura sai do filtro.
+   */
+  private async reconcileOverdueAsaasPayments() {
+    const vencidas = await this.db().clientSubscription.findMany({
+      where: {
+        status: SubscriptionStatus.ATIVA,
+        asaasSubscriptionId: { not: null },
+        currentPeriodEnd: { lt: new Date() },
+      },
+      select: { id: true, companyId: true, asaasSubscriptionId: true },
+      take: 25,
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível listar assinaturas fora do período pago.", this.stripeErrorForLog(error));
+      return [];
+    });
+
+    for (const assinatura of vencidas) {
+      try {
+        const cobrancas = await this.asaas.listSubscriptionPayments(assinatura.asaasSubscriptionId!);
+        if (!cobrancas.some((item) => item.status === "OVERDUE")) continue;
+        await this.db().clientSubscription.update({
+          where: { id: assinatura.id },
+          data: { status: SubscriptionStatus.INADIMPLENTE },
+        });
+        this.logger.warn(
+          `Conciliação: empresa ${assinatura.companyId} marcada INADIMPLENTE por cobrança vencida no Asaas.`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Não foi possível conferir vencimento da empresa ${assinatura.companyId}.`,
           this.stripeErrorForLog(error),
         );
       }
@@ -2307,10 +2353,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
 
     const agora = new Date();
+    // Fim do período pago. Sem isso o painel mostraria período vazio e a
+    // detecção de vencimento não teria por onde filtrar.
+    const fimDoPeriodo = new Date(agora.getFullYear(), agora.getMonth() + 1, agora.getDate());
     await this.db().clientSubscription.update({
       where: { id: assinatura.id },
       data: {
         status: SubscriptionStatus.ATIVA,
+        currentPeriodEnd: fimDoPeriodo,
         asaasSubscriptionId: cobranca.subscription
           ? String(cobranca.subscription)
           : assinatura.asaasSubscriptionId,

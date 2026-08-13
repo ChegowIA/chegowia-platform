@@ -40,6 +40,9 @@ type UsageSummary = {
   providerTotal: number;
   variableTotal: number;
   variableTotalCharged: number;
+  variableInvoiced: number;
+  variablePending: number;
+  variablePendingCharged: number;
   estimatedTotal: number;
   trialCovered: { entries: number; providerTotal: number; nominalAmount: number };
   unpricedEvents: number;
@@ -183,6 +186,7 @@ export default function SubscriptionPage() {
   const ia = usage?.sources?.find((source) => source.source === "IA");
   const whatsapp = usage?.sources?.find((source) => source.source === "WHATSAPP");
   const previous = usage?.previous;
+  const jaFaturado = usage?.variableInvoiced ?? 0;
   const covered = usage?.trialCovered;
 
   return (
@@ -209,7 +213,8 @@ export default function SubscriptionPage() {
             <div className="text-left sm:text-right">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Cobrança do teste" : "Você deve até agora"}</p>
               <p className="mt-1 text-3xl font-black">{formatCurrency(estimated)}</p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Nenhum consumo do teste será faturado" : "Mensalidade + consumo do mês"}</p>
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Nenhum consumo do teste será faturado" : "Mensalidade + consumo ainda não cobrado"}</p>
+              {!currentTrial && jaFaturado > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{formatUsageCurrency(jaFaturado)} de consumo deste mês já foi cobrado à parte.</p>}
               {!currentTrial && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
             </div>
           </div>
@@ -268,7 +273,7 @@ export default function SubscriptionPage() {
           <Amount
             label={currentTrial ? "Total a pagar" : "Total estimado"}
             value={estimated}
-            hint={currentTrial ? "R$ 0,00: consumo coberto" : (usage?.variableTotal ?? 0) > 0 && (usage?.variableTotalCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : "O que entra na fatura"}
+            hint={currentTrial ? "R$ 0,00: consumo coberto" : (usage?.variablePending ?? 0) > 0 && (usage?.variablePendingCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : jaFaturado > 0 ? "O que ainda entra na fatura" : "O que entra na fatura"}
             tone="bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
           />
         </div>

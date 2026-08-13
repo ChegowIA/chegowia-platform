@@ -237,8 +237,17 @@ export class UsageService {
       trialCoveredAmount: number;
     }>();
 
+    // Consumo que já entrou em alguma cobrança. Sem separar isso, o painel
+    // mostra o cliente devendo um valor que já está faturado — pior ainda depois
+    // de uma cobrança avulsa de consumo, que sai antes do fim do mês.
+    let invoicedAmount = 0;
     for (const item of entries) {
       const coveredByTrial = Boolean(item.trialCoveredAt);
+      // Sem status conhecido, trata como pendente: mostrar o cliente devendo é
+      // recuperável, esconder um valor a cobrar não.
+      if (!coveredByTrial && Boolean(item.status) && item.status !== UsageLedgerStatus.PENDENTE) {
+        invoicedAmount += Number(item.billableAmount);
+      }
       const sourceTotals = bySource.get(item.source) ?? {
         quantity: 0,
         providerAmount: 0,
@@ -310,6 +319,10 @@ export class UsageService {
     // A fatura é em centavos; o resíduo abaixo disso continua acumulando no
     // razão e entra quando o total passar de um centavo.
     const variableTotalCharged = roundToCents(variableTotal);
+    const variableInvoiced = roundMoneyPrecision(invoicedAmount);
+    // Nunca negativo: um arredondamento não pode fazer o pendente virar crédito.
+    const variablePending = roundMoneyPrecision(Math.max(0, variableTotal - invoicedAmount));
+    const variablePendingCharged = roundToCents(variablePending);
     const baseMonthlyPrice = Number(options?.baseMonthlyPrice ?? 0);
 
     return {
@@ -319,7 +332,12 @@ export class UsageService {
       providerTotal,
       variableTotal,
       variableTotalCharged,
-      estimatedTotal: roundToCents(baseMonthlyPrice + variableTotalCharged),
+      variableInvoiced,
+      variablePending,
+      variablePendingCharged,
+      // O que ainda pode entrar em fatura: mensalidade mais o consumo que não
+      // foi cobrado ainda.
+      estimatedTotal: roundToCents(baseMonthlyPrice + variablePendingCharged),
       trialCovered: {
         entries: trialCoveredEntries,
         providerTotal: trialProviderTotal,
