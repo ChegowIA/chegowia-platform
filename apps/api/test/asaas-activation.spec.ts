@@ -293,3 +293,102 @@ describe("conciliação de mensalidade vencida", () => {
     expect(filtro.currentPeriodEnd.lt).toBeInstanceOf(Date);
   });
 });
+
+/**
+ * A fatura de ativação sai com o valor total: mensalidade mais todo o consumo
+ * faturável acumulado. Nunca duas cobranças.
+ */
+describe("consumo acumulado na fatura de ativação", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.BILLING_PROVIDER = "ASAAS";
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  function build(pendentes: any[], overrides: { asaas?: any } = {}) {
+    const prisma = {
+      clientSubscription: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "sub-1",
+          companyId: "empresa-1",
+          status: "EM_TESTE",
+          trialEndsAt: new Date(Date.now() - 60_000),
+          monthlyPriceSnapshot: 159.9,
+          asaasCustomerId: "cus_1",
+          asaasPaymentId: null,
+          plan: { name: "Profissional", monthlyPrice: 159.9, currency: "brl" },
+          reseller: null,
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      user: { findFirst: jest.fn().mockResolvedValue({ email: "dono@loja.com.br", name: "Dono" }) },
+      company: { findUnique: jest.fn().mockResolvedValue({ name: "Pizzaria", cnpj: "12345678000199" }) },
+      usageLedger: { updateMany: jest.fn().mockResolvedValue({ count: pendentes.length }) },
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      createCustomer: jest.fn().mockResolvedValue({ id: "cus_1" }),
+      createSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", status: "PENDING", value: 159.9, invoiceUrl: "https://asaas.com/i/pay_1" },
+      ]),
+      updatePayment: jest.fn().mockResolvedValue({}),
+      getPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", value: 168.3, invoiceUrl: "https://asaas.com/i/pay_1" }),
+      ...(overrides.asaas ?? {}),
+    };
+    const usage = { pendingBillableEntries: jest.fn().mockResolvedValue(pendentes) };
+    const service = buildBillingService({ prisma, asaas, usage });
+    service.onModuleDestroy();
+    return { service, asaas, prisma };
+  }
+
+  it("soma o consumo acumulado à cobrança da ativação", async () => {
+    const { service, asaas } = build([
+      { id: "u1", companyId: "empresa-1", metric: "IA_TOKENS_SAIDA", quantity: 5000, billableAmount: 6 },
+      { id: "u2", companyId: "empresa-1", metric: "WHATSAPP_SERVICO", quantity: 20, billableAmount: 2.4 },
+    ]);
+
+    await service.companyCheckout("empresa-1");
+
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 168.3 }));
+    // O valor da assinatura fica intocado: o acréscimo não pode se repetir todo mês.
+    expect(asaas.createSubscription).toHaveBeenCalledWith(expect.objectContaining({ value: 159.9 }));
+  });
+
+  it("marca o consumo como sincronizado na cobrança da ativação", async () => {
+    const { service, prisma } = build([
+      { id: "u1", companyId: "empresa-1", metric: "IA_TOKENS_SAIDA", quantity: 5000, billableAmount: 6 },
+    ]);
+
+    await service.companyCheckout("empresa-1");
+
+    expect(prisma.usageLedger.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "SINCRONIZADO", asaasPaymentId: "pay_1" } }),
+    );
+  });
+
+  it("não altera a cobrança quando não há consumo pendente", async () => {
+    const { service, asaas } = build([]);
+
+    const result = await service.companyCheckout("empresa-1");
+
+    expect(asaas.updatePayment).not.toHaveBeenCalled();
+    expect(result).toEqual({ url: "https://asaas.com/i/pay_1", reused: false });
+  });
+
+  it("entrega o link mesmo se o acréscimo do consumo falhar", async () => {
+    // Abortar a ativação por causa do acréscimo seria o pior desfecho: o cliente
+    // quer pagar e o consumo entra na cobrança seguinte de qualquer forma.
+    const { service } = build(
+      [{ id: "u1", companyId: "empresa-1", metric: "IA_TOKENS_SAIDA", quantity: 5000, billableAmount: 6 }],
+      { asaas: { updatePayment: jest.fn().mockRejectedValue(new Error("cobrança não editável")) } },
+    );
+
+    const result = await service.companyCheckout("empresa-1");
+
+    expect(result).toEqual({ url: "https://asaas.com/i/pay_1", reused: false });
+  });
+});

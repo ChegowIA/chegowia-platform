@@ -213,7 +213,7 @@ export default function SubscriptionPage() {
             <div className="text-left sm:text-right">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Cobrança do teste" : "Você deve até agora"}</p>
               <p className="mt-1 text-3xl font-black">{formatCurrency(estimated)}</p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Nenhum consumo do teste será faturado" : "Mensalidade + consumo ainda não cobrado"}</p>
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Nenhum consumo do teste será faturado" : "Mensalidade + consumo, em uma cobrança só"}</p>
               {!currentTrial && jaFaturado > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{formatUsageCurrency(jaFaturado)} de consumo deste mês já foi cobrado à parte.</p>}
               {!currentTrial && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
             </div>
@@ -225,7 +225,7 @@ export default function SubscriptionPage() {
 
           {trialExpired ? <div className="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/25">
             <p className="text-sm font-black text-brand-950 dark:text-brand-100">Sua empresa está pausada até a ativação.</p>
-            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês. IA e WhatsApp usados no teste não entram nela.</p>
+            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês, já somada ao consumo de IA e WhatsApp que ficou pendente. IA e WhatsApp usados durante o teste não entram nela.</p>
             <Button className="mt-4 w-full sm:w-auto" isLoading={activate.isPending} onClick={() => activate.mutate()}>Gerar fatura e liberar tudo</Button>
             {faturaAberta && <p className="mt-3 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura abriu em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui para abrir</a>. O acesso é liberado automaticamente após o pagamento.</p>}
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}
@@ -297,7 +297,7 @@ export default function SubscriptionPage() {
 
         {!currentTrial && previous && (previous.variableTotal > 0 || (usage?.variableTotal ?? 0) > 0) ? <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300"><span className="font-bold">Mês anterior:</span><span>{formatUsageCurrency(previous.variableTotal)} de consumo variável</span><Delta current={usage?.variableTotal ?? 0} previous={previous.variableTotal} /></div> : null}
 
-        <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{currentTrial ? "As tarifas e custos continuam registrados para você acompanhar o uso real. Eles foram classificados como cobertos no teste e são excluídos de qualquer fatura posterior." : covered?.entries ? "O histórico separa o que foi coberto no teste do consumo que começou depois da ativação. Só o uso posterior pode compor uma fatura." : (viaAsaas ? "O custo variável é somado à próxima cobrança mensal, na mesma fatura da mensalidade. Cada evento guarda a tarifa vigente no momento em que aconteceu." : "O custo variável é consolidado por métrica e enviado como item da próxima fatura Stripe. Cada evento guarda a tarifa vigente no momento em que aconteceu.")}</p>
+        <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{currentTrial ? "As tarifas e custos continuam registrados para você acompanhar o uso real. Eles foram classificados como cobertos no teste e são excluídos de qualquer fatura posterior." : covered?.entries ? "O histórico separa o que foi coberto no teste do consumo que começou depois da ativação. Só o uso posterior pode compor uma fatura." : (viaAsaas ? "O custo variável nunca vira uma cobrança separada: ele é somado à próxima mensalidade, em uma fatura só. Enquanto não houver mensalidade em aberto, o valor acumula. Cada evento guarda a tarifa vigente no momento em que aconteceu." : "O custo variável é consolidado por métrica e enviado como item da próxima fatura Stripe. Cada evento guarda a tarifa vigente no momento em que aconteceu.")}</p>
       </section>
 
       {data?.manageable ? <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">

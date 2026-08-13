@@ -74,18 +74,18 @@ um marcar assinatura como paga.
 - **Liberação de acesso**: só pelo webhook. `PAYMENT_CONFIRMED` e
   `PAYMENT_RECEIVED` ativam; o evento é gravado na fila (`StripeEvent`, com
   `provider = ASAAS`) e reprocessado até dar certo, de forma idempotente.
-- **Consumo variável**: quando existe mensalidade em aberto, o consumo é somado
-  ao valor dela — uma fatura só no mês. Assinatura no **cartão** não tem essa
-  janela: o Asaas gera e captura a cobrança no vencimento, então o consumo sai em
-  cobrança própria, com 5 dias de vencimento.
+- **Consumo variável**: **nunca vira cobrança separada.** É somado à cobrança da
+  mensalidade, uma fatura só com o valor total. Sem mensalidade em aberto onde
+  somar, o consumo continua `PENDENTE` e entra na cobrança seguinte — acumular é
+  o comportamento correto, não uma falha.
 
-  Consumo abaixo de `ASAAS_USAGE_MIN_CHARGE` (padrão R$ 5,00) não vira cobrança
-  avulsa: a taxa da emissão comeria o valor. Ele continua pendente e acumula.
+  A fatura de ativação pós-teste também sai com o total: mensalidade mais todo o
+  consumo faturável acumulado. O valor da assinatura no Asaas fica intocado,
+  senão o acréscimo se repetiria todo mês.
 
-  A cobrança de consumo tem `externalReference` começando com `usage-`, e o
-  webhook usa isso para não tratá-la como mensalidade paga: ela não renova
-  vínculo nem gera comissão, porque o valor é quase todo repasse de custo de
-  fornecedor.
+  Consumo marcado com `trialCoveredAt` é o do período de teste: fica no histórico
+  para auditoria e nunca é cobrado.
+
 - **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`, e a partir daí o
   painel bloqueia na hora (sem carência). O `currentPeriodEnd` não participa do
   bloqueio — quem decide é o status. Uma rotina de fundo também confere no Asaas

@@ -168,19 +168,18 @@ describe("consumo variável e cancelamento no Asaas", () => {
   });
 
   /**
-   * Assinatura no cartão não deixa mensalidade em aberto: o Asaas gera e captura
-   * a cobrança no vencimento. Sem cobrança para alterar, o consumo precisa sair
-   * em fatura própria — descobrimos isso quando o Asaas recusou antecipar o
-   * vencimento de uma assinatura de cartão já paga.
+   * A regra é uma cobrança só, com o valor total. Já emitimos cobrança avulsa de
+   * consumo quando não havia mensalidade em aberto, e estava errado: o cliente
+   * recebia duas cobranças no mês. Agora o consumo acumula até existir uma
+   * mensalidade onde somar.
    */
   describe("sem mensalidade em aberto para somar", () => {
-    function semCobrancaEmAberto(extra: Record<string, any> = {}) {
+    function semCobrancaEmAberto() {
       return build({
         asaas: {
           listSubscriptionPayments: jest.fn().mockResolvedValue([
             { id: "pay_1", status: "CONFIRMED", value: 159.9, dueDate: "2026-08-13" },
           ]),
-          ...extra,
         },
         pending: [
           { id: "u1", companyId: "empresa-1", metric: "IA_TOKENS_SAIDA", quantity: 5000, billableAmount: 6 },
@@ -188,49 +187,21 @@ describe("consumo variável e cancelamento no Asaas", () => {
       });
     }
 
-    it("cria cobrança própria para o consumo", async () => {
-      const { service, asaas, usageLedger } = semCobrancaEmAberto();
-
-      await (service as never as Record<string, any>).syncVariableUsageToAsaas();
-
-      expect(asaas.createPayment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          customer: "cus_1",
-          value: 6,
-          externalReference: expect.stringMatching(/^usage-/),
-        }),
-      );
-      expect(usageLedger.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: "SINCRONIZADO", asaasPaymentId: "pay_uso" } }),
-      );
-    });
-
-    it("não cria segunda cobrança quando a referência já existe", async () => {
-      // Sem chave de idempotência no Asaas, é a referência que impede cobrar o
-      // mesmo consumo duas vezes depois de uma resposta perdida.
-      const { service, asaas } = semCobrancaEmAberto({
-        findPaymentByReference: jest.fn().mockResolvedValue({ id: "pay_antiga", status: "PENDING", value: 6 }),
-      });
+    it("não emite cobrança à parte para o consumo", async () => {
+      const { service, asaas } = semCobrancaEmAberto();
 
       await (service as never as Record<string, any>).syncVariableUsageToAsaas();
 
       expect(asaas.createPayment).not.toHaveBeenCalled();
     });
 
-    it("acumula consumo abaixo do mínimo em vez de emitir cobrança de centavos", async () => {
-      const { service, asaas, usageLedger } = build({
-        asaas: {
-          listSubscriptionPayments: jest.fn().mockResolvedValue([
-            { id: "pay_1", status: "CONFIRMED", value: 159.9, dueDate: "2026-08-13" },
-          ]),
-        },
-      });
+    it("mantém o consumo pendente para entrar na próxima cobrança", async () => {
+      // Acumular é o comportamento correto; marcar como sincronizado sem
+      // cobrança faria o valor desaparecer.
+      const { service, usageLedger } = semCobrancaEmAberto();
 
-      // Os lançamentos padrão somam R$ 1,50, abaixo do mínimo de R$ 5,00.
       await (service as never as Record<string, any>).syncVariableUsageToAsaas();
 
-      expect(asaas.createPayment).not.toHaveBeenCalled();
-      // Continua pendente: o consumo não pode desaparecer por ser pequeno.
       expect(usageLedger.updateMany).not.toHaveBeenCalled();
     });
   });
