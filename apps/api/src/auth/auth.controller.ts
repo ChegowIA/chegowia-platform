@@ -4,6 +4,7 @@ import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { Public } from "../common/decorators/public.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
@@ -54,6 +55,7 @@ export class AuthController {
    * Contextos que o superadmin multiacesso pode assumir. Devolve lista vazia para
    * qualquer outra conta, então não serve para descobrir empresas.
    */
+  @AllowInactiveSubscription()
   @Get("contexts")
   listContexts(@CurrentUser() user: JwtPayload) {
     return this.authService.availableContexts(user);
@@ -63,6 +65,8 @@ export class AuthController {
    * Troca o contexto da sessão. Emite um token novo com o papel escolhido; o
    * usuário real continua no `sub` do token, para auditoria.
    */
+  // Trocar de contexto é justamente como se sai de uma empresa bloqueada.
+  @AllowInactiveSubscription()
   @Post("context")
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
@@ -143,6 +147,12 @@ export class AuthController {
     return { accessToken, user };
   }
 
+  /**
+   * Sair precisa funcionar mesmo com a assinatura bloqueada. Sem esta exceção o
+   * guard de assinatura recusa a rota e a pessoa fica presa na conta, sem forma
+   * de trocar de usuário nem de sair.
+   */
+  @AllowInactiveSubscription()
   @Post("logout")
   @HttpCode(HttpStatus.OK)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
@@ -157,6 +167,9 @@ export class AuthController {
    * endpoint dispara e-mail, e sem trava vira ferramenta de flood contra a
    * caixa de entrada do próprio usuário.
    */
+  // Trocar a senha é caminho de recuperação de conta: não pode depender de
+  // assinatura em dia.
+  @AllowInactiveSubscription()
   @Post("change-password")
   @Throttle({ default: { limit: 3, ttl: 15 * 60_000 } })
   @HttpCode(HttpStatus.OK)
@@ -164,6 +177,8 @@ export class AuthController {
     return this.authService.requestPasswordChange(userId);
   }
 
+  /** O painel bloqueado ainda precisa saber quem está logado para se desenhar. */
+  @AllowInactiveSubscription()
   @Get("me")
   async me(@CurrentUser("sub") userId: string) {
     return this.authService.me(userId);

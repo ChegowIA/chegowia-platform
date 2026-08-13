@@ -149,11 +149,20 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
     router.replace(fallbackHref);
   }, [canAccessCurrentRoute, fallbackHref, items.length, router, user]);
 
+  /**
+   * Assinatura bloqueada só libera a própria tela de assinatura. O `useEffect`
+   * navega, mas quem impede o vazamento é a checagem no render mais abaixo:
+   * efeito roda depois da pintura, então sozinho ele deixa a página proibida
+   * aparecer por um quadro antes de sair.
+   */
+  const billingLocked =
+    user?.role === Role.ADMIN && Boolean(billingStatus?.accessRestricted) && pathname !== "/painel/assinatura";
+
   useEffect(()=>{
-    if(user?.role===Role.ADMIN&&billingStatus?.accessRestricted&&pathname!=="/painel/assinatura"){
+    if(billingLocked){
       router.replace("/painel/assinatura");
     }
-  },[billingStatus?.accessRestricted,pathname,router,user?.role]);
+  },[billingLocked,router]);
 
   if (user && !items.length) {
     return (
@@ -175,6 +184,9 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
       </main>
     );
   }
+
+  // Nada é pintado enquanto a navegação para a assinatura não acontece.
+  if (billingLocked) return null;
 
   if (!canAccessCurrentRoute) return null;
 
