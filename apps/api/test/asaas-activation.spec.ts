@@ -388,7 +388,39 @@ describe("revalidação de vencimento ao abrir o painel", () => {
     );
     expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "INADIMPLENTE", accessRestricted: true });
+    expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 5);
+  });
+
+  it("não reapresenta a mensalidade de um período ativo já pago", async () => {
+    const subscription = {
+      id: "sub-1",
+      companyId: "empresa-1",
+      status: "ATIVA",
+      currentPeriodEnd: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      asaasSubscriptionId: "sub_asaas_1",
+      asaasCustomerId: "cus_1",
+      stripeCustomerId: null,
+      monthlyPriceSnapshot: 5,
+      trialStartedAt: null,
+      trialEndsAt: null,
+      canceledAt: null,
+      plan: { name: "Profissional", monthlyPrice: 5, currency: "brl" },
+      reseller: null,
+    };
+    const clientSubscription = {
+      findUnique: jest.fn().mockResolvedValue(subscription),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    };
+    const usage = { getBillingUsage: jest.fn().mockResolvedValue({ estimatedTotal: 0 }) };
+    const asaas = { isConfigured: jest.fn().mockReturnValue(true), listSubscriptionPayments: jest.fn() };
+    const service = buildBillingService({ prisma: { clientSubscription }, usage, asaas });
+    service.onModuleDestroy();
+
+    const result = await service.companyBillingStatus("empresa-1");
+
+    expect(result).toMatchObject({ status: "ATIVA", accessRestricted: false });
     expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 0);
+    expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
   });
 
   it("roda a conciliação Asaas no worker mesmo quando ela não é o provedor padrão", async () => {

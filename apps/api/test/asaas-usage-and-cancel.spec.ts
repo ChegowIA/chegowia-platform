@@ -208,14 +208,14 @@ describe("consumo variável e cancelamento no Asaas", () => {
 });
 
 /**
- * Consumo órfão: marcado como faturado numa cobrança que não existe mais.
+ * Consumo sincronizado que precisa ser reconciliado quando o webhook falha.
  *
  * Aconteceu em produção. A cobrança foi apagada no painel, o webhook estava
  * desativado, o `PAYMENT_DELETED` não chegou — e R$ 6,00 de consumo ficaram
  * contados como cobrados sem cobrança nenhuma atrás. O painel mostrava um total
  * que a fatura não tinha.
  */
-describe("consumo órfão de cobrança apagada", () => {
+describe("reconciliação de consumo sincronizado no Asaas", () => {
   const ORIGINAL_ENV = { ...process.env };
 
   beforeEach(() => {
@@ -258,6 +258,17 @@ describe("consumo órfão de cobrança apagada", () => {
     await (service as never as Record<string, any>).reconcileOrphanUsage();
 
     expect(usageLedger.updateMany).toHaveBeenCalled();
+  });
+
+  it("marca como faturado quando a cobrança já foi paga sem webhook", async () => {
+    const { service, usageLedger } = build({ id: "pay_apagada", status: "RECEIVED", value: 6 });
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    expect(usageLedger.updateMany).toHaveBeenCalledWith({
+      where: { asaasPaymentId: "pay_apagada", status: "SINCRONIZADO" },
+      data: { status: "FATURADO" },
+    });
   });
 
   it("não mexe em consumo cuja cobrança segue existindo", async () => {

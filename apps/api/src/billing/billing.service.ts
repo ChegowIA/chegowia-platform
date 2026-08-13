@@ -817,12 +817,18 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const trialActive = this.isTrialActive(subscription, now);
     const trialExpired = this.isTrialExpired(subscription, now);
     const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
-    // O valor base só compõe uma estimativa quando existe uma assinatura paga.
-    // No teste, inclusive depois do vencimento, nenhum dos consumos acumulados
-    // pode virar dívida: o cliente escolhe se começa uma nova assinatura.
+    const paidCurrentPeriod = subscription.status === SubscriptionStatus.ATIVA
+      && Boolean(subscription.currentPeriodEnd && subscription.currentPeriodEnd.getTime() > now.getTime());
+    // Um período ATIVO que ainda não terminou já teve a mensalidade quitada.
+    // Em inadimplência, ao contrário, a mensalidade vencida continua no saldo.
+    // No teste nenhum consumo vira dívida até a pessoa optar por assinar.
+    const baseMonthlyPriceDue = (
+      (subscription.status === SubscriptionStatus.ATIVA && !paidCurrentPeriod)
+      || subscription.status === SubscriptionStatus.INADIMPLENTE
+    ) ? monthlyPrice : 0;
     const usage = await this.usage.getBillingUsage(
       companyId,
-      subscription.status === SubscriptionStatus.ATIVA ? monthlyPrice : 0,
+      baseMonthlyPriceDue,
     );
     return {
       status: subscription.status,
@@ -2250,12 +2256,16 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Consumo marcado como faturado em cobrança que não existe mais.
+   * Consumo sincronizado cuja confirmação não chegou pelo webhook.
    *
    * Apagar a cobrança no painel dispara `PAYMENT_DELETED`, mas com o webhook
    * desativado esse aviso não chega — e o lançamento fica órfão: contado como
    * cobrado, sem cobrança nenhuma atrás. Ele nunca entraria em fatura e o valor
    * se perderia em silêncio.
+   *
+   * Além de devolver uma cobrança apagada à fila, confirma como FATURADO a que
+   * já foi paga. Isso fecha a janela em que o pagamento foi processado mas o
+   * webhook caiu depois de ativar a assinatura.
    *
    * Só olha lançamento parado há mais de dez minutos, para não disputar com a
    * rotina que acabou de marcá-lo.
@@ -2278,11 +2288,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     for (const item of candidatos) {
       const paymentId = String(item.asaasPaymentId);
-      // Cobrança que existe continua existindo: reconferir a cada rodada só
-      // gastaria chamada.
+      // Cobrança que segue aberta continua existindo: reconferir a cada rodada
+      // só gastaria chamada. Cobrança quitada é exceção, pois precisa encerrar
+      // o lançamento no nosso razão caso o webhook tenha falhado.
       if (!this.deveConferir(`orfao:${paymentId}`, 60 * 60_000)) continue;
       try {
         const cobranca = await this.asaas.findPayment(paymentId);
+        if (cobranca && ASAAS_PAID_STATUSES.includes(cobranca.status)) {
+          this.logger.warn(`Conciliação: cobrança ${paymentId} estava paga sem baixa do consumo; marcando como FATURADO.`);
+          await this.markAsaasUsagePaid(paymentId);
+          continue;
+        }
         // Ausente ou apagada. Erro de rede não chega aqui: `findPayment` só
         // devolve null em 404, e qualquer outra falha cai no catch.
         if (cobranca && !cobranca.deleted) continue;

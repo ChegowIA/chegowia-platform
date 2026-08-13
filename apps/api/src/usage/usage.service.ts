@@ -237,16 +237,21 @@ export class UsageService {
       trialCoveredAmount: number;
     }>();
 
-    // Consumo que já entrou em alguma cobrança. Sem separar isso, o painel
-    // mostra o cliente devendo um valor que já está faturado — pior ainda depois
-    // de uma cobrança avulsa de consumo, que sai antes do fim do mês.
+    // Consumo que já entrou em alguma cobrança e o subconjunto já quitado. As
+    // três situações são diferentes: PENDENTE ainda entra na próxima fatura,
+    // SINCRONIZADO está em uma fatura aberta e FATURADO não pode voltar a compor
+    // o valor devido na tela.
     let invoicedAmount = 0;
+    let paidAmount = 0;
     for (const item of entries) {
       const coveredByTrial = Boolean(item.trialCoveredAt);
       // Sem status conhecido, trata como pendente: mostrar o cliente devendo é
       // recuperável, esconder um valor a cobrar não.
       if (!coveredByTrial && Boolean(item.status) && item.status !== UsageLedgerStatus.PENDENTE) {
         invoicedAmount += Number(item.billableAmount);
+      }
+      if (!coveredByTrial && item.status === UsageLedgerStatus.FATURADO) {
+        paidAmount += Number(item.billableAmount);
       }
       const sourceTotals = bySource.get(item.source) ?? {
         quantity: 0,
@@ -285,7 +290,11 @@ export class UsageService {
       } else {
         current.billableAmount += Number(item.billableAmount);
       }
-      if (!item.usageRateId || !item.usageRate?.isActive) current.unpriced += 1;
+      // Um lançamento já emitido ou pago tem o valor congelado; a ausência de
+      // tarifa ativa só exige ação enquanto ele ainda pode entrar em cobrança.
+      if (item.status === UsageLedgerStatus.PENDENTE && (!item.usageRateId || !item.usageRate?.isActive)) {
+        current.unpriced += 1;
+      }
       grouped.set(item.metric, current);
     }
 
@@ -333,9 +342,15 @@ export class UsageService {
     // razão e entra quando o total passar de um centavo.
     const variableTotalCharged = roundToCents(variableTotal);
     const variableInvoiced = roundMoneyPrecision(invoicedAmount);
+    const variablePaid = roundMoneyPrecision(paidAmount);
     // Nunca negativo: um arredondamento não pode fazer o pendente virar crédito.
     const variablePending = roundMoneyPrecision(Math.max(0, variableTotal - invoicedAmount));
     const variablePendingCharged = roundToCents(variablePending);
+    // `SINCRONIZADO` ainda está em uma fatura que pode não ter sido paga; só
+    // `FATURADO` sai do saldo devido. Assim não cobramos duas vezes o que já foi
+    // confirmado pelo provedor, mas mantemos visível uma fatura aberta.
+    const variableOutstanding = roundMoneyPrecision(Math.max(0, variableTotal - paidAmount));
+    const variableOutstandingCharged = roundToCents(variableOutstanding);
     const baseMonthlyPrice = Number(options?.baseMonthlyPrice ?? 0);
 
     return {
@@ -346,17 +361,18 @@ export class UsageService {
       variableTotal,
       variableTotalCharged,
       variableInvoiced,
+      variablePaid,
       variablePending,
       variablePendingCharged,
+      variableOutstanding,
+      variableOutstandingCharged,
       /**
-       * Mensalidade mais todo o consumo faturável do mês.
+       * Mensalidade ainda devida mais consumo que ainda não foi pago.
        *
-       * Não subtrai o que já foi somado a uma fatura: como o consumo sempre entra
-       * na cobrança da mensalidade, subtrair fazia o total mostrado ficar abaixo
-       * do valor da fatura que a pessoa vai pagar. `variableInvoiced` continua
-       * disponível para a tela dizer quanto já está numa fatura emitida.
+       * Consumo sincronizado continua aqui até a fatura ser quitada; consumo
+       * FATURADO fica no detalhamento como histórico, mas não é dívida atual.
        */
-      estimatedTotal: roundToCents(baseMonthlyPrice + variableTotalCharged),
+      estimatedTotal: roundToCents(baseMonthlyPrice + variableOutstandingCharged),
       trialCovered: {
         entries: trialCoveredEntries,
         providerTotal: trialProviderTotal,

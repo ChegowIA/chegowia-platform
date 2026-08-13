@@ -171,7 +171,7 @@ describe("resumo mensal para a tela de assinatura", () => {
     return new UsageService(prisma as never);
   }
 
-  it("informa quanto do consumo já está em fatura, sem tirar do total", async () => {
+  it("mantém no total a fatura emitida que ainda não foi paga", async () => {
     const service = serviceWithEntries([
       { source: UsageSource.IA, metric: UsageMetric.IA_TOKENS_SAIDA, quantity: 1000, providerAmount: 2.1, billableAmount: 6, usageRateId: "r1", usageRate: rate, status: "SINCRONIZADO" },
       { source: UsageSource.IA, metric: UsageMetric.IA_TOKENS_SAIDA, quantity: 200, providerAmount: 0.42, billableAmount: 1.2, usageRateId: "r1", usageRate: rate, status: "PENDENTE" },
@@ -181,17 +181,41 @@ describe("resumo mensal para a tela de assinatura", () => {
 
     expect(summary.variableTotal).toBeCloseTo(7.2, 2);
     expect(summary.variableInvoiced).toBeCloseTo(6, 2);
+    expect(summary.variablePaid).toBeCloseTo(0, 2);
     expect(summary.variablePending).toBeCloseTo(1.2, 2);
     /**
-     * O total soma tudo, sem descontar o que já entrou em fatura: o consumo
-     * sempre vai para a cobrança da mensalidade, então descontar mostraria um
-     * total abaixo do valor que a pessoa vai pagar. A separação existe para a
-     * tela dizer quanto já está emitido, não para subtrair.
+     * SINCRONIZADO significa que o valor está numa fatura aberta. Ele continua
+     * devido até o pagamento, mesmo já não estando na fila de novos consumos.
      */
     expect(summary.estimatedTotal).toBeCloseTo(12.2, 2);
   });
 
   const rate = { isActive: true };
+
+  it("tira do saldo o consumo da fatura já quitada", async () => {
+    const summary = await serviceWithEntries([
+      {
+        source: UsageSource.IA,
+        metric: UsageMetric.IA_TOKENS_SAIDA,
+        quantity: 1000,
+        providerAmount: 0.42,
+        billableAmount: 1.2,
+        // Reproduz o lançamento manual usado na homologação: ele não tinha
+        // taxa vinculada, mas já foi efetivamente pago e não pode gerar aviso
+        // nem voltar para o valor devido.
+        usageRateId: null,
+        usageRate: null,
+        status: "FATURADO",
+      },
+    ]).getMonthlySummary("empresa-1", { baseMonthlyPrice: 0 });
+
+    expect(summary.variableTotal).toBeCloseTo(1.2, 2);
+    expect(summary.variableInvoiced).toBeCloseTo(1.2, 2);
+    expect(summary.variablePaid).toBeCloseTo(1.2, 2);
+    expect(summary.variableOutstanding).toBe(0);
+    expect(summary.estimatedTotal).toBe(0);
+    expect(summary.unpricedEvents).toBe(0);
+  });
 
   it("separa os subtotais de IA e WhatsApp em vez de somar tudo", async () => {
     const service = serviceWithEntries([

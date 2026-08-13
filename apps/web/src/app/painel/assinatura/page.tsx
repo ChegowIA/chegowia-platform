@@ -41,8 +41,11 @@ type UsageSummary = {
   variableTotal: number;
   variableTotalCharged: number;
   variableInvoiced: number;
+  variablePaid: number;
   variablePending: number;
   variablePendingCharged: number;
+  variableOutstanding: number;
+  variableOutstandingCharged: number;
   estimatedTotal: number;
   trialCovered: { entries: number; providerTotal: number; nominalAmount: number; chargeableOnActivation: number; chargeableOnActivationCharged: number };
   unpricedEvents: number;
@@ -187,7 +190,8 @@ export default function SubscriptionPage() {
   const ia = usage?.sources?.find((source) => source.source === "IA");
   const whatsapp = usage?.sources?.find((source) => source.source === "WHATSAPP");
   const previous = usage?.previous;
-  const jaFaturado = usage?.variableInvoiced ?? 0;
+  const jaQuitado = usage?.variablePaid ?? 0;
+  const jaNaFatura = Math.max(0, (usage?.variableInvoiced ?? 0) - jaQuitado);
   const covered = usage?.trialCovered;
   /**
    * No teste o valor cobrável fica em `trialCovered`, não em `billableAmount`:
@@ -226,8 +230,9 @@ export default function SubscriptionPage() {
             <div className="text-left sm:text-right">
               <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Se você assinar, paga" : "Você deve até agora"}</p>
               <p className="mt-1 text-3xl font-black">{formatCurrency(estimated)}</p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Consumo do teste; nada é cobrado se você não assinar" : "Mensalidade + consumo, em uma cobrança só"}</p>
-              {!currentTrial && jaFaturado > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Desse valor, {formatUsageCurrency(jaFaturado)} de consumo já está incluído na fatura emitida.</p>}
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Consumo do teste; nada é cobrado se você não assinar" : estimated > 0 ? "Mensalidade + consumo ainda não quitado" : "Nenhum valor pendente neste período"}</p>
+              {!currentTrial && jaNaFatura > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Desse valor, {formatUsageCurrency(jaNaFatura)} de consumo já está incluído em uma fatura emitida.</p>}
+              {!currentTrial && jaQuitado > 0 && <p className="mt-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{formatUsageCurrency(jaQuitado)} de consumo já foi quitado na fatura anterior.</p>}
               {!currentTrial && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
             </div>
           </div>
