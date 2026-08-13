@@ -47,9 +47,16 @@ homologação marcando `NODE_ENV=production` é recusado no boot, a menos que
    - URL: `https://DOMINIO-DA-API/api/billing/asaas/webhook`
    - Token de autenticação: o mesmo valor de `ASAAS_WEBHOOK_TOKEN`
    - Versão da API: v3, envio com fila ativada
-   - Eventos: `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`, `PAYMENT_OVERDUE`,
-     `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`, `PAYMENT_REVERSED`,
-     `SUBSCRIPTION_DELETED`, `SUBSCRIPTION_INACTIVATED`
+   - Eventos, em Cobranças: `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`,
+     `PAYMENT_OVERDUE`, `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`,
+     `PAYMENT_RECEIVED_IN_CASH_UNDONE`
+   - Eventos, em Assinaturas: `SUBSCRIPTION_DELETED`, `SUBSCRIPTION_INACTIVATED`
+
+   Os nomes são comparados como string exata: um evento marcado no painel com
+   nome que o código não conhece chega e é descartado em silêncio. As etapas
+   intermediárias (`PAYMENT_REFUND_IN_PROGRESS`, `PAYMENT_CHARGEBACK_DISPUTE`,
+   `PAYMENT_AWAITING_CHARGEBACK_REVERSAL`) não precisam ser marcadas: todas
+   terminam em um dos eventos acima.
 4. Habilite os meios que quiser aceitar (Pix, boleto e cartão). O cliente escolhe
    na própria fatura; não guardamos cartão.
 
@@ -70,6 +77,8 @@ um marcar assinatura como paga.
   mesma fatura da mensalidade. Um lançamento que não coube no ciclo continua
   pendente e entra no seguinte, nunca some.
 - **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`.
+- **Dinheiro que volta**: estorno, chargeback e desfazimento de recebimento em
+  dinheiro estornam a comissão e marcam `INADIMPLENTE`.
 - **Cancelamento**: `POST /billing/company/cancel` encerra as cobranças futuras.
   O acesso continua até o fim do período já pago.
 

@@ -2102,10 +2102,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE);
       return;
     }
+    // Os três caminhos pelos quais um dinheiro já recebido volta atrás. Não
+    // existe `PAYMENT_REVERSED` no Asaas — o desfazimento de recebimento em
+    // dinheiro é que ocupa esse lugar.
     if (
       evento === "PAYMENT_REFUNDED"
       || evento === "PAYMENT_CHARGEBACK_REQUESTED"
-      || evento === "PAYMENT_REVERSED"
+      || evento === "PAYMENT_RECEIVED_IN_CASH_UNDONE"
     ) {
       await this.reverseAsaasCommission(cobranca);
       await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE);

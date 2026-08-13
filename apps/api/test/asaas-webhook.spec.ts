@@ -161,4 +161,47 @@ describe("webhook do Asaas", () => {
       expect.objectContaining({ data: expect.objectContaining({ status: "CANCELADA" }) }),
     );
   });
+
+  /**
+   * Os nomes chegam como string e são comparados exatamente. Um nome inventado
+   * produz um ramo que parece cobertura e nunca executa: foi o caso de
+   * `PAYMENT_REVERSED`, que não existe no Asaas. O painel só oferece os nomes
+   * abaixo, conferidos na conta real.
+   */
+  describe("nomes de evento aceitos", () => {
+    const reverte = ["PAYMENT_REFUNDED", "PAYMENT_CHARGEBACK_REQUESTED", "PAYMENT_RECEIVED_IN_CASH_UNDONE"];
+
+    it.each(reverte)("%s estorna a comissão e marca inadimplência", async (evento) => {
+      const { service, commissionLedger, clientSubscription } = build();
+
+      await (service as never as Record<string, any>).applyAsaasEvent({ ...cobrancaPaga, event: evento });
+
+      expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: "ESTORNADA" } }),
+      );
+      expect(clientSubscription.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+      );
+    });
+
+    it("não trata PAYMENT_REVERSED, que não existe no Asaas", () => {
+      const { readFileSync } = require("node:fs");
+      const { join } = require("node:path");
+      const fonte = readFileSync(join(__dirname, "..", "src", "billing", "billing.service.ts"), "utf8");
+      // Só o comentário que explica a ausência pode citar o nome.
+      expect(fonte).not.toMatch(/evento === "PAYMENT_REVERSED"/);
+    });
+
+    it("ignora evento desconhecido sem tocar em assinatura nem comissão", async () => {
+      const { service, clientSubscription, commissionLedger } = build();
+
+      await (service as never as Record<string, any>).applyAsaasEvent({
+        ...cobrancaPaga,
+        event: "PAYMENT_BANK_SLIP_VIEWED",
+      });
+
+      expect(clientSubscription.update).not.toHaveBeenCalled();
+      expect(commissionLedger.upsert).not.toHaveBeenCalled();
+    });
+  });
 });
