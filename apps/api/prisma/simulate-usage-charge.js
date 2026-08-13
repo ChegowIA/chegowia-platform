@@ -83,10 +83,23 @@ async function main() {
   const companyId = usuario.companyId;
 
   if (limpar) {
-    const removidos = await prisma.usageLedger.deleteMany({
-      where: { companyId, externalReference: { startsWith: REFERENCIA }, status: "PENDENTE" },
+    // Remove qualquer lançamento desta simulação, inclusive os já sincronizados:
+    // são dados de teste, identificados pela referência, e deixá-los para trás
+    // sujaria o histórico de consumo da empresa.
+    const alvos = await prisma.usageLedger.findMany({
+      where: { companyId, externalReference: { startsWith: REFERENCIA } },
+      select: { id: true, status: true, asaasPaymentId: true, billableAmount: true },
     });
-    console.log(`Removidos ${removidos.count} lançamento(s) de teste ainda pendentes.`);
+    const emCobranca = alvos.filter((item) => item.asaasPaymentId);
+    await prisma.usageLedger.deleteMany({ where: { id: { in: alvos.map((item) => item.id) } } });
+    console.log(`Removidos ${alvos.length} lançamento(s) de teste.`);
+    if (emCobranca.length) {
+      console.log("\nATENÇÃO: estes lançamentos já tinham entrado em cobrança no Asaas:");
+      for (const item of emCobranca) {
+        console.log(`  ${item.asaasPaymentId} · ${reais(item.billableAmount)} · ${item.status}`);
+      }
+      console.log("Apague essas cobranças no painel do Asaas; o script não mexe em dinheiro.");
+    }
     return;
   }
 

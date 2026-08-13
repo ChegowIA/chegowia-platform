@@ -2031,6 +2031,20 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return cobranca.id;
   }
 
+  /** Cobrança desfeita: o consumo volta para a fila e entra na cobrança seguinte. */
+  private async returnUsageToQueue(paymentId: string) {
+    const devolvidos = await this.db().usageLedger.updateMany({
+      where: { asaasPaymentId: paymentId, status: UsageLedgerStatus.SINCRONIZADO },
+      data: { status: UsageLedgerStatus.PENDENTE, asaasPaymentId: null },
+    }).catch((error: unknown) => {
+      this.logger.error(`Não foi possível devolver à fila o consumo da cobrança ${paymentId}.`, this.stripeErrorForLog(error));
+      return { count: 0 };
+    });
+    if (devolvidos.count) {
+      this.logger.log(`Cobrança ${paymentId} apagada: ${devolvidos.count} lançamento(s) de consumo voltaram para a fila.`);
+    }
+  }
+
   /** Cobrança paga: o consumo que entrou nela deixa de estar pendente. */
   private async markAsaasUsagePaid(paymentId: string) {
     await this.db().usageLedger.updateMany({
@@ -2234,6 +2248,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
     if (evento === "PAYMENT_OVERDUE") {
       await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE);
+      return;
+    }
+    // Cobrança apagada no painel: o consumo que estava nela não foi faturado.
+    // Sem devolvê-lo à fila, ele ficaria apontando para uma cobrança inexistente
+    // e nunca mais seria cobrado — perda silenciosa.
+    if (evento === "PAYMENT_DELETED") {
+      await this.returnUsageToQueue(String(cobranca.id));
       return;
     }
     // Os três caminhos pelos quais um dinheiro já recebido volta atrás. Não

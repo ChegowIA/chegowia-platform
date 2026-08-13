@@ -50,7 +50,7 @@ homologação marcando `NODE_ENV=production` é recusado no boot, a menos que
    - Versão da API: v3, envio com fila ativada
    - Eventos, em Cobranças: `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`,
      `PAYMENT_OVERDUE`, `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`,
-     `PAYMENT_RECEIVED_IN_CASH_UNDONE`
+     `PAYMENT_RECEIVED_IN_CASH_UNDONE`, `PAYMENT_DELETED`
    - Eventos, em Assinaturas: `SUBSCRIPTION_DELETED`, `SUBSCRIPTION_INACTIVATED`
 
    Os nomes são comparados como string exata: um evento marcado no painel com
@@ -89,6 +89,9 @@ um marcar assinatura como paga.
 - **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`.
 - **Dinheiro que volta**: estorno, chargeback e desfazimento de recebimento em
   dinheiro estornam a comissão e marcam `INADIMPLENTE`.
+- **Cobrança apagada no painel** (`PAYMENT_DELETED`): o consumo que estava nela
+  volta para a fila e entra na cobrança seguinte. Sem isso ficaria marcado como
+  faturado apontando para uma cobrança inexistente — perda silenciosa.
 - **Cancelamento**: `POST /billing/company/cancel` encerra as cobranças futuras.
   O acesso continua até o fim do período já pago.
 

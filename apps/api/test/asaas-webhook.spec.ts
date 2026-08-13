@@ -203,5 +203,35 @@ describe("webhook do Asaas", () => {
       expect(clientSubscription.update).not.toHaveBeenCalled();
       expect(commissionLedger.upsert).not.toHaveBeenCalled();
     });
+
+    it("devolve o consumo à fila quando a cobrança é apagada no painel", async () => {
+      // Sem isso o lançamento ficaria SINCRONIZADO apontando para uma cobrança
+      // que não existe: nunca mais cobrado e sem ninguém perceber.
+      const { service, usageLedger } = build();
+
+      await (service as never as Record<string, any>).applyAsaasEvent({
+        ...cobrancaPaga,
+        event: "PAYMENT_DELETED",
+      });
+
+      expect(usageLedger.updateMany).toHaveBeenCalledWith({
+        where: { asaasPaymentId: "pay_1", status: "SINCRONIZADO" },
+        data: { status: "PENDENTE", asaasPaymentId: null },
+      });
+    });
+
+    it("não trata cobrança de consumo como mensalidade paga", async () => {
+      // A cobrança avulsa de consumo repassa custo de IA e WhatsApp. Tratá-la
+      // como assinatura paga renovaria o vínculo e pagaria 30% de comissão.
+      const { service, clientSubscription, commissionLedger } = build();
+
+      await (service as never as Record<string, any>).applyAsaasEvent({
+        ...cobrancaPaga,
+        payment: { ...cobrancaPaga.payment, externalReference: "usage-abc123", subscription: null },
+      });
+
+      expect(clientSubscription.update).not.toHaveBeenCalled();
+      expect(commissionLedger.upsert).not.toHaveBeenCalled();
+    });
   });
 });
