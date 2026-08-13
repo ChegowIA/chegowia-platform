@@ -1735,6 +1735,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       if (this.billingProvider() === "ASAAS") {
         await this.reconcilePendingAsaasPayments();
         await this.reconcileOverdueAsaasPayments();
+        await this.reconcileOrphanUsage();
         await this.syncVariableUsageToAsaas();
       } else {
         await this.syncVariableUsageToStripe();
@@ -2087,6 +2088,48 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
     });
     return cobranca.id;
+  }
+
+  /**
+   * Consumo marcado como faturado em cobrança que não existe mais.
+   *
+   * Apagar a cobrança no painel dispara `PAYMENT_DELETED`, mas com o webhook
+   * desativado esse aviso não chega — e o lançamento fica órfão: contado como
+   * cobrado, sem cobrança nenhuma atrás. Ele nunca entraria em fatura e o valor
+   * se perderia em silêncio.
+   *
+   * Só olha lançamento parado há mais de dez minutos, para não disputar com a
+   * rotina que acabou de marcá-lo.
+   */
+  private async reconcileOrphanUsage() {
+    const limite = new Date(Date.now() - 10 * 60_000);
+    const candidatos = await this.db().usageLedger.findMany({
+      where: {
+        status: UsageLedgerStatus.SINCRONIZADO,
+        asaasPaymentId: { not: null },
+        updatedAt: { lt: limite },
+      },
+      select: { asaasPaymentId: true },
+      distinct: ["asaasPaymentId"],
+      take: 20,
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível listar consumo já faturado.", this.stripeErrorForLog(error));
+      return [];
+    });
+
+    for (const item of candidatos) {
+      const paymentId = String(item.asaasPaymentId);
+      try {
+        const cobranca = await this.asaas.findPayment(paymentId);
+        // Ausente ou apagada. Erro de rede não chega aqui: `findPayment` só
+        // devolve null em 404, e qualquer outra falha cai no catch.
+        if (cobranca && !cobranca.deleted) continue;
+        this.logger.warn(`Cobrança ${paymentId} não existe mais no Asaas; devolvendo o consumo à fila.`);
+        await this.returnUsageToQueue(paymentId);
+      } catch (error) {
+        this.logger.error(`Não foi possível conferir a cobrança ${paymentId}.`, this.stripeErrorForLog(error));
+      }
+    }
   }
 
   /** Cobrança desfeita: o consumo volta para a fila e entra na cobrança seguinte. */

@@ -314,13 +314,13 @@ export default function SubscriptionPage() {
       {data?.manageable ? <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <p className="text-xs font-black uppercase tracking-[.14em] text-brand-700 dark:text-brand-300">Faturas</p>
         <h2 className="mt-1 text-xl font-black text-slate-950 dark:text-slate-100">Cobranças e forma de pagamento</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{viaAsaas ? "Cada cobrança abre uma fatura onde você escolhe entre Pix, boleto ou cartão. O consumo variável do mês entra somada à mensalidade, na mesma cobrança." : "As faturas ficam disponíveis no portal seguro do Stripe."}</p>
+        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{viaAsaas ? "Histórico de cobranças desta assinatura. A que está aguardando pagamento é a mesma que abre no botão acima — não é uma cobrança extra. Em cada fatura você escolhe entre Pix, boleto ou cartão." : "As faturas ficam disponíveis no portal seguro do Stripe."}</p>
 
         <div className="mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-100 dark:divide-slate-800 dark:border-slate-800">
           {invoiceData?.invoices?.length ? invoiceData.invoices.map((invoice) => (
             <div key={invoice.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatCurrency(invoice.value)}</p>
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatCurrency(invoice.value)}{!invoice.paid && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">Fatura atual</span>}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">{invoice.dueDate ? `Vencimento ${formatDate(invoice.dueDate)}` : "Sem vencimento"} · {invoiceStatusLabel(invoice.status)}</p>
               </div>
               {invoice.paid
@@ -406,6 +406,16 @@ function formatQuantity(metric: string, quantity: number) {
 }
 
 function formatDate(value: string) {
+  /**
+   * O Asaas manda vencimento como "2026-08-13", sem hora. `new Date` trata isso
+   * como meia-noite UTC, que em Brasília ainda é o dia 12 — a fatura dizia 13 e
+   * o painel dizia 12. Data sem hora é lida como data local.
+   */
+  const somenteData = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (somenteData) {
+    const [, ano, mes, dia] = somenteData;
+    return new Date(Number(ano), Number(mes) - 1, Number(dia)).toLocaleDateString("pt-BR");
+  }
   return new Date(value).toLocaleDateString("pt-BR");
 }
 

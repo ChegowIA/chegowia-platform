@@ -11,6 +11,8 @@ export type AsaasCustomer = {
 
 export type AsaasPayment = {
   id: string;
+  /** O Asaas marca a cobrança apagada em vez de removê-la da API. */
+  deleted?: boolean;
   status: string;
   value: number;
   dueDate: string;
@@ -175,6 +177,16 @@ export class AsaasProvider {
     return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "GET" });
   }
 
+  /**
+   * Como `getPayment`, mas devolve null quando a cobrança não existe mais.
+   *
+   * A distinção importa: tratar erro de rede como "não existe" faria o consumo já
+   * faturado voltar para a fila e ser cobrado duas vezes.
+   */
+  async findPayment(paymentId: string): Promise<AsaasPayment | null> {
+    return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "GET", notFoundAsNull: true });
+  }
+
   async updatePayment(paymentId: string, params: Record<string, unknown>): Promise<AsaasPayment> {
     return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "POST", body: params });
   }
@@ -267,7 +279,10 @@ export class AsaasProvider {
   // Transporte
   // ---------------------------------------------------------------------------
 
-  private async request(path: string, init: { method: "GET" | "POST" | "DELETE"; body?: unknown }) {
+  private async request(
+    path: string,
+    init: { method: "GET" | "POST" | "DELETE"; body?: unknown; notFoundAsNull?: boolean },
+  ) {
     const url = `${this.baseUrl()}${path}`;
     let response: Response;
     try {
@@ -292,6 +307,10 @@ export class AsaasProvider {
     } catch {
       payload = null;
     }
+
+    // 404 só vira null a pedido de quem chama: confundir "não existe" com falha
+    // de rede levaria a decisões erradas sobre dinheiro.
+    if (response.status === 404 && init.notFoundAsNull) return null;
 
     if (!response.ok) {
       // O Asaas devolve os problemas em `errors[]`, com código e descrição.

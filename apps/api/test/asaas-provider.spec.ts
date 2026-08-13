@@ -81,4 +81,14 @@ describe("cliente do Asaas", () => {
       semChave.createCustomer({ name: "Loja", email: "a@b.c", cpfCnpj: "12345678000199" }),
     ).rejects.toThrow("ASAAS_API_KEY");
   });
+
+  it("distingue cobrança inexistente de falha de rede", async () => {
+    // Confundir as duas faria o consumo já faturado voltar para a fila e ser
+    // cobrado duas vezes.
+    fetchMock.mockResolvedValue({ ok: false, status: 404, text: async () => "" });
+    await expect(provider.findPayment("pay_1")).resolves.toBeNull();
+
+    fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "" });
+    await expect(provider.findPayment("pay_1")).rejects.toThrow();
+  });
 });

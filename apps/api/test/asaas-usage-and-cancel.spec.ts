@@ -206,3 +206,85 @@ describe("consumo variável e cancelamento no Asaas", () => {
     });
   });
 });
+
+/**
+ * Consumo órfão: marcado como faturado numa cobrança que não existe mais.
+ *
+ * Aconteceu em produção. A cobrança foi apagada no painel, o webhook estava
+ * desativado, o `PAYMENT_DELETED` não chegou — e R$ 6,00 de consumo ficaram
+ * contados como cobrados sem cobrança nenhuma atrás. O painel mostrava um total
+ * que a fatura não tinha.
+ */
+describe("consumo órfão de cobrança apagada", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.BILLING_PROVIDER = "ASAAS";
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  function build(cobranca: any, options: { erro?: boolean } = {}) {
+    const usageLedger = {
+      findMany: jest.fn().mockResolvedValue([{ asaasPaymentId: "pay_apagada" }]),
+      updateMany: jest.fn().mockResolvedValue({ count: 2 }),
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      findPayment: options.erro
+        ? jest.fn().mockRejectedValue(new Error("Não foi possível alcançar a API do Asaas."))
+        : jest.fn().mockResolvedValue(cobranca),
+    };
+    const service = buildBillingService({ prisma: { usageLedger }, asaas });
+    service.onModuleDestroy();
+    return { service, usageLedger, asaas };
+  }
+
+  it("devolve o consumo à fila quando a cobrança não existe mais", async () => {
+    const { service, usageLedger } = build(null);
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    expect(usageLedger.updateMany).toHaveBeenCalledWith({
+      where: { asaasPaymentId: "pay_apagada", status: "SINCRONIZADO" },
+      data: { status: "PENDENTE", asaasPaymentId: null },
+    });
+  });
+
+  it("devolve também quando o Asaas marca a cobrança como apagada", async () => {
+    const { service, usageLedger } = build({ id: "pay_apagada", deleted: true, status: "PENDING", value: 6 });
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    expect(usageLedger.updateMany).toHaveBeenCalled();
+  });
+
+  it("não mexe em consumo cuja cobrança segue existindo", async () => {
+    const { service, usageLedger } = build({ id: "pay_apagada", status: "PENDING", value: 6 });
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    expect(usageLedger.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("não devolve nada quando a consulta ao Asaas falha", async () => {
+    // Tratar falha de rede como "cobrança inexistente" faria o consumo já
+    // faturado ser cobrado de novo.
+    const { service, usageLedger } = build(null, { erro: true });
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    expect(usageLedger.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("ignora lançamento recém-marcado, para não disputar com a rotina de consumo", async () => {
+    const { service, usageLedger } = build(null);
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    const filtro = usageLedger.findMany.mock.calls[0][0].where;
+    expect(filtro.updatedAt.lt).toBeInstanceOf(Date);
+    expect(Date.now() - filtro.updatedAt.lt.getTime()).toBeGreaterThanOrEqual(9 * 60_000);
+  });
+});
