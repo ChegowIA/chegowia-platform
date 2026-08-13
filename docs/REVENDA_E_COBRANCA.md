@@ -95,7 +95,8 @@ um marcar assinatura como paga.
   painel bloqueia na hora (sem carência). A rotina de fundo também considera
   vencida a cobrança em aberto cujo vencimento já passou, sem esperar o rótulo
   `OVERDUE` — ele só aparece na virada do dia do Asaas, e o bloqueio não deve
-  depender da agenda deles. O dia do vencimento em si não bloqueia: vencer é ter
+  depender da agenda deles. A rotina reconsulta em até um minuto e a consulta
+  do painel revalida imediatamente. O dia do vencimento em si não bloqueia: vencer é ter
   passado do prazo, não chegar nele. O `currentPeriodEnd` não participa do
   bloqueio — quem decide é o status. Uma rotina de fundo também confere no Asaas
   as assinaturas já fora do período pago, para o bloqueio não depender de o

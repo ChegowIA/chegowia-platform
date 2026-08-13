@@ -90,12 +90,14 @@ export default function SubscriptionPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["company-billing-status"],
     queryFn: async () => (await api.get("/billing/company/status")).data as BillingData,
-    // Enquanto o teste corre, uma vez por minuto basta. Depois de abrir a fatura
-    // o intervalo cai: o acesso volta em segundos após o pagamento, e o
-    // empresário não deveria precisar recarregar a página para descobrir.
+    // A situação da cobrança pode mudar sem interação da pessoa. Enquanto há
+    // assinatura ativa consultamos a cada minuto; depois de abrir a fatura o
+    // intervalo cai para que pagamento e bloqueio apareçam sem recarregar.
     refetchInterval: (query) => {
       if (faturaAberta) return 10_000;
-      return query.state.data?.status === SubscriptionStatus.EM_TESTE ? 60_000 : false;
+      return [SubscriptionStatus.EM_TESTE, SubscriptionStatus.ATIVA].includes(
+        query.state.data?.status as SubscriptionStatus,
+      ) ? 60_000 : false;
     },
   });
   const { data: invoiceData } = useQuery({

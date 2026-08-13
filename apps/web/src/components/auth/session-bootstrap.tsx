@@ -10,6 +10,8 @@ import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
   const setSession = useAuthStore((state) => state.setSession);
   const setSessionLoading = useAuthStore((state) => state.setSessionLoading);
 
@@ -52,8 +54,16 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
    * tela viva e sem atualizações, sem entender o que houve.
    */
   useEffect(() => {
-    if (!hasHydrated) return;
+    if (!hasHydrated || isSessionLoading || !accessToken) {
+      if (hasHydrated && !isSessionLoading && !accessToken) disconnectSocket();
+      return;
+    }
     const socket = connectSocket();
+    // Um socket criado antes da renovação carregaria o JWT antigo (ou vazio).
+    // O handshake lê o token atual, então reconectamos só depois de a sessão
+    // estar pronta.
+    if (socket.connected) socket.disconnect();
+    socket.connect();
     const onRevoked = (payload?: { reason?: string }) => {
       useAuthStore.getState().clear();
       disconnectSocket();
@@ -64,7 +74,7 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
     return () => {
       socket.off("session.revoked", onRevoked);
     };
-  }, [hasHydrated]);
+  }, [accessToken, hasHydrated, isSessionLoading]);
 
   return (
     <>

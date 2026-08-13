@@ -18,7 +18,8 @@ interface RetriableConfig extends InternalAxiosRequestConfig {
 
 let refreshPromise: Promise<string | null> | null = null;
 
-export async function refreshAccessToken(): Promise<string | null> {
+/** Faz uma única renovação HTTP; a coordenação fica na função pública abaixo. */
+async function requestFreshAccessToken(): Promise<string | null> {
   try {
     const { data } = await axios.post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true });
     useAuthStore.getState().setSession(data.accessToken, data.user);
@@ -29,18 +30,45 @@ export async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
+/**
+ * O refresh token é rotativo e de uso único. Em uma recarga, várias queries
+ * podem receber 401 antes de o bootstrap restaurar o access token; em mais de
+ * uma aba isso também acontece em paralelo. Sem uma trava, uma renovação
+ * vence e a outra interpreta a rotação normal como sessão inválida.
+ *
+ * `refreshPromise` cobre chamadas dentro desta aba e Web Locks cobre as abas
+ * do mesmo navegador. Em navegadores sem Web Locks ainda preservamos a
+ * coordenação local, que é a parte essencial para não disputar o bootstrap.
+ */
+async function requestFreshAccessTokenExclusively(): Promise<string | null> {
+  if (typeof navigator === "undefined" || !navigator.locks) {
+    return requestFreshAccessToken();
+  }
+  try {
+    return await navigator.locks.request("chegowia-auth-refresh", () => requestFreshAccessToken());
+  } catch {
+    // Se o navegador não puder adquirir a trava, a chamada normal ainda é
+    // preferível a abandonar uma sessão válida por um detalhe de suporte.
+    return requestFreshAccessToken();
+  }
+}
+
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = requestFreshAccessTokenExclusively().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const original = error.config as RetriableConfig | undefined;
     if (error.response?.status === 401 && original && !original._retry && !original.url?.includes("/auth/")) {
       original._retry = true;
-      if (!refreshPromise) {
-        refreshPromise = refreshAccessToken().finally(() => {
-          refreshPromise = null;
-        });
-      }
-      const newToken = await refreshPromise;
+      const newToken = await refreshAccessToken();
       if (newToken) {
         original.headers.Authorization = `Bearer ${newToken}`;
         return api(original);

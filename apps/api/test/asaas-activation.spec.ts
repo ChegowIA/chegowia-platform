@@ -252,7 +252,13 @@ describe("conciliação de mensalidade vencida", () => {
   function build(cobrancas: any[]) {
     const clientSubscription = {
       findMany: jest.fn().mockResolvedValue([
-        { id: "sub-1", companyId: "empresa-1", asaasSubscriptionId: "sub_asaas_1" },
+        {
+          id: "sub-1",
+          companyId: "empresa-1",
+          asaasSubscriptionId: "sub_asaas_1",
+          status: "ATIVA",
+          currentPeriodEnd: new Date(Date.now() - 60_000),
+        },
       ]),
       update: jest.fn().mockResolvedValue({}),
     };
@@ -325,6 +331,84 @@ describe("conciliação de mensalidade vencida", () => {
     const filtro = clientSubscription.findMany.mock.calls[0][0].where;
     expect(filtro.status).toBe("ATIVA");
     expect(filtro.currentPeriodEnd.lt).toBeInstanceOf(Date);
+  });
+});
+
+describe("revalidação de vencimento ao abrir o painel", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    // A assinatura já criada no Asaas continua precisando ser conciliada mesmo
+    // se o provedor padrão de novas adesões tiver voltado a ser Stripe.
+    process.env.BILLING_PROVIDER = "STRIPE";
+    process.env.BILLING_ENFORCEMENT = "true";
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it("marca inadimplente ao consultar o status de uma fatura Asaas vencida", async () => {
+    const subscription = {
+      id: "sub-1",
+      companyId: "empresa-1",
+      status: "ATIVA",
+      currentPeriodEnd: new Date(Date.now() - 60_000),
+      asaasSubscriptionId: "sub_asaas_1",
+      asaasCustomerId: "cus_1",
+      stripeCustomerId: null,
+      monthlyPriceSnapshot: 5,
+      trialStartedAt: null,
+      trialEndsAt: null,
+      canceledAt: null,
+      plan: { name: "Profissional", monthlyPrice: 5, currency: "brl" },
+      reseller: null,
+    };
+    const clientSubscription = {
+      findUnique: jest.fn().mockResolvedValue(subscription),
+      update: jest.fn().mockResolvedValue({}),
+    };
+    const usage = { getBillingUsage: jest.fn().mockResolvedValue({ estimatedTotal: 0 }) };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", status: "PENDING", dueDate: "2026-08-01", value: 5 },
+      ]),
+    };
+    const service = buildBillingService({ prisma: { clientSubscription }, usage, asaas });
+    service.onModuleDestroy();
+
+    const result = await service.companyBillingStatus("empresa-1");
+
+    expect(clientSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+    );
+    expect(result).toMatchObject({ status: "INADIMPLENTE", accessRestricted: true });
+    expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 0);
+  });
+
+  it("roda a conciliação Asaas no worker mesmo quando ela não é o provedor padrão", async () => {
+    const asaas = { isConfigured: jest.fn().mockReturnValue(true) };
+    const service = buildBillingService({ prisma: {}, asaas });
+    service.onModuleDestroy();
+    const internal = service as never as Record<string, jest.Mock>;
+    for (const method of [
+      "processPendingStripeEvents",
+      "processPendingPayouts",
+      "reconcilePendingAsaasPayments",
+      "reconcileOverdueAsaasPayments",
+      "reconcileOrphanUsage",
+      "syncVariableUsageToAsaas",
+      "syncVariableUsageToStripe",
+      "alertDeadLetters",
+    ]) {
+      internal[method] = jest.fn().mockResolvedValue(undefined);
+    }
+
+    await internal.processBackgroundJobs();
+
+    expect(internal.reconcilePendingAsaasPayments).toHaveBeenCalledTimes(1);
+    expect(internal.reconcileOverdueAsaasPayments).toHaveBeenCalledTimes(1);
+    expect(internal.syncVariableUsageToAsaas).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -523,9 +607,9 @@ describe("consumo do teste na ativação", () => {
 });
 
 /**
- * As rotinas de conciliação rodam a cada 5 segundos, mas o que elas observam muda
- * em horas. Sem intervalo próprio, uma única empresa fora do período pago geraria
- * centenas de chamadas por hora à API do Asaas até pagar.
+ * As rotinas de conciliação rodam a cada 5 segundos. O vencimento é rechecado
+ * em no máximo um minuto: evita uma carência longa sem bombardear a API do
+ * Asaas quando uma cobrança permanecer em aberto.
  */
 describe("intervalo entre conferências", () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -541,7 +625,13 @@ describe("intervalo entre conferências", () => {
     const prisma = {
       clientSubscription: {
         findMany: jest.fn().mockResolvedValue([
-          { id: "sub-1", companyId: "empresa-1", asaasSubscriptionId: "sub_asaas_1" },
+          {
+            id: "sub-1",
+            companyId: "empresa-1",
+            asaasSubscriptionId: "sub_asaas_1",
+            status: "ATIVA",
+            currentPeriodEnd: new Date(Date.now() - 60_000),
+          },
         ]),
         update: jest.fn(),
       },
@@ -558,6 +648,42 @@ describe("intervalo entre conferências", () => {
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
 
     expect(asaas.listSubscriptionPayments).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconsulta o vencimento depois de um minuto", async () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-08-13T15:00:00.000Z"));
+    const prisma = {
+      clientSubscription: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "sub-1",
+            companyId: "empresa-1",
+            asaasSubscriptionId: "sub_asaas_1",
+            status: "ATIVA",
+            currentPeriodEnd: new Date(Date.now() - 60_000),
+          },
+        ]),
+        update: jest.fn(),
+      },
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([{ id: "pay_1", status: "PENDING", value: 5 }]),
+    };
+    const service = buildBillingService({ prisma, asaas });
+    service.onModuleDestroy();
+
+    try {
+      await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+      jest.advanceTimersByTime(59_000);
+      await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+      jest.advanceTimersByTime(1_000);
+      await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+      expect(asaas.listSubscriptionPayments).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("não reconsulta a mesma cobrança de consumo a cada rodada", async () => {

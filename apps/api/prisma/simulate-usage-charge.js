@@ -182,7 +182,7 @@ async function vencerCobranca(cobranca, valorIa) {
   }
 
   console.log("\nO Asaas marca OVERDUE na virada do dia dele, não neste instante.");
-  console.log("Quando marcar, a rotina bloqueia o painel em até 5 segundos, mesmo com o webhook desligado.");
+  console.log("A conciliação bloqueia o painel em até um minuto, mesmo com o webhook desligado.");
 }
 
 async function main() {

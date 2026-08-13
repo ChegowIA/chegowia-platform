@@ -54,6 +54,7 @@ function canUsePanelItem(user: { role: Role; permissionKeys?: PermissionKey[] },
 export function PainelShell({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
+  const isSessionLoading = useAuthStore((s) => s.isSessionLoading);
   const setSession = useAuthStore((s) => s.setSession);
   const pathname = usePathname();
   const router = useRouter();
@@ -69,7 +70,7 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
   const {data:billingStatus}=useQuery({
     queryKey:["company-billing-status"],
     queryFn:async()=>(await api.get("/billing/company/status")).data as {accessRestricted:boolean},
-    enabled:user?.role===Role.ADMIN,
+    enabled:user?.role===Role.ADMIN && Boolean(accessToken) && !isSessionLoading,
     retry:false,
   });
 

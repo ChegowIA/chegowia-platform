@@ -131,11 +131,13 @@ export function PlatformSupportBubble() {
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const isSuperAdmin = user?.role === Role.SUPER_ADMIN;
-  const canUseSupport = Boolean(user && !isSuperAdmin);
+  const canUseSupport = Boolean(user && accessToken && !isSessionLoading && !isSuperAdmin);
 
   const conversationQuery = useQuery({
     queryKey: SUPPORT_QUERY_KEY,

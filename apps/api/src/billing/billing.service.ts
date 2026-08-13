@@ -43,6 +43,12 @@ const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
 const FREE_TRIAL_DAYS = 7;
 /**
+ * Uma assinatura já fora do período pago não pode ganhar carência silenciosa.
+ * Um minuto limita chamadas repetidas ao Asaas sem transformar a virada de
+ * vencimento em uma espera de quinze minutos.
+ */
+const ASAAS_OVERDUE_RECHECK_INTERVAL_MS = 60_000;
+/**
  * Situações em que o dinheiro já é nosso. `CONFIRMED` é pagamento reconhecido com
  * saldo ainda a liberar e `RECEIVED` é saldo disponível — para liberar acesso os
  * dois valem, e esperar só o segundo deixaria o cliente pagando e esperando.
@@ -73,10 +79,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   /**
    * Quando cada consulta de conciliação foi feita pela última vez.
    *
-   * As rotinas rodam a cada 5s, mas as coisas que elas observam mudam em horas:
-   * uma cobrança vira vencida na virada do dia do Asaas, uma cobrança apagada
-   * segue apagada. Sem isso, uma empresa fora do período pago geraria centenas
-   * de chamadas por hora à API deles até pagar.
+   * As rotinas rodam a cada 5s, mas algumas consultas só precisam ser feitas
+   * periodicamente. A exceção é o vencimento: ele é rechecado a cada minuto,
+   * pois uma janela maior vira carência não intencional para quem não pagou.
    *
    * Em memória de propósito: perder o registro no restart custa uma consulta a
    * mais, e não vale uma coluna no banco.
@@ -788,7 +793,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const enforcementEnabled = process.env.BILLING_ENFORCEMENT === "true"
       || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
     const now = new Date();
-    const subscription = await this.db().clientSubscription.findUnique({
+    let subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
       include: { plan: true, reseller: { include: { user: { select: { name: true } } } } },
     });
@@ -800,6 +805,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         accessRestricted: enforcementEnabled,
         usage,
       };
+    }
+    // O worker é o caminho contínuo, mas esta consulta é feita antes de montar
+    // o painel. Revalidar uma assinatura já fora do período pago impede que um
+    // worker reiniciado, uma configuração trocada ou uma janela de cache deixem
+    // a operação aberta até a próxima rodada em segundo plano.
+    if (await this.reconcileAsaasSubscriptionOverdue(subscription, { bypassInterval: true })) {
+      subscription = { ...subscription, status: SubscriptionStatus.INADIMPLENTE };
     }
     const trialActive = this.isTrialActive(subscription, now);
     const trialExpired = this.isTrialExpired(subscription, now);
@@ -1752,12 +1764,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.processPendingStripeEvents();
       await this.processPendingPayouts();
-      if (this.billingProvider() === "ASAAS") {
+      // O provedor global decide novas contratações, não o provedor de cada
+      // assinatura existente. Durante uma migração podemos ter assinaturas dos
+      // dois lados; deixar de conciliar uma delas porque o padrão mudou abre
+      // justamente a brecha de cobrança que esta rotina existe para fechar.
+      if (this.asaas.isConfigured()) {
         await this.reconcilePendingAsaasPayments();
         await this.reconcileOverdueAsaasPayments();
         await this.reconcileOrphanUsage();
         await this.syncVariableUsageToAsaas();
-      } else {
+      }
+      if (this.stripe) {
         await this.syncVariableUsageToStripe();
       }
       await this.alertDeadLetters();
@@ -1955,33 +1972,65 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         asaasSubscriptionId: { not: null },
         currentPeriodEnd: { lt: new Date() },
       },
-      select: { id: true, companyId: true, asaasSubscriptionId: true },
+      select: { id: true, companyId: true, asaasSubscriptionId: true, status: true, currentPeriodEnd: true },
       take: 25,
     }).catch((error: unknown) => {
       this.logger.error("Não foi possível listar assinaturas fora do período pago.", this.stripeErrorForLog(error));
       return [];
     });
 
-    for (const assinatura of vencidas) {
-      // O Asaas marca vencida na virada do dia dele; conferir de minuto em
-      // minuto não antecipa nada.
-      if (!this.deveConferir(`vencimento:${assinatura.id}`, 15 * 60_000)) continue;
-      try {
-        const cobrancas = await this.asaas.listSubscriptionPayments(assinatura.asaasSubscriptionId!);
-        if (!cobrancas.some((item) => this.isAsaasPaymentOverdue(item))) continue;
-        await this.db().clientSubscription.update({
-          where: { id: assinatura.id },
-          data: { status: SubscriptionStatus.INADIMPLENTE },
-        });
-        this.logger.warn(
-          `Conciliação: empresa ${assinatura.companyId} marcada INADIMPLENTE por cobrança vencida no Asaas.`,
-        );
-      } catch (error) {
-        this.logger.error(
-          `Não foi possível conferir vencimento da empresa ${assinatura.companyId}.`,
-          this.stripeErrorForLog(error),
-        );
-      }
+    for (const assinatura of vencidas) await this.reconcileAsaasSubscriptionOverdue(assinatura);
+  }
+
+  /**
+   * Confere uma assinatura Asaas fora do período pago e, se a cobrança também
+   * estiver vencida, persiste a inadimplência que o guard usa para bloquear.
+   * A mesma operação é usada no worker e na leitura do status do painel.
+   */
+  private async reconcileAsaasSubscriptionOverdue(
+    assinatura: {
+      id: string;
+      companyId: string;
+      asaasSubscriptionId?: string | null;
+      status: SubscriptionStatus;
+      currentPeriodEnd?: Date | string | null;
+    },
+    options: { bypassInterval?: boolean } = {},
+  ) {
+    const fimDoPeriodo = assinatura.currentPeriodEnd ? new Date(assinatura.currentPeriodEnd) : null;
+    if (
+      assinatura.status !== SubscriptionStatus.ATIVA
+      || !assinatura.asaasSubscriptionId
+      || !fimDoPeriodo
+      || Number.isNaN(fimDoPeriodo.getTime())
+      || fimDoPeriodo.getTime() >= Date.now()
+      || !this.asaas.isConfigured()
+    ) {
+      return false;
+    }
+    if (
+      !options.bypassInterval
+      && !this.deveConferir(`vencimento:${assinatura.id}`, ASAAS_OVERDUE_RECHECK_INTERVAL_MS)
+    ) {
+      return false;
+    }
+    try {
+      const cobrancas = await this.asaas.listSubscriptionPayments(assinatura.asaasSubscriptionId);
+      if (!cobrancas.some((item) => this.isAsaasPaymentOverdue(item))) return false;
+      await this.db().clientSubscription.update({
+        where: { id: assinatura.id },
+        data: { status: SubscriptionStatus.INADIMPLENTE },
+      });
+      this.logger.warn(
+        `Conciliação: empresa ${assinatura.companyId} marcada INADIMPLENTE por cobrança vencida no Asaas.`,
+      );
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Não foi possível conferir vencimento da empresa ${assinatura.companyId}.`,
+        this.stripeErrorForLog(error),
+      );
+      return false;
     }
   }
 

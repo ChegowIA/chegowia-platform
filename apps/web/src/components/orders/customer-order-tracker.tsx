@@ -28,12 +28,14 @@ const STEPS = [
 
 export function CustomerOrderTracker() {
   const user = useAuthStore((state) => state.user);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
   const queryClient = useQueryClient();
   const [liveOrder, setLiveOrder] = useState<Order | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [celebrating, setCelebrating] = useState(false);
   const lastStatus = useRef<OrderStatus | null>(null);
-  const isCustomer = user?.role === Role.CLIENTE;
+  const isCustomer = user?.role === Role.CLIENTE && Boolean(accessToken) && !isSessionLoading;
 
   const { data: orders } = useQuery({
     queryKey: ["customer-live-orders"],
