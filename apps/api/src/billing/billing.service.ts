@@ -722,8 +722,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     // cliente. A mensagem diz o que fazer porque a causa não é óbvia para quem
     // está vendo a tela como administrador.
     if (!admin) {
+      // Quem lê esta tela é o empresário, que não tem acesso ao painel da
+      // plataforma nem como resolver isso sozinho. O detalhe acionável vai para
+      // o log, onde a equipe consegue agir.
+      this.logger.error(
+        `Ativação bloqueada: a empresa ${companyId} não tem usuário ADMIN ativo, e é o e-mail dele que vira o cliente no Stripe.`,
+      );
       throw new BadRequestException(
-        "Esta empresa ainda não tem um administrador cadastrado, e é o e-mail dele que vai na fatura. Cadastre um em Empresas, no painel da plataforma, e gere a fatura de novo.",
+        "Não conseguimos identificar o responsável pela conta desta empresa. Fale com o suporte da ChegowIA para liberar a ativação.",
       );
     }
 
@@ -744,7 +750,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           },
           quantity: 1,
         }],
-      discounts,
+      // Só enviamos `discounts` quando há cupom: a Stripe recusa a lista vazia
+      // em vez de tratá-la como ausência de desconto.
+      ...(discounts.length ? { discounts } : {}),
       success_url: `${this.publicAppUrl()}/contratar/sucesso?ativacao=1`,
       cancel_url: `${this.publicAppUrl()}/painel/assinatura?pagamento=cancelado`,
       metadata: {
