@@ -83,23 +83,48 @@ type BillingData = {
 export default function SubscriptionPage() {
   const queryClient = useQueryClient();
   const [confirmandoCancelamento, setConfirmandoCancelamento] = useState(false);
+  const [faturaAberta, setFaturaAberta] = useState<string | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["company-billing-status"],
     queryFn: async () => (await api.get("/billing/company/status")).data as BillingData,
-    refetchInterval: (query) => query.state.data?.status === SubscriptionStatus.EM_TESTE ? 60_000 : false,
+    // Enquanto o teste corre, uma vez por minuto basta. Depois de abrir a fatura
+    // o intervalo cai: o acesso volta em segundos após o pagamento, e o
+    // empresário não deveria precisar recarregar a página para descobrir.
+    refetchInterval: (query) => {
+      if (faturaAberta) return 10_000;
+      return query.state.data?.status === SubscriptionStatus.EM_TESTE ? 60_000 : false;
+    },
   });
   const { data: invoiceData } = useQuery({
     queryKey: ["company-invoices"],
     queryFn: async () => (await api.get("/billing/company/invoices")).data as { provider: string | null; invoices: Invoice[] },
     enabled: Boolean(data?.manageable),
   });
+  // A fatura abre em outra aba: o empresário volta para o painel sem perder o
+  // link, e o bloqueador de pop-up é contornado devolvendo o link na tela quando
+  // a abertura é barrada.
+  const abrirFatura = (url: string) => {
+    setFaturaAberta(url);
+    const aba = window.open(url, "_blank", "noopener,noreferrer");
+    if (!aba) return;
+    queryClient.invalidateQueries({ queryKey: ["company-billing-status"] });
+  };
   const portal = useMutation({
     mutationFn: async () => (await api.post("/billing/company/portal")).data as { url: string },
-    onSuccess: (result) => { window.location.href = result.url; },
+    onSuccess: (result) => abrirFatura(result.url),
   });
   const activate = useMutation({
-    mutationFn: async () => (await api.post("/billing/company/checkout")).data as { url: string },
-    onSuccess: (result) => { window.location.href = result.url; },
+    mutationFn: async () => (await api.post("/billing/company/checkout")).data as { url?: string; activated?: boolean },
+    onSuccess: (result) => {
+      // A cobrança já estava paga e o acesso foi liberado na hora: não há fatura
+      // para abrir, só recarregar o painel.
+      if (result.activated) {
+        queryClient.invalidateQueries({ queryKey: ["company-billing-status"] });
+        window.location.reload();
+        return;
+      }
+      if (result.url) abrirFatura(result.url);
+    },
   });
   const cancel = useMutation({
     mutationFn: async () => (await api.post("/billing/company/cancel")).data as { endsAt?: string | null; scheduled?: boolean },
@@ -197,10 +222,12 @@ export default function SubscriptionPage() {
             <p className="text-sm font-black text-brand-950 dark:text-brand-100">Sua empresa está pausada até a ativação.</p>
             <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês. IA e WhatsApp usados no teste não entram nela.</p>
             <Button className="mt-4 w-full sm:w-auto" isLoading={activate.isPending} onClick={() => activate.mutate()}>Gerar fatura e liberar tudo</Button>
+            {faturaAberta && <p className="mt-3 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura abriu em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui para abrir</a>. O acesso é liberado automaticamente após o pagamento.</p>}
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}
           </div> : data?.manageable ? <>
             <Button className="mt-6" isLoading={portal.isPending} onClick={() => portal.mutate()}>{viaAsaas ? "Abrir fatura em aberto" : "Abrir portal seguro do Stripe"}</Button>
             {viaAsaas && <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">A forma de pagamento é escolhida na própria fatura: Pix, boleto ou cartão, a cada mês.</p>}
+            {faturaAberta && <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Abrimos a fatura em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui</a>.</p>}
             {portal.error && <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">{apiErrorMessage(portal.error)}</p>}
           </> : null}
         </>}

@@ -42,6 +42,13 @@ import { readSecretKey, sealSecret } from "../common/utils/secret-box";
 const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
 const FREE_TRIAL_DAYS = 7;
+/**
+ * Situações em que o dinheiro já é nosso. `CONFIRMED` é pagamento reconhecido com
+ * saldo ainda a liberar e `RECEIVED` é saldo disponível — para liberar acesso os
+ * dois valem, e esperar só o segundo deixaria o cliente pagando e esperando.
+ */
+export const ASAAS_PAID_STATUSES = ["CONFIRMED", "RECEIVED", "RECEIVED_IN_CASH"];
+
 /** O revendedor acompanha a subconta pelo painel do próprio Asaas. */
 const ASAAS_RESELLER_DASHBOARD_URL = "https://www.asaas.com/login";
 
@@ -1010,7 +1017,21 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (subscription.asaasPaymentId) {
       try {
         const existing = await this.asaas.getPayment(subscription.asaasPaymentId);
-        if (existing.invoiceUrl && !["RECEIVED", "CONFIRMED"].includes(existing.status)) {
+        // Já paga: o webhook não chegou ou falhou. Ativar aqui é o que impede o
+        // pior caso desta tela — o empresário clicar de novo e pagar duas vezes.
+        if (ASAAS_PAID_STATUSES.includes(existing.status)) {
+          this.logger.warn(
+            `Cobrança ${existing.id} da empresa ${subscription.companyId} estava paga sem ativação; liberando pela conciliação.`,
+          );
+          await this.activateFromAsaasPayment({
+            id: existing.id,
+            value: existing.value,
+            subscription: existing.subscription ?? subscription.asaasSubscriptionId,
+            customer: existing.customer,
+          });
+          return { activated: true, reused: true };
+        }
+        if (existing.invoiceUrl) {
           return { url: existing.invoiceUrl, reused: true };
         }
       } catch {
@@ -1707,8 +1728,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.processPendingStripeEvents();
       await this.processPendingPayouts();
-      if (this.billingProvider() === "ASAAS") await this.syncVariableUsageToAsaas();
-      else await this.syncVariableUsageToStripe();
+      if (this.billingProvider() === "ASAAS") {
+        await this.reconcilePendingAsaasPayments();
+        await this.syncVariableUsageToAsaas();
+      } else {
+        await this.syncVariableUsageToStripe();
+      }
       await this.alertDeadLetters();
     } catch (error) {
       // Chamado por `setInterval` sem quem espere a promessa: uma exceção que
@@ -1838,6 +1863,54 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * na próxima fatura Stripe. O idempotency key é calculado dos IDs do ledger,
    * portanto uma queda entre Stripe e banco não duplica cobrança no retry.
    */
+  /**
+   * Cobrança paga cujo acesso não foi liberado.
+   *
+   * O webhook é o caminho normal, mas ele tem três formas de falhar fora do
+   * nosso alcance: estar desativado no painel, ser desativado pelo Asaas após
+   * acumular erro, ou o evento se perder. Em qualquer uma delas o cliente pagou
+   * e ficou sem o produto — situação em que ninguém aceita esperar suporte.
+   *
+   * Por isso conferimos periodicamente as cobranças que ainda constam em aberto:
+   * quem estiver paga é ativada aqui. A ativação é idempotente, então rodar em
+   * paralelo com o webhook não duplica comissão.
+   */
+  private async reconcilePendingAsaasPayments() {
+    const pendentes = await this.db().clientSubscription.findMany({
+      where: {
+        asaasPaymentId: { not: null },
+        status: { not: SubscriptionStatus.ATIVA },
+      },
+      select: { id: true, companyId: true, asaasPaymentId: true, asaasSubscriptionId: true },
+      take: 50,
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível listar cobranças pendentes do Asaas.", this.stripeErrorForLog(error));
+      return [];
+    });
+
+    for (const assinatura of pendentes) {
+      try {
+        const cobranca = await this.asaas.getPayment(assinatura.asaasPaymentId!);
+        if (!ASAAS_PAID_STATUSES.includes(cobranca.status)) continue;
+        this.logger.warn(
+          `Conciliação: cobrança ${cobranca.id} da empresa ${assinatura.companyId} estava paga sem ativação. Verifique o webhook no painel do Asaas.`,
+        );
+        await this.activateFromAsaasPayment({
+          id: cobranca.id,
+          value: cobranca.value,
+          subscription: cobranca.subscription ?? assinatura.asaasSubscriptionId,
+          customer: cobranca.customer,
+        });
+        await this.markAsaasUsagePaid(cobranca.id);
+      } catch (error) {
+        this.logger.error(
+          `Não foi possível conciliar a cobrança da empresa ${assinatura.companyId}.`,
+          this.stripeErrorForLog(error),
+        );
+      }
+    }
+  }
+
   /**
    * Consumo variável no Asaas. Não existe item de fatura como no Stripe: o que
    * há é a cobrança da assinatura, ainda em aberto, cujo valor pode ser
