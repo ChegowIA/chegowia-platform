@@ -733,6 +733,24 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    /**
+     * A chave de idempotência precisa mudar sempre que os parâmetros mudarem: a
+     * Stripe recusa a mesma chave com corpo diferente. Derivá-la de `updatedAt`
+     * não bastava — preço alterado fora do Prisma (correção manual, migração de
+     * dados) mantinha o carimbo antigo e travava a ativação com erro que não
+     * dizia isso. O resumo abaixo cobre o que de fato compõe a sessão.
+     */
+    const activationFingerprint = createHash("sha256")
+      .update([
+        Math.round(monthlyPrice * 100),
+        subscription.plan.currency,
+        canUseStoredStripePrice ? subscription.plan.stripePriceId : "inline",
+        subscription.stripeCustomerId ?? admin.email,
+        subscription.resellerId ?? "",
+      ].join("|"))
+      .digest("hex")
+      .slice(0, 16);
+
     const discounts: Stripe.Checkout.SessionCreateParams.Discount[] = [];
     if (subscription.resellerId) discounts.push({ coupon: await this.referralCouponId() });
     const session = await this.stripe.checkout.sessions.create({
@@ -769,7 +787,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           planId: subscription.planId,
         },
       },
-    }, { idempotencyKey: `trial-activation-${subscription.id}-${subscription.updatedAt.getTime()}` });
+    }, { idempotencyKey: `trial-activation-${subscription.id}-${activationFingerprint}` });
     if (!session.url) throw new BadGatewayException("A Stripe não retornou o link para pagamento da ativação.");
     await this.db().clientSubscription.update({
       where: { id: subscription.id },
