@@ -716,7 +716,16 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       orderBy: { createdAt: "asc" },
       select: { email: true },
     });
-    if (!admin) throw new BadRequestException("Não foi possível localizar o administrador da empresa.");
+    // O e-mail deste usuário vira o cliente no Stripe e aparece na fatura, então
+    // não dá para cair no usuário logado: um superadmin gerando a fatura pelo
+    // contexto assumido colocaria o endereço da plataforma na cobrança do
+    // cliente. A mensagem diz o que fazer porque a causa não é óbvia para quem
+    // está vendo a tela como administrador.
+    if (!admin) {
+      throw new BadRequestException(
+        "Esta empresa ainda não tem um administrador cadastrado, e é o e-mail dele que vai na fatura. Cadastre um em Empresas, no painel da plataforma, e gere a fatura de novo.",
+      );
+    }
 
     const discounts: Stripe.Checkout.SessionCreateParams.Discount[] = [];
     if (subscription.resellerId) discounts.push({ coupon: await this.referralCouponId() });
