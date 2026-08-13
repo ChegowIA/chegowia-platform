@@ -335,9 +335,15 @@ export class UsageService {
       variableInvoiced,
       variablePending,
       variablePendingCharged,
-      // O que ainda pode entrar em fatura: mensalidade mais o consumo que não
-      // foi cobrado ainda.
-      estimatedTotal: roundToCents(baseMonthlyPrice + variablePendingCharged),
+      /**
+       * Mensalidade mais todo o consumo faturável do mês.
+       *
+       * Não subtrai o que já foi somado a uma fatura: como o consumo sempre entra
+       * na cobrança da mensalidade, subtrair fazia o total mostrado ficar abaixo
+       * do valor da fatura que a pessoa vai pagar. `variableInvoiced` continua
+       * disponível para a tela dizer quanto já está numa fatura emitida.
+       */
+      estimatedTotal: roundToCents(baseMonthlyPrice + variableTotalCharged),
       trialCovered: {
         entries: trialCoveredEntries,
         providerTotal: trialProviderTotal,

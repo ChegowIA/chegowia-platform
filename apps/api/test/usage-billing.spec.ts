@@ -171,9 +171,7 @@ describe("resumo mensal para a tela de assinatura", () => {
     return new UsageService(prisma as never);
   }
 
-  it("separa o consumo que já entrou em cobrança do que ainda vai", async () => {
-    // Cobrança avulsa de consumo sai antes do fim do mês: sem separar, o painel
-    // mostraria o cliente devendo de novo o que já está cobrado.
+  it("informa quanto do consumo já está em fatura, sem tirar do total", async () => {
     const service = serviceWithEntries([
       { source: UsageSource.IA, metric: UsageMetric.IA_TOKENS_SAIDA, quantity: 1000, providerAmount: 2.1, billableAmount: 6, usageRateId: "r1", usageRate: rate, status: "SINCRONIZADO" },
       { source: UsageSource.IA, metric: UsageMetric.IA_TOKENS_SAIDA, quantity: 200, providerAmount: 0.42, billableAmount: 1.2, usageRateId: "r1", usageRate: rate, status: "PENDENTE" },
@@ -184,8 +182,13 @@ describe("resumo mensal para a tela de assinatura", () => {
     expect(summary.variableTotal).toBeCloseTo(7.2, 2);
     expect(summary.variableInvoiced).toBeCloseTo(6, 2);
     expect(summary.variablePending).toBeCloseTo(1.2, 2);
-    // O que ainda pode entrar em fatura: mensalidade mais o consumo não cobrado.
-    expect(summary.estimatedTotal).toBeCloseTo(6.2, 2);
+    /**
+     * O total soma tudo, sem descontar o que já entrou em fatura: o consumo
+     * sempre vai para a cobrança da mensalidade, então descontar mostraria um
+     * total abaixo do valor que a pessoa vai pagar. A separação existe para a
+     * tela dizer quanto já está emitido, não para subtrair.
+     */
+    expect(summary.estimatedTotal).toBeCloseTo(12.2, 2);
   });
 
   const rate = { isActive: true };

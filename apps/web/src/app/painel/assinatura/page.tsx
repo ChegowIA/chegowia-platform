@@ -214,7 +214,7 @@ export default function SubscriptionPage() {
               <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Cobrança do teste" : "Você deve até agora"}</p>
               <p className="mt-1 text-3xl font-black">{formatCurrency(estimated)}</p>
               <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Nenhum consumo do teste será faturado" : "Mensalidade + consumo, em uma cobrança só"}</p>
-              {!currentTrial && jaFaturado > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{formatUsageCurrency(jaFaturado)} de consumo deste mês já foi cobrado à parte.</p>}
+              {!currentTrial && jaFaturado > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Desse valor, {formatUsageCurrency(jaFaturado)} de consumo já está incluído na fatura emitida.</p>}
               {!currentTrial && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
             </div>
           </div>
@@ -273,7 +273,7 @@ export default function SubscriptionPage() {
           <Amount
             label={currentTrial ? "Total a pagar" : "Total estimado"}
             value={estimated}
-            hint={currentTrial ? "R$ 0,00: consumo coberto" : (usage?.variablePending ?? 0) > 0 && (usage?.variablePendingCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : jaFaturado > 0 ? "O que ainda entra na fatura" : "O que entra na fatura"}
+            hint={currentTrial ? "R$ 0,00: consumo coberto" : (usage?.variableTotal ?? 0) > 0 && (usage?.variableTotalCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : "Mensalidade + consumo, em uma fatura só"}
             tone="bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
           />
         </div>
