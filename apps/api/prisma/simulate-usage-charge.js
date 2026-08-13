@@ -16,10 +16,16 @@
  * produção não tem ts-node nem o package.json do apps/api.
  *
  * Uso no shell do Render:
- *   node apps/api/prisma/simulate-usage-charge.js
- *   node apps/api/prisma/simulate-usage-charge.js --email=outro@dominio.com --ia=3.50
+ *   node apps/api/prisma/simulate-usage-charge.js --email=dono@empresa.com
+ *   node apps/api/prisma/simulate-usage-charge.js --email=dono@empresa.com --ia=3.50
  *
- * Reverter o consumo lançado (não desfaz o que já entrou em cobrança):
+ * Com `--renovar`, encerra a assinatura no Asaas e cria outra vencendo hoje. É o
+ * único jeito de repetir o ciclo quando a assinatura é de cartão com fatura paga:
+ * o Asaas recusa antecipar o vencimento dessas. Simula a virada de mês, e é o
+ * cenário em que o consumo entra somado à mensalidade na mesma fatura:
+ *   node ... --renovar --mensalidade=5 --ia=1.20
+ *
+ * Reverter os lançamentos de teste (não apaga cobrança no Asaas):
  *   node apps/api/prisma/simulate-usage-charge.js --limpar
  */
 const { PrismaClient } = require("@prisma/client");
@@ -64,10 +70,73 @@ function reais(valor) {
   return `R$ ${Number(valor).toFixed(2).replace(".", ",")}`;
 }
 
+/**
+ * Encerra a assinatura atual no Asaas e cria outra vencendo hoje.
+ *
+ * Necessário porque assinatura de cartão com fatura paga não aceita mudança de
+ * vencimento. Encerrar antes de criar evita duas assinaturas cobrando a mesma
+ * empresa — o erro mais caro possível aqui.
+ *
+ * A cobrança nasce com a forma de pagamento aberta, então fica PENDENTE até
+ * alguém pagar: é essa janela que permite somar o consumo a ela.
+ */
+async function renovarAssinatura(assinatura, mensalidadeInformada) {
+  if (!assinatura.asaasCustomerId) {
+    throw new Error("A assinatura não tem cliente no Asaas; ative pelo painel antes de renovar.");
+  }
+  const valor = Number(mensalidadeInformada ?? assinatura.plan.monthlyPrice);
+  if (!Number.isFinite(valor) || valor <= 0) {
+    throw new Error("Informe --mensalidade com um valor positivo.");
+  }
+
+  if (assinatura.asaasSubscriptionId) {
+    await asaas(`/subscriptions/${encodeURIComponent(assinatura.asaasSubscriptionId)}`, { method: "DELETE" });
+    console.log(`2. Assinatura ${assinatura.asaasSubscriptionId} encerrada no Asaas.`);
+  } else {
+    console.log("2. Nenhuma assinatura anterior no Asaas para encerrar.");
+  }
+
+  const hoje = new Date().toISOString().slice(0, 10);
+  const nova = await asaas("/subscriptions", {
+    method: "POST",
+    body: {
+      customer: assinatura.asaasCustomerId,
+      value: valor,
+      nextDueDate: hoje,
+      cycle: "MONTHLY",
+      billingType: "UNDEFINED",
+      description: `ChegowIA — ${assinatura.plan.name}`,
+      externalReference: assinatura.id,
+    },
+  });
+  const lista = await asaas(`/subscriptions/${encodeURIComponent(nova.id)}/payments?limit=20`);
+  const emAberto = (lista?.data ?? []).find((item) => ["PENDING", "AWAITING_RISK_ANALYSIS"].includes(item.status));
+
+  await prisma.clientSubscription.update({
+    where: { id: assinatura.id },
+    data: {
+      asaasSubscriptionId: nova.id,
+      asaasPaymentId: emAberto?.id ?? null,
+      // O valor do teste também vai para o snapshot, senão a tela mostraria uma
+      // mensalidade diferente da que está na fatura.
+      monthlyPriceSnapshot: valor,
+    },
+  });
+  console.log(`   Nova assinatura ${nova.id} de ${reais(valor)} vencendo ${hoje}.`);
+  if (emAberto) {
+    console.log(`   Cobrança em aberto: ${emAberto.id} · ${reais(emAberto.value)}`);
+    if (emAberto.invoiceUrl) console.log(`   Fatura: ${emAberto.invoiceUrl}`);
+  } else {
+    console.log("   O Asaas ainda não gerou a cobrança; rode de novo em alguns segundos.");
+  }
+  return emAberto ?? null;
+}
+
 async function main() {
   const email = arg("email", "contato@chegowia.com.br");
   const valorIa = Number(arg("ia", "1.20"));
   const limpar = process.argv.includes("--limpar");
+  const renovar = process.argv.includes("--renovar");
 
   if (!Number.isFinite(valorIa) || valorIa <= 0) {
     throw new Error("Informe --ia com um valor positivo, por exemplo --ia=1.20");
@@ -127,9 +196,11 @@ async function main() {
   });
   console.log(`\n1. Fim do período movido para ${ontem.toLocaleString("pt-BR")} (mensalidade vencida).`);
 
-  // 2. Antecipa o vencimento no Asaas para a cobrança ser gerada agora.
+  // 2. Cobrança da mensalidade em aberto, para o consumo ter onde ser somado.
   let cobranca = null;
-  if (assinatura.asaasSubscriptionId) {
+  if (renovar) {
+    cobranca = await renovarAssinatura(assinatura, arg("mensalidade", null));
+  } else if (assinatura.asaasSubscriptionId) {
     const hoje = new Date().toISOString().slice(0, 10);
     try {
       await asaas(`/subscriptions/${encodeURIComponent(assinatura.asaasSubscriptionId)}`, {
@@ -151,6 +222,7 @@ async function main() {
   } else {
     console.log("2. Sem assinatura no Asaas: nada a antecipar (o consumo fica pendente até existir cobrança).");
   }
+
 
   // 3. Consumo de IA pendente. Chave única por execução para poder repetir.
   const referencia = `${REFERENCIA}-${ontem.getTime()}`;
