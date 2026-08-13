@@ -30,7 +30,7 @@ describe("consumo variável e cancelamento no Asaas", () => {
       findUnique: jest.fn().mockResolvedValue(
         "subscription" in overrides
           ? overrides.subscription
-          : { asaasSubscriptionId: "sub_1", status: "ATIVA" },
+          : { asaasSubscriptionId: "sub_1", asaasCustomerId: "cus_1", status: "ATIVA" },
       ),
       update: jest.fn().mockResolvedValue({}),
     };
@@ -44,6 +44,8 @@ describe("consumo variável e cancelamento no Asaas", () => {
         { id: "pay_1", status: "PENDING", value: 159.9, dueDate: "2026-09-05", invoiceUrl: "https://asaas.com/i/pay_1" },
       ]),
       updatePayment: jest.fn().mockResolvedValue({}),
+      createPayment: jest.fn().mockResolvedValue({ id: "pay_uso", status: "PENDING", value: 6 }),
+      findPaymentByReference: jest.fn().mockResolvedValue(null),
       cancelSubscription: jest.fn().mockResolvedValue({}),
       ...(overrides.asaas ?? {}),
     };
@@ -74,8 +76,8 @@ describe("consumo variável e cancelamento no Asaas", () => {
       );
     });
 
-    it("não mexe em cobrança já paga; o consumo espera o próximo ciclo", async () => {
-      const { service, asaas, usageLedger } = build({
+    it("não altera cobrança já paga", async () => {
+      const { service, asaas } = build({
         asaas: {
           listSubscriptionPayments: jest.fn().mockResolvedValue([
             { id: "pay_1", status: "RECEIVED", value: 159.9, dueDate: "2026-08-05" },
@@ -86,7 +88,6 @@ describe("consumo variável e cancelamento no Asaas", () => {
       await (service as never as Record<string, any>).syncVariableUsageToAsaas();
 
       expect(asaas.updatePayment).not.toHaveBeenCalled();
-      expect(usageLedger.updateMany).not.toHaveBeenCalled();
     });
 
     it("ignora empresa cuja assinatura não está ativa", async () => {
@@ -163,6 +164,74 @@ describe("consumo variável e cancelamento no Asaas", () => {
 
       expect(asaas.cancelSubscription).not.toHaveBeenCalled();
       expect(result).toEqual({ status: "CANCELADA", alreadyCanceled: true });
+    });
+  });
+
+  /**
+   * Assinatura no cartão não deixa mensalidade em aberto: o Asaas gera e captura
+   * a cobrança no vencimento. Sem cobrança para alterar, o consumo precisa sair
+   * em fatura própria — descobrimos isso quando o Asaas recusou antecipar o
+   * vencimento de uma assinatura de cartão já paga.
+   */
+  describe("sem mensalidade em aberto para somar", () => {
+    function semCobrancaEmAberto(extra: Record<string, any> = {}) {
+      return build({
+        asaas: {
+          listSubscriptionPayments: jest.fn().mockResolvedValue([
+            { id: "pay_1", status: "CONFIRMED", value: 159.9, dueDate: "2026-08-13" },
+          ]),
+          ...extra,
+        },
+        pending: [
+          { id: "u1", companyId: "empresa-1", metric: "IA_TOKENS_SAIDA", quantity: 5000, billableAmount: 6 },
+        ],
+      });
+    }
+
+    it("cria cobrança própria para o consumo", async () => {
+      const { service, asaas, usageLedger } = semCobrancaEmAberto();
+
+      await (service as never as Record<string, any>).syncVariableUsageToAsaas();
+
+      expect(asaas.createPayment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customer: "cus_1",
+          value: 6,
+          externalReference: expect.stringMatching(/^usage-/),
+        }),
+      );
+      expect(usageLedger.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: "SINCRONIZADO", asaasPaymentId: "pay_uso" } }),
+      );
+    });
+
+    it("não cria segunda cobrança quando a referência já existe", async () => {
+      // Sem chave de idempotência no Asaas, é a referência que impede cobrar o
+      // mesmo consumo duas vezes depois de uma resposta perdida.
+      const { service, asaas } = semCobrancaEmAberto({
+        findPaymentByReference: jest.fn().mockResolvedValue({ id: "pay_antiga", status: "PENDING", value: 6 }),
+      });
+
+      await (service as never as Record<string, any>).syncVariableUsageToAsaas();
+
+      expect(asaas.createPayment).not.toHaveBeenCalled();
+    });
+
+    it("acumula consumo abaixo do mínimo em vez de emitir cobrança de centavos", async () => {
+      const { service, asaas, usageLedger } = build({
+        asaas: {
+          listSubscriptionPayments: jest.fn().mockResolvedValue([
+            { id: "pay_1", status: "CONFIRMED", value: 159.9, dueDate: "2026-08-13" },
+          ]),
+        },
+      });
+
+      // Os lançamentos padrão somam R$ 1,50, abaixo do mínimo de R$ 5,00.
+      await (service as never as Record<string, any>).syncVariableUsageToAsaas();
+
+      expect(asaas.createPayment).not.toHaveBeenCalled();
+      // Continua pendente: o consumo não pode desaparecer por ser pequeno.
+      expect(usageLedger.updateMany).not.toHaveBeenCalled();
     });
   });
 });

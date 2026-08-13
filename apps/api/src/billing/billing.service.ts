@@ -1935,30 +1935,28 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     for (const [companyId, entries] of porEmpresa) {
       const subscription = await this.db().clientSubscription.findUnique({
         where: { companyId },
-        select: { asaasSubscriptionId: true, status: true },
+        select: { asaasSubscriptionId: true, asaasCustomerId: true, status: true },
       });
       if (!subscription?.asaasSubscriptionId || subscription.status !== SubscriptionStatus.ATIVA) continue;
 
       const total = Math.round(entries.reduce((sum, entry) => sum + Number(entry.billableAmount), 0) * 100) / 100;
       if (total <= 0) continue;
 
+      const detalhe = entries
+        .map((entry) => `${usageMetricLabel(entry.metric)} ${formatUsageQuantity(Number(entry.quantity))}`)
+        .join(", ");
+
       try {
         const cobrancas = await this.asaas.listSubscriptionPayments(subscription.asaasSubscriptionId);
-        // Só cobrança ainda em aberto aceita mudança de valor; paga ou vencida
-        // não. Ficando de fora, o consumo espera o próximo ciclo em vez de
-        // sumir — os lançamentos continuam PENDENTE.
+        // Só cobrança ainda em aberto aceita mudança de valor.
         const emAberto = cobrancas
           .filter((item) => ["PENDING", "AWAITING_RISK_ANALYSIS"].includes(item.status))
           .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)))[0];
-        if (!emAberto) continue;
 
-        const detalhe = entries
-          .map((entry) => `${usageMetricLabel(entry.metric)} ${formatUsageQuantity(Number(entry.quantity))}`)
-          .join(", ");
-        await this.asaas.updatePayment(emAberto.id, {
-          value: Math.round((Number(emAberto.value) + total) * 100) / 100,
-          description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
-        });
+        const cobrancaId = emAberto
+          ? await this.addUsageToOpenPayment(emAberto, total, detalhe)
+          : await this.chargeUsageSeparately(companyId, subscription, entries, total, detalhe);
+        if (!cobrancaId) continue;
 
         await this.db().usageLedger.updateMany({
           where: {
@@ -1966,7 +1964,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
             status: UsageLedgerStatus.PENDENTE,
             trialCoveredAt: null,
           },
-          data: { status: UsageLedgerStatus.SINCRONIZADO, asaasPaymentId: emAberto.id },
+          data: { status: UsageLedgerStatus.SINCRONIZADO, asaasPaymentId: cobrancaId },
         });
       } catch (error) {
         this.logger.error(
@@ -1975,6 +1973,62 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+  }
+
+  /** Consumo somado à cobrança da mensalidade: uma fatura só, quando dá. */
+  private async addUsageToOpenPayment(cobranca: { id: string; value: number }, total: number, detalhe: string) {
+    await this.asaas.updatePayment(cobranca.id, {
+      value: Math.round((Number(cobranca.value) + total) * 100) / 100,
+      description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
+    });
+    return cobranca.id;
+  }
+
+  /**
+   * Cobrança própria para o consumo, quando não há mensalidade em aberto onde
+   * somar. É o caso de assinatura no cartão: o Asaas gera e captura a cobrança no
+   * vencimento, então não existe janela para alterar o valor.
+   *
+   * Consumo pequeno não vira cobrança: o Asaas tem valor mínimo por cobrança, e
+   * emitir uma de centavos custaria mais em taxa do que arrecada. Abaixo do
+   * mínimo os lançamentos seguem pendentes, acumulando para o mês seguinte.
+   */
+  private async chargeUsageSeparately(
+    companyId: string,
+    subscription: { asaasCustomerId: string | null },
+    entries: any[],
+    total: number,
+    detalhe: string,
+  ) {
+    if (!subscription.asaasCustomerId) return null;
+    const minimo = Number(process.env.ASAAS_USAGE_MIN_CHARGE ?? 5);
+    if (total < minimo) {
+      this.logger.log(
+        `Consumo de ${total.toFixed(2)} da empresa ${companyId} abaixo do mínimo de cobrança (${minimo.toFixed(2)}); acumulando.`,
+      );
+      return null;
+    }
+
+    // Referência determinística pelos lançamentos: uma resposta perdida depois
+    // de criar a cobrança não gera uma segunda para o mesmo consumo.
+    const ids = entries.map((entry) => entry.id).sort();
+    const referencia = `usage-${createHash("sha256").update(ids.join(":"), "utf8").digest("hex").slice(0, 32)}`;
+    const existente = await this.asaas.findPaymentByReference(referencia).catch(() => null);
+    if (existente) {
+      this.logger.warn(`Cobrança de consumo ${existente.id} já existia para a empresa ${companyId}.`);
+      return existente.id;
+    }
+
+    const vencimento = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const cobranca = await this.asaas.createPayment({
+      customer: subscription.asaasCustomerId,
+      value: total,
+      dueDate: vencimento,
+      description: `ChegowIA — uso variável (${detalhe})`.slice(0, 500),
+      externalReference: referencia,
+    });
+    this.logger.log(`Cobrança de consumo ${cobranca.id} criada para a empresa ${companyId}: ${total.toFixed(2)}.`);
+    return cobranca.id;
   }
 
   /** Cobrança paga: o consumo que entrou nela deixa de estar pendente. */
@@ -2167,6 +2221,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!cobranca?.id) return;
 
     if (evento === "PAYMENT_CONFIRMED" || evento === "PAYMENT_RECEIVED") {
+      // Cobrança avulsa de consumo não é mensalidade: ela repassa custo de IA e
+      // WhatsApp. Tratá-la como assinatura paga renovaria o vínculo e pagaria
+      // comissão de 30% sobre um valor que é quase todo custo de fornecedor.
+      if (String(cobranca.externalReference ?? "").startsWith("usage-")) {
+        await this.markAsaasUsagePaid(String(cobranca.id));
+        return;
+      }
       await this.activateFromAsaasPayment(cobranca);
       await this.markAsaasUsagePaid(String(cobranca.id));
       return;

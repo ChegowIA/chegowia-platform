@@ -118,17 +118,23 @@ async function main() {
   let cobranca = null;
   if (assinatura.asaasSubscriptionId) {
     const hoje = new Date().toISOString().slice(0, 10);
-    await asaas(`/subscriptions/${encodeURIComponent(assinatura.asaasSubscriptionId)}`, {
-      method: "POST",
-      body: { nextDueDate: hoje },
-    });
+    try {
+      await asaas(`/subscriptions/${encodeURIComponent(assinatura.asaasSubscriptionId)}`, {
+        method: "POST",
+        body: { nextDueDate: hoje },
+      });
+    } catch (erro) {
+      // Assinatura no cartão com fatura paga não aceita antecipação — o Asaas
+      // gera e captura no vencimento. Nesse caso não existe mensalidade em
+      // aberto, e o consumo virará uma cobrança própria.
+      console.log(`2. Não foi possível antecipar o vencimento: ${erro.message}`);
+      console.log("   O consumo será cobrado em fatura própria (comportamento esperado no cartão).");
+    }
     const lista = await asaas(`/subscriptions/${encodeURIComponent(assinatura.asaasSubscriptionId)}/payments?limit=20`);
-    cobranca = (lista?.data ?? []).find((item) => ["PENDING", "OVERDUE", "AWAITING_RISK_ANALYSIS"].includes(item.status));
-    console.log(
-      cobranca
-        ? `2. Cobrança em aberto no Asaas: ${cobranca.id} · ${reais(cobranca.value)} · vence ${cobranca.dueDate}`
-        : "2. O Asaas ainda não gerou cobrança em aberto; rode de novo em alguns segundos.",
-    );
+    cobranca = (lista?.data ?? []).find((item) => ["PENDING", "AWAITING_RISK_ANALYSIS"].includes(item.status));
+    if (cobranca) {
+      console.log(`2. Mensalidade em aberto: ${cobranca.id} · ${reais(cobranca.value)} · vence ${cobranca.dueDate}`);
+    }
   } else {
     console.log("2. Sem assinatura no Asaas: nada a antecipar (o consumo fica pendente até existir cobrança).");
   }
@@ -153,12 +159,21 @@ async function main() {
   });
   console.log(`3. Lançado ${reais(valorIa)} de consumo de IA como pendente (ref. ${referencia}).`);
 
-  const esperado = cobranca ? Number(cobranca.value) + valorIa : null;
-  console.log("\nA rotina de fundo roda a cada 5 segundos.");
-  if (esperado !== null) {
-    console.log(`Em instantes a cobrança ${cobranca.id} deve passar de ${reais(cobranca.value)} para ${reais(esperado)}.`);
-    console.log("Confira em Cobranças no painel do Asaas, ou em /painel/assinatura na aba Faturas.");
+  const minimo = Number(process.env.ASAAS_USAGE_MIN_CHARGE ?? 5);
+  console.log("\nA rotina de fundo roda a cada 5 segundos. O que esperar:");
+  if (cobranca) {
+    console.log(
+      `  A mensalidade ${cobranca.id} deve passar de ${reais(cobranca.value)} para ${reais(Number(cobranca.value) + valorIa)}.`,
+    );
+  } else if (valorIa >= minimo) {
+    console.log(`  Uma cobrança própria de ${reais(valorIa)} deve ser criada, com vencimento em 5 dias.`);
+  } else {
+    console.log(
+      `  Nada será cobrado agora: ${reais(valorIa)} está abaixo do mínimo de ${reais(minimo)} para emitir cobrança avulsa.`,
+    );
+    console.log(`  O lançamento fica pendente e acumula. Para ver a cobrança sair, use --ia=${minimo.toFixed(2)} ou mais.`);
   }
+  console.log("Confira em Cobranças no painel do Asaas, ou em /painel/assinatura na aba Faturas.");
 }
 
 main()

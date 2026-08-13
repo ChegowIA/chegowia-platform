@@ -30,6 +30,7 @@ ASAAS_API_KEY=$aact_prod_...        # a chave carrega o ambiente
 ASAAS_WEBHOOK_TOKEN=...             # mínimo 20 caracteres
 ASAAS_SUBACCOUNT_ENCRYPTION_KEY=    # opcional, 32 bytes em base64 ou hex
 COMMISSION_HOLD_DAYS=7
+ASAAS_USAGE_MIN_CHARGE=5              # mínimo para emitir cobrança de consumo
 API_PUBLIC_URL=https://DOMINIO-DA-API
 ```
 
@@ -73,9 +74,18 @@ um marcar assinatura como paga.
 - **Liberação de acesso**: só pelo webhook. `PAYMENT_CONFIRMED` e
   `PAYMENT_RECEIVED` ativam; o evento é gravado na fila (`StripeEvent`, com
   `provider = ASAAS`) e reprocessado até dar certo, de forma idempotente.
-- **Consumo variável**: somado ao valor da cobrança em aberto da assinatura, na
-  mesma fatura da mensalidade. Um lançamento que não coube no ciclo continua
-  pendente e entra no seguinte, nunca some.
+- **Consumo variável**: quando existe mensalidade em aberto, o consumo é somado
+  ao valor dela — uma fatura só no mês. Assinatura no **cartão** não tem essa
+  janela: o Asaas gera e captura a cobrança no vencimento, então o consumo sai em
+  cobrança própria, com 5 dias de vencimento.
+
+  Consumo abaixo de `ASAAS_USAGE_MIN_CHARGE` (padrão R$ 5,00) não vira cobrança
+  avulsa: a taxa da emissão comeria o valor. Ele continua pendente e acumula.
+
+  A cobrança de consumo tem `externalReference` começando com `usage-`, e o
+  webhook usa isso para não tratá-la como mensalidade paga: ela não renova
+  vínculo nem gera comissão, porque o valor é quase todo repasse de custo de
+  fornecedor.
 - **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`.
 - **Dinheiro que volta**: estorno, chargeback e desfazimento de recebimento em
   dinheiro estornam a comissão e marcam `INADIMPLENTE`.

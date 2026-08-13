@@ -157,6 +157,20 @@ export class AsaasProvider {
     return this.request("/payments", { method: "POST", body: { billingType: "UNDEFINED", ...params } });
   }
 
+  /**
+   * Cobrança por referência nossa. Substitui a chave de idempotência que a API
+   * deles não tem: uma resposta perdida depois de criar a cobrança faria a
+   * tentativa seguinte cobrar o mesmo consumo duas vezes.
+   */
+  async findPaymentByReference(externalReference: string): Promise<AsaasPayment | null> {
+    const result = await this.request(
+      `/payments?externalReference=${encodeURIComponent(externalReference)}&limit=1`,
+      { method: "GET" },
+    );
+    const found = Array.isArray(result?.data) ? result.data[0] : null;
+    return found?.id ? found : null;
+  }
+
   async getPayment(paymentId: string): Promise<AsaasPayment> {
     return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "GET" });
   }
