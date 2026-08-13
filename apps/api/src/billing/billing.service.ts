@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
@@ -16,12 +17,13 @@ import {
   PayoutBatchStatus,
   Role,
   StripeEventStatus,
+  BillingProvider,
   SubscriptionStatus,
   UsageLedgerStatus,
 } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import Stripe from "stripe";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { slugify } from "../common/utils/slugify";
@@ -1661,9 +1663,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     const stored = await this.db().stripeEvent.findUnique({ where: { id: eventId } });
     if (!stored) return;
-    const event = stored.payload as unknown as Stripe.Event;
     try {
-      await this.applyStripeEvent(event);
+      // A fila atende os dois provedores: o retry, o alerta de esgotamento e a
+      // tela de saúde operacional são os mesmos, só o tratamento muda.
+      if (stored.provider === BillingProvider.ASAAS) {
+        await this.applyAsaasEvent(stored.payload as any);
+      } else {
+        await this.applyStripeEvent(stored.payload as unknown as Stripe.Event);
+      }
       await this.db().stripeEvent.update({
         where: { id: eventId },
         data: {
@@ -1683,6 +1690,182 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       });
       this.logger.error(`Falha ao processar o evento Stripe ${eventId}`, this.stripeErrorForLog(error));
     }
+  }
+
+  /**
+   * Webhook do Asaas. Diferente do Stripe, não há assinatura criptográfica do
+   * corpo: a autenticação é o token que configuramos ao criar o webhook e que o
+   * Asaas devolve no header `asaas-access-token`. Sem ele, qualquer um poderia
+   * marcar assinatura como paga.
+   */
+  async handleAsaasWebhook(token: string | undefined, payload: any) {
+    const expected = process.env.ASAAS_WEBHOOK_TOKEN?.trim();
+    if (!expected) throw new BadRequestException("Webhook do Asaas não configurado.");
+    if (!token || !this.safeEqual(token, expected)) {
+      throw new UnauthorizedException("Origem do webhook não reconhecida.");
+    }
+
+    const eventId = typeof payload?.id === "string" ? payload.id : null;
+    const type = typeof payload?.event === "string" ? payload.event : null;
+    if (!eventId || !type) return { received: true, ignored: true };
+
+    // Mesmo tratamento de duplicata do Stripe: o Asaas reenvia enquanto não
+    // receber 200, e processar duas vezes ativaria a mesma assinatura de novo.
+    await this.db().stripeEvent.upsert({
+      where: { id: eventId },
+      create: {
+        id: eventId,
+        provider: BillingProvider.ASAAS,
+        type,
+        payload: JSON.parse(JSON.stringify(payload)),
+        status: StripeEventStatus.PENDENTE,
+      },
+      update: {},
+    });
+    queueMicrotask(() => void this.processStripeEvent(eventId));
+    return { received: true, duplicateSafe: true };
+  }
+
+  /**
+   * Eventos de cobrança do Asaas. `PAYMENT_CONFIRMED` chega quando o pagamento é
+   * reconhecido e `PAYMENT_RECEIVED` quando o dinheiro entra; para liberar o
+   * acesso o primeiro basta, e tratar os dois deixa o cliente esperando menos.
+   */
+  private async applyAsaasEvent(payload: any) {
+    const evento = String(payload?.event ?? "");
+    const cobranca = payload?.payment;
+    if (!cobranca?.id) return;
+
+    if (evento === "PAYMENT_CONFIRMED" || evento === "PAYMENT_RECEIVED") {
+      await this.activateFromAsaasPayment(cobranca);
+      return;
+    }
+    if (evento === "PAYMENT_OVERDUE") {
+      await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE);
+      return;
+    }
+    if (
+      evento === "PAYMENT_REFUNDED"
+      || evento === "PAYMENT_CHARGEBACK_REQUESTED"
+      || evento === "PAYMENT_REVERSED"
+    ) {
+      await this.reverseAsaasCommission(cobranca);
+      await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE);
+      return;
+    }
+    if (evento === "SUBSCRIPTION_DELETED" || evento === "SUBSCRIPTION_INACTIVATED") {
+      const assinatura = await this.subscriptionFromAsaas(cobranca);
+      if (assinatura) {
+        await this.db().clientSubscription.update({
+          where: { id: assinatura.id },
+          data: { status: SubscriptionStatus.CANCELADA, canceledAt: new Date() },
+        });
+      }
+    }
+  }
+
+  /** Localiza a assinatura da plataforma a partir da cobrança do Asaas. */
+  private async subscriptionFromAsaas(cobranca: any) {
+    if (cobranca.subscription) {
+      const porAssinatura = await this.db().clientSubscription.findUnique({
+        where: { asaasSubscriptionId: String(cobranca.subscription) },
+        include: { reseller: true },
+      });
+      if (porAssinatura) return porAssinatura;
+    }
+    // Cobrança avulsa (ativação criada antes da assinatura, por exemplo).
+    if (cobranca.customer) {
+      return this.db().clientSubscription.findUnique({
+        where: { asaasCustomerId: String(cobranca.customer) },
+        include: { reseller: true },
+      });
+    }
+    return null;
+  }
+
+  private async activateFromAsaasPayment(cobranca: any) {
+    const assinatura = await this.subscriptionFromAsaas(cobranca);
+    if (!assinatura) {
+      this.logger.warn(`Cobrança ${cobranca.id} paga no Asaas sem assinatura correspondente.`);
+      return;
+    }
+
+    const agora = new Date();
+    await this.db().clientSubscription.update({
+      where: { id: assinatura.id },
+      data: {
+        status: SubscriptionStatus.ATIVA,
+        asaasSubscriptionId: cobranca.subscription
+          ? String(cobranca.subscription)
+          : assinatura.asaasSubscriptionId,
+        // A cobrança foi paga: deixa de estar em aberto.
+        asaasPaymentId: null,
+        canceledAt: null,
+        // O desconto por indicação começa com a assinatura paga, não no teste.
+        discountEndsAt: assinatura.resellerId && !assinatura.discountEndsAt
+          ? new Date(agora.getFullYear(), agora.getMonth() + 3, agora.getDate())
+          : assinatura.discountEndsAt,
+      },
+    });
+    await this.recordAsaasCommission(assinatura, cobranca);
+  }
+
+  private async markAsaasSubscriptionStatus(cobranca: any, status: SubscriptionStatus) {
+    const assinatura = await this.subscriptionFromAsaas(cobranca);
+    if (!assinatura) return;
+    await this.db().clientSubscription.update({
+      where: { id: assinatura.id },
+      data: { status },
+    });
+  }
+
+  /**
+   * Comissão do revendedor. Nasce pendente e só fica disponível após a carência,
+   * que existe para cobrir estorno e contestação — por isso não usamos o split
+   * do Asaas, que repassaria no ato.
+   */
+  private async recordAsaasCommission(assinatura: any, cobranca: any) {
+    if (!assinatura.resellerId || !assinatura.reseller?.isActive) return;
+
+    const bruto = Number(cobranca.value ?? 0);
+    if (!bruto) return;
+    const taxa = Number(assinatura.reseller.commissionRate);
+    const carenciaDias = Math.max(0, Number(process.env.COMMISSION_HOLD_DAYS ?? process.env.STRIPE_COMMISSION_HOLD_DAYS ?? 7));
+    const disponivelEm = new Date(Date.now() + carenciaDias * 24 * 60 * 60 * 1000);
+
+    await this.db().commissionLedger.upsert({
+      // O id da cobrança é único: reprocessar o mesmo evento não duplica lançamento.
+      where: { asaasPaymentId: String(cobranca.id) },
+      create: {
+        resellerId: assinatura.resellerId,
+        subscriptionId: assinatura.id,
+        asaasPaymentId: String(cobranca.id),
+        grossAmount: bruto,
+        commissionRate: taxa,
+        commissionAmount: Math.round(bruto * taxa * 100) / 100,
+        currency: "brl",
+        status: carenciaDias === 0 ? CommissionStatus.DISPONIVEL : CommissionStatus.PENDENTE,
+        availableAt: disponivelEm,
+      },
+      update: {},
+    });
+  }
+
+  /** Estorno depois de paga: a comissão daquele mês deixa de ser devida. */
+  private async reverseAsaasCommission(cobranca: any) {
+    await this.db().commissionLedger.updateMany({
+      where: {
+        asaasPaymentId: String(cobranca.id),
+        status: { in: [CommissionStatus.PENDENTE, CommissionStatus.DISPONIVEL] },
+      },
+      data: { status: CommissionStatus.ESTORNADA },
+    });
+  }
+
+  private safeEqual(left: string, right: string) {
+    const a = Buffer.from(left);
+    const b = Buffer.from(right);
+    return a.length === b.length && timingSafeEqual(a, b);
   }
 
   private async applyStripeEvent(event: Stripe.Event) {

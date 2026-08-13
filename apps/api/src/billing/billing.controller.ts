@@ -118,6 +118,21 @@ export class BillingController {
     return this.billing.approveClientApplication(id);
   }
 
+  /**
+   * Webhook do Asaas. Não há assinatura do corpo como no Stripe: a autenticação
+   * é o token configurado ao criar o webhook, devolvido no header
+   * `asaas-access-token`. Sem ele qualquer um marcaria assinatura como paga.
+   */
+  @Public()
+  @Post("asaas/webhook")
+  @SkipThrottle()
+  asaasWebhook(
+    @Headers("asaas-access-token") token: string | undefined,
+    @Body() payload: unknown,
+  ) {
+    return this.billing.handleAsaasWebhook(token, payload);
+  }
+
   @Public()
   @Post("stripe/webhook")
   @SkipThrottle()
