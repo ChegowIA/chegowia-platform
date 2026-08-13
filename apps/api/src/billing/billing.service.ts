@@ -131,7 +131,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       variableUsageBilling: "O consumo é consolidado e lançado na próxima fatura.",
       trial: {
         days: FREE_TRIAL_DAYS,
-        description: "Durante os 7 dias de teste, IA e WhatsApp são medidos normalmente para transparência, mas ficam cobertos pela ChegowIA e não entram em uma fatura futura.",
+        description: "Durante os 7 dias de teste você não paga nada. IA e WhatsApp são medidos com transparência e entram na primeira fatura somente se você decidir assinar; se não seguir, nada é cobrado.",
       },
       rates: rates.map((rate: any) => {
         const providerUnitCost = Number(rate.providerUnitCost);
@@ -2041,7 +2041,18 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    */
   private async addPendingUsageToPayment(companyId: string, cobranca: AsaasPayment) {
     try {
-      const pendentes = await this.usage.pendingBillableEntries(companyId);
+      // Inclui o consumo do teste: ele entra na fatura de quem assina e é
+      // perdoado para quem desiste, então a ativação é o momento em que deixa de
+      // ser cortesia. O `trialCoveredAt` fica no lançamento como registro de que
+      // aconteceu durante o teste.
+      const pendentes = await this.db().usageLedger.findMany({
+        where: {
+          companyId,
+          status: UsageLedgerStatus.PENDENTE,
+          billableAmount: { gt: 0 },
+        },
+        orderBy: { createdAt: "asc" },
+      });
       const total = Math.round(pendentes.reduce((soma: number, item: any) => soma + Number(item.billableAmount), 0) * 100) / 100;
       if (total <= 0) return cobranca;
 
@@ -2053,7 +2064,6 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         where: {
           id: { in: pendentes.map((item: any) => item.id) },
           status: UsageLedgerStatus.PENDENTE,
-          trialCoveredAt: null,
         },
         data: { status: UsageLedgerStatus.SINCRONIZADO, asaasPaymentId: cobranca.id },
       });

@@ -18,7 +18,10 @@ que o cliente tenha solicitado.
   automático, que repassaria no ato.
 - Estorno ou chargeback marca a comissão como `ESTORNADA`.
 - Repasse mínimo de R$ 10,00 e um lote em processamento por vez.
-- O consumo variável (IA e WhatsApp) do período de teste nunca é faturado.
+- O consumo variável (IA e WhatsApp) do período de teste entra na fatura de
+  ativação de quem assina; quem não assina não paga nada. A promessa está escrita
+  nas páginas públicas de venda, então mudar essa regra exige mudar aquele texto
+  junto — há teste que barra a divergência.
 
 ## Asaas (provedor atual)
 
@@ -83,8 +86,10 @@ um marcar assinatura como paga.
   consumo faturável acumulado. O valor da assinatura no Asaas fica intocado,
   senão o acréscimo se repetiria todo mês.
 
-  Consumo marcado com `trialCoveredAt` é o do período de teste: fica no histórico
-  para auditoria e nunca é cobrado.
+  Consumo marcado com `trialCoveredAt` é o do período de teste. Ele **é cobrado de
+  quem assina e perdoado de quem desiste**: a rotina mensal o ignora, e a fatura
+  de ativação o inclui. Quem nunca ativa nunca paga — a cortesia é a desistência,
+  não o teste.
 
 - **Inadimplência**: `PAYMENT_OVERDUE` marca `INADIMPLENTE`, e a partir daí o
   painel bloqueia na hora (sem carência). O `currentPeriodEnd` não participa do

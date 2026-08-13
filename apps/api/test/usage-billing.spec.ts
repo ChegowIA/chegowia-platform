@@ -228,7 +228,12 @@ describe("resumo mensal para a tela de assinatura", () => {
     expect(summary.estimatedTotal).toBeCloseTo(160.1, 2);
   });
 
-  it("mostra o consumo do teste, mas o exclui do total que será faturado", async () => {
+  /**
+   * O consumo do teste não entra no total mensal, mas também não é cortesia: ele
+   * é cobrado de quem assina e perdoado de quem desiste. Por isso vem separado
+   * em `trialCovered`, com o valor que a ativação vai somar à fatura.
+   */
+  it("separa o consumo do teste como valor a cobrar na ativação", async () => {
     const service = serviceWithEntries([
       {
         source: UsageSource.WHATSAPP,
@@ -247,8 +252,39 @@ describe("resumo mensal para a tela de assinatura", () => {
     expect(summary.providerTotal).toBe(1.2);
     expect(summary.variableTotal).toBe(0);
     expect(summary.estimatedTotal).toBe(0);
-    expect(summary.trialCovered).toEqual({ entries: 1, providerTotal: 1.2, nominalAmount: 1.56 });
+    expect(summary.trialCovered).toEqual({
+      entries: 1,
+      providerTotal: 1.2,
+      nominalAmount: 1.56,
+      // Ainda PENDENTE: é o que a fatura de ativação vai somar.
+      chargeableOnActivation: 1.56,
+      chargeableOnActivationCharged: 1.56,
+    });
     expect(summary.items[0]).toMatchObject({ billableAmount: 0, trialQuantity: 4, trialCoveredAmount: 1.56 });
+  });
+
+
+  it("não conta como a cobrar o consumo do teste que já entrou em fatura", async () => {
+    // Depois da ativação o lançamento sai de PENDENTE: continua marcado como
+    // consumo do teste para auditoria, mas não é mais um valor a cobrar.
+    const service = serviceWithEntries([
+      {
+        source: UsageSource.IA,
+        metric: UsageMetric.IA_TOKENS_SAIDA,
+        quantity: 1000,
+        providerAmount: 0.42,
+        billableAmount: 1.2,
+        trialCoveredAt: new Date("2026-08-04T10:00:00.000Z"),
+        usageRateId: "r1",
+        usageRate: rate,
+        status: "SINCRONIZADO",
+      },
+    ]);
+
+    const summary = await service.getMonthlySummary("empresa-teste", { baseMonthlyPrice: 0 });
+
+    expect(summary.trialCovered.chargeableOnActivation).toBe(0);
+    expect(summary.trialCovered.nominalAmount).toBe(1.2);
   });
 
   describe("consumo abaixo de um centavo", () => {

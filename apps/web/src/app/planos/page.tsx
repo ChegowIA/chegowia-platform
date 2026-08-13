@@ -199,7 +199,7 @@ export default function PlansPage() {
                 <h2 className="mt-5 text-2xl font-black text-slate-950 dark:text-slate-100">{plan.name}</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{plan.description}</p>
                 <p className="mt-6 text-4xl font-black text-slate-950 dark:text-slate-100">{formatCurrency(Number(plan.monthlyPrice))}<span className="text-sm font-bold text-slate-400">/mês</span></p>
-                <p className="mt-2 text-[11px] font-medium leading-5 text-slate-500 dark:text-slate-400">Durante o teste, IA e WhatsApp são medidos normalmente, mas ficam por conta da ChegowIA. Só haverá cobrança se você decidir continuar depois.</p>
+                <p className="mt-2 text-[11px] font-medium leading-5 text-slate-500 dark:text-slate-400">Durante o teste você não paga nada. IA e WhatsApp são medidos normalmente e entram na primeira fatura só se você decidir continuar.</p>
 
                 <button
                   type="button"
@@ -282,7 +282,7 @@ export default function PlansPage() {
             >
               Criar empresa e iniciar teste grátis
             </Button>
-            <p className="text-center text-[11px] leading-5 text-slate-400">Não pedimos pagamento agora. Ao fim dos 7 dias, o acesso é pausado e você escolhe se quer ativar o plano pagando a fatura. O consumo do teste é detalhado, mas coberto pela ChegowIA.</p>
+            <p className="text-center text-[11px] leading-5 text-slate-400">Não pedimos pagamento agora. Ao fim dos 7 dias, o acesso é pausado e você escolhe se quer ativar o plano pagando a fatura, que traz a mensalidade mais o consumo de IA e WhatsApp que você usou. Se não ativar, nada é cobrado.</p>
           </div>
         )}
       </Modal>
@@ -343,7 +343,7 @@ function PricingBreakdown({ plan, pricing, loading, compact = false }: {
 
       <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-200">
         <p className="font-black">{trialDays} dias de teste, sem cobrança</p>
-        <p className="mt-1">Você pode usar recursos, IA e WhatsApp no período de teste. Os eventos continuam sendo medidos e exibidos no painel, mas seus custos são cobertos pela ChegowIA e não são adicionados à sua futura fatura. Ao fim do prazo, o acesso é pausado até você optar por ativar o plano.</p>
+        <p className="mt-1">Você pode usar recursos, IA e WhatsApp no período de teste, e cada evento aparece medido no painel com a tarifa vigente. Ao fim do prazo, o acesso é pausado até você optar por ativar o plano. Ativando, a primeira fatura soma a mensalidade e o consumo de IA e WhatsApp do período — em uma cobrança só. Se você não ativar, esse consumo não é cobrado.</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">

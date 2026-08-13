@@ -316,6 +316,19 @@ export class UsageService {
     const trialProviderTotal = roundMoneyPrecision(items.reduce((sum, item) => sum + item.trialProviderAmount, 0));
     const trialCoveredTotal = roundMoneyPrecision(items.reduce((sum, item) => sum + item.trialCoveredAmount, 0));
     const trialCoveredEntries = entries.filter((item: any) => item.trialCoveredAt).length;
+    /**
+     * Consumo do teste que ainda pode ser cobrado.
+     *
+     * O gasto do teste entra na fatura de quem assina e é perdoado para quem
+     * desiste — então, enquanto o lançamento está PENDENTE, ele é um valor a
+     * cobrar na ativação, não um custo já absorvido. Depois de entrar em fatura
+     * ele sai desta conta.
+     */
+    const trialChargeableOnActivation = roundMoneyPrecision(
+      entries
+        .filter((item: any) => item.trialCoveredAt && item.status === UsageLedgerStatus.PENDENTE)
+        .reduce((soma: number, item: any) => soma + Number(item.billableAmount), 0),
+    );
     // A fatura é em centavos; o resíduo abaixo disso continua acumulando no
     // razão e entra quando o total passar de um centavo.
     const variableTotalCharged = roundToCents(variableTotal);
@@ -348,6 +361,8 @@ export class UsageService {
         entries: trialCoveredEntries,
         providerTotal: trialProviderTotal,
         nominalAmount: trialCoveredTotal,
+        chargeableOnActivation: trialChargeableOnActivation,
+        chargeableOnActivationCharged: roundToCents(trialChargeableOnActivation),
       },
       unpricedEvents: items.reduce((sum, item) => sum + item.unpriced, 0),
       items,

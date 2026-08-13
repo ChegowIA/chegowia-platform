@@ -326,7 +326,12 @@ describe("consumo acumulado na fatura de ativação", () => {
       },
       user: { findFirst: jest.fn().mockResolvedValue({ email: "dono@loja.com.br", name: "Dono" }) },
       company: { findUnique: jest.fn().mockResolvedValue({ name: "Pizzaria", cnpj: "12345678000199" }) },
-      usageLedger: { updateMany: jest.fn().mockResolvedValue({ count: pendentes.length }) },
+      usageLedger: {
+        // A ativação lê o razão direto para incluir também o consumo do teste,
+        // que `pendingBillableEntries` exclui de propósito.
+        findMany: jest.fn().mockResolvedValue(pendentes),
+        updateMany: jest.fn().mockResolvedValue({ count: pendentes.length }),
+      },
     };
     const asaas = {
       isConfigured: jest.fn().mockReturnValue(true),
@@ -339,8 +344,7 @@ describe("consumo acumulado na fatura de ativação", () => {
       getPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", value: 168.3, invoiceUrl: "https://asaas.com/i/pay_1" }),
       ...(overrides.asaas ?? {}),
     };
-    const usage = { pendingBillableEntries: jest.fn().mockResolvedValue(pendentes) };
-    const service = buildBillingService({ prisma, asaas, usage });
+    const service = buildBillingService({ prisma, asaas });
     service.onModuleDestroy();
     return { service, asaas, prisma };
   }
@@ -390,5 +394,96 @@ describe("consumo acumulado na fatura de ativação", () => {
     const result = await service.companyCheckout("empresa-1");
 
     expect(result).toEqual({ url: "https://asaas.com/i/pay_1", reused: false });
+  });
+});
+
+/**
+ * O consumo do teste é cobrado de quem assina e perdoado de quem desiste.
+ *
+ * A regra anterior era o oposto — o teste ficava por conta da ChegowIA — e estava
+ * escrita em seis telas, incluindo as páginas públicas de venda. Este teste fixa
+ * o comportamento e guarda o texto, porque promessa de preço em página pública
+ * não pode divergir do que o código cobra.
+ */
+describe("consumo do teste na ativação", () => {
+  it("inclui na fatura o consumo marcado como do teste", async () => {
+    const prisma = {
+      clientSubscription: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "sub-1",
+          companyId: "empresa-1",
+          status: "EM_TESTE",
+          trialEndsAt: new Date(Date.now() - 60_000),
+          monthlyPriceSnapshot: 159.9,
+          asaasCustomerId: "cus_1",
+          asaasPaymentId: null,
+          plan: { name: "Profissional", monthlyPrice: 159.9, currency: "brl" },
+          reseller: null,
+        }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      user: { findFirst: jest.fn().mockResolvedValue({ email: "dono@loja.com.br", name: "Dono" }) },
+      company: { findUnique: jest.fn().mockResolvedValue({ name: "Pizzaria", cnpj: "12345678000199" }) },
+      usageLedger: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: "u1",
+            companyId: "empresa-1",
+            metric: "IA_TOKENS_SAIDA",
+            quantity: 5000,
+            billableAmount: 4.1,
+            trialCoveredAt: new Date(),
+          },
+        ]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      createCustomer: jest.fn(),
+      createSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", status: "PENDING", value: 159.9, invoiceUrl: "https://asaas.com/i/pay_1" },
+      ]),
+      updatePayment: jest.fn().mockResolvedValue({}),
+      getPayment: jest.fn().mockResolvedValue({ id: "pay_1", value: 164, invoiceUrl: "https://asaas.com/i/pay_1" }),
+    };
+    process.env.BILLING_PROVIDER = "ASAAS";
+    const service = buildBillingService({ prisma, asaas });
+    service.onModuleDestroy();
+
+    await service.companyCheckout("empresa-1");
+
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 164 }));
+    // A consulta não filtra por trialCoveredAt: é isso que traz o gasto do teste.
+    expect(prisma.usageLedger.findMany.mock.calls[0][0].where.trialCoveredAt).toBeUndefined();
+    delete process.env.BILLING_PROVIDER;
+  });
+
+  it("a rotina mensal continua ignorando o consumo do teste", () => {
+    // Quem não assina não paga: fora da ativação, o gasto do teste nunca entra em
+    // cobrança. É `pendingBillableEntries` que garante isso.
+    const { readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const fonte = readFileSync(join(__dirname, "..", "src", "usage", "usage.service.ts"), "utf8");
+    const trecho = fonte.slice(fonte.indexOf("async pendingBillableEntries"));
+    expect(trecho.slice(0, trecho.indexOf("}\n"))).toContain("trialCoveredAt: null");
+  });
+
+  it("as telas públicas não prometem mais que o teste é por conta da ChegowIA", () => {
+    const { readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const raiz = join(__dirname, "..", "..", "..");
+    const telas = [
+      "apps/web/src/app/planos/page.tsx",
+      "apps/web/src/app/software/page.tsx",
+      "apps/web/src/app/painel/assinatura/page.tsx",
+      "apps/web/src/app/revendedor/clientes/page.tsx",
+    ];
+    for (const tela of telas) {
+      const conteudo = readFileSync(join(raiz, tela), "utf8");
+      expect(conteudo).not.toMatch(/cobert[oa]s? pela ChegowIA/);
+      expect(conteudo).not.toMatch(/por conta da ChegowIA/);
+    }
   });
 });

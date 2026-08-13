@@ -44,7 +44,7 @@ type UsageSummary = {
   variablePending: number;
   variablePendingCharged: number;
   estimatedTotal: number;
-  trialCovered: { entries: number; providerTotal: number; nominalAmount: number };
+  trialCovered: { entries: number; providerTotal: number; nominalAmount: number; chargeableOnActivation: number; chargeableOnActivationCharged: number };
   unpricedEvents: number;
   items: UsageItem[];
   sources: UsageSource[];
@@ -182,12 +182,23 @@ export default function SubscriptionPage() {
   const currentTrial = Boolean(trial?.current);
   const trialExpired = Boolean(currentTrial && (trial?.expired || data?.activationAvailable));
   const base = usage?.baseMonthlyPrice ?? Number(data?.plan?.monthlyPrice ?? 159.9);
-  const estimated = usage?.estimatedTotal ?? base;
   const ia = usage?.sources?.find((source) => source.source === "IA");
   const whatsapp = usage?.sources?.find((source) => source.source === "WHATSAPP");
   const previous = usage?.previous;
   const jaFaturado = usage?.variableInvoiced ?? 0;
   const covered = usage?.trialCovered;
+  /**
+   * No teste o valor cobrável fica em `trialCovered`, não em `billableAmount`:
+   * ele só se torna devido na ativação. A tela mostra o que a pessoa pagaria se
+   * assinasse — mensalidade cheia mais esse consumo — em vez de R$ 0,00, que
+   * esconderia justamente o número que ela precisa para decidir.
+   */
+  const consumoDoTeste = covered?.chargeableOnActivationCharged ?? 0;
+  const estimated = currentTrial
+    ? Number(data?.plan?.monthlyPrice ?? 159.9) + consumoDoTeste
+    : usage?.estimatedTotal ?? base;
+  const valorPorFonte = (fonte?: UsageSource) =>
+    (fonte?.billableAmount ?? 0) + (currentTrial ? fonte?.trialCoveredAmount ?? 0 : 0);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -196,7 +207,7 @@ export default function SubscriptionPage() {
         <div className="relative">
           <p className="text-xs font-black uppercase tracking-[.18em] text-brand-300">Conta da empresa</p>
           <h1 className="mt-2 text-3xl font-black">Assinatura e cobrança</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">Plano base, IA e WhatsApp sempre separados. Durante o teste, o consumo aparece com transparência, mas é integralmente coberto pela ChegowIA.</p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">Plano base, IA e WhatsApp sempre separados, sempre em uma fatura só. Durante o teste você não paga nada; o consumo de IA e WhatsApp entra na fatura apenas se você decidir assinar.</p>
         </div>
       </header>
 
@@ -211,9 +222,9 @@ export default function SubscriptionPage() {
               <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">{meta.detail}</p>
             </div>
             <div className="text-left sm:text-right">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Cobrança do teste" : "Você deve até agora"}</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Se você assinar, paga" : "Você deve até agora"}</p>
               <p className="mt-1 text-3xl font-black">{formatCurrency(estimated)}</p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Nenhum consumo do teste será faturado" : "Mensalidade + consumo, em uma cobrança só"}</p>
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Consumo do teste; nada é cobrado se você não assinar" : "Mensalidade + consumo, em uma cobrança só"}</p>
               {!currentTrial && jaFaturado > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Desse valor, {formatUsageCurrency(jaFaturado)} de consumo já está incluído na fatura emitida.</p>}
               {!currentTrial && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
             </div>
@@ -225,7 +236,7 @@ export default function SubscriptionPage() {
 
           {trialExpired ? <div className="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/25">
             <p className="text-sm font-black text-brand-950 dark:text-brand-100">Sua empresa está pausada até a ativação.</p>
-            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês, já somada ao consumo de IA e WhatsApp que ficou pendente. IA e WhatsApp usados durante o teste não entram nela.</p>
+            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês, já somada a todo o consumo de IA e WhatsApp que você usou, inclusive o do teste. Se você não assinar, nada disso é cobrado.</p>
             <Button className="mt-4 w-full sm:w-auto" isLoading={activate.isPending} onClick={() => activate.mutate()}>Gerar fatura e liberar tudo</Button>
             {faturaAberta && <p className="mt-3 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura abriu em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui para abrir</a>. O acesso é liberado automaticamente após o pagamento.</p>}
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}
@@ -248,32 +259,32 @@ export default function SubscriptionPage() {
         </div>
 
         {covered && (covered.entries > 0 || covered.nominalAmount > 0) ? <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-100">
-          <p className="font-black">{covered.entries} evento(s) de consumo coberto(s) pela ChegowIA</p>
-          <p className="mt-1">Tarifa de referência: {formatUsageCurrency(covered.nominalAmount)} · custo real de fornecedores: {formatUsageCurrency(covered.providerTotal)}. Esses valores ficam no histórico, mas não são devidos por você.</p>
+          <p className="font-black">{covered.entries} evento(s) de consumo durante o teste</p>
+          <p className="mt-1">Tarifa: {formatUsageCurrency(covered.nominalAmount)} · custo real de fornecedores: {formatUsageCurrency(covered.providerTotal)}. {covered.chargeableOnActivation > 0 ? `Desse total, ${formatUsageCurrency(covered.chargeableOnActivation)} entra na fatura se você assinar — e nada é cobrado se você não seguir.` : "Esse consumo já foi incluído em uma fatura."}</p>
         </div> : null}
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Amount label="Mensalidade" value={base} hint={currentTrial ? "R$ 0,00 durante o teste" : "Plano contratado"} tone="bg-slate-50 text-slate-900 dark:bg-slate-800/60 dark:text-slate-100" />
+          <Amount label="Mensalidade" value={currentTrial ? Number(data?.plan?.monthlyPrice ?? 159.9) : base} hint={currentTrial ? "Cobrada só na ativação" : "Plano contratado"} tone="bg-slate-50 text-slate-900 dark:bg-slate-800/60 dark:text-slate-100" />
           <Amount
             label="Inteligência artificial"
-            value={ia?.billableAmount ?? 0}
-            hint={currentTrial && ia?.trialQuantity ? `${compactNumber(ia.trialQuantity)} tokens cobertos` : ia?.quantity ? `${compactNumber(ia.quantity)} tokens` : "Sem consumo"}
+            value={valorPorFonte(ia)}
+            hint={ia?.quantity ? `${compactNumber(ia.quantity)} tokens` : "Sem consumo"}
             tone="bg-brand-50 text-brand-900 dark:bg-brand-950/30 dark:text-brand-200"
             preciso
             delta={!currentTrial && previous ? { current: ia?.billableAmount ?? 0, previous: previous.sources?.find((s) => s.source === "IA")?.billableAmount ?? 0 } : undefined}
           />
           <Amount
             label="WhatsApp"
-            value={whatsapp?.billableAmount ?? 0}
-            hint={currentTrial && whatsapp?.trialQuantity ? `${formatCount(whatsapp.trialQuantity, "mensagem", "mensagens")} cobertas` : whatsapp?.quantity ? `${formatCount(whatsapp.quantity, "mensagem", "mensagens")}` : "Sem consumo"}
+            value={valorPorFonte(whatsapp)}
+            hint={whatsapp?.quantity ? `${formatCount(whatsapp.quantity, "mensagem", "mensagens")}` : "Sem consumo"}
             tone="bg-accent-50 text-accent-900 dark:bg-accent-950/30 dark:text-accent-200"
             preciso
             delta={!currentTrial && previous ? { current: whatsapp?.billableAmount ?? 0, previous: previous.sources?.find((s) => s.source === "WHATSAPP")?.billableAmount ?? 0 } : undefined}
           />
           <Amount
-            label={currentTrial ? "Total a pagar" : "Total estimado"}
+            label={currentTrial ? "Total se assinar" : "Total estimado"}
             value={estimated}
-            hint={currentTrial ? "R$ 0,00: consumo coberto" : (usage?.variableTotal ?? 0) > 0 && (usage?.variableTotalCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : "Mensalidade + consumo, em uma fatura só"}
+            hint={currentTrial ? "Cobrado só se você assinar" : (usage?.variableTotal ?? 0) > 0 && (usage?.variableTotalCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : "Mensalidade + consumo, em uma fatura só"}
             tone="bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
           />
         </div>
@@ -288,16 +299,16 @@ export default function SubscriptionPage() {
               <div className="min-w-0">
                 <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{item.label}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">{formatQuantity(item.metric, item.quantity)}{item.providerAmount > 0 && <> · custo do provedor {formatUsageCurrency(item.providerAmount)}</>}</p>
-                {coveredByTrial && <p className="mt-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">Teste gratuito cobriu {formatUsageCurrency(item.trialCoveredAmount)} dessa métrica.</p>}
+                {coveredByTrial && <p className="mt-1 text-[11px] font-bold text-sky-700 dark:text-sky-300">{formatUsageCurrency(item.trialCoveredAmount)} dessa métrica veio do período de teste.</p>}
               </div>
-              {coveredByTrial && item.billableAmount === 0 ? <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-black text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">Coberto</span> : <p className="shrink-0 text-sm font-black text-slate-900 dark:text-slate-100">{formatUsageCurrency(item.billableAmount)}</p>}
+              {coveredByTrial && item.billableAmount === 0 ? <span className="shrink-0 rounded-full bg-sky-100 px-2.5 py-1 text-xs font-black text-sky-800 dark:bg-sky-950/40 dark:text-sky-300">{formatUsageCurrency(item.trialCoveredAmount)} se assinar</span> : <p className="shrink-0 text-sm font-black text-slate-900 dark:text-slate-100">{formatUsageCurrency(item.billableAmount)}</p>}
             </div>;
           }) : <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">Ainda não houve consumo variável neste período.</div>}
         </div>
 
         {!currentTrial && previous && (previous.variableTotal > 0 || (usage?.variableTotal ?? 0) > 0) ? <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300"><span className="font-bold">Mês anterior:</span><span>{formatUsageCurrency(previous.variableTotal)} de consumo variável</span><Delta current={usage?.variableTotal ?? 0} previous={previous.variableTotal} /></div> : null}
 
-        <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{currentTrial ? "As tarifas e custos continuam registrados para você acompanhar o uso real. Eles foram classificados como cobertos no teste e são excluídos de qualquer fatura posterior." : covered?.entries ? "O histórico separa o que foi coberto no teste do consumo que começou depois da ativação. Só o uso posterior pode compor uma fatura." : (viaAsaas ? "O custo variável nunca vira uma cobrança separada: ele é somado à próxima mensalidade, em uma fatura só. Enquanto não houver mensalidade em aberto, o valor acumula. Cada evento guarda a tarifa vigente no momento em que aconteceu." : "O custo variável é consolidado por métrica e enviado como item da próxima fatura Stripe. Cada evento guarda a tarifa vigente no momento em que aconteceu.")}</p>
+        <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{currentTrial ? "Cada evento guarda a tarifa vigente no momento em que aconteceu, para você acompanhar o uso real. Se você assinar, esse consumo entra na fatura de ativação junto com a mensalidade, em uma cobrança só. Se não assinar, nada é cobrado." : covered?.entries ? "O histórico marca o que veio do período de teste. Esse consumo entrou na fatura de ativação, junto com a mensalidade." : (viaAsaas ? "O custo variável nunca vira uma cobrança separada: ele é somado à próxima mensalidade, em uma fatura só. Enquanto não houver mensalidade em aberto, o valor acumula. Cada evento guarda a tarifa vigente no momento em que aconteceu." : "O custo variável é consolidado por métrica e enviado como item da próxima fatura Stripe. Cada evento guarda a tarifa vigente no momento em que aconteceu.")}</p>
       </section>
 
       {data?.manageable ? <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -356,9 +367,9 @@ function invoiceStatusLabel(status: string) {
 function TrialNotice({ trial, planPrice }: { trial: Trial; planPrice: number }) {
   const endsAt = trial.endsAt ? formatDateTime(trial.endsAt) : "o fim do período";
   if (trial.expired) {
-    return <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/25 dark:text-amber-100"><p className="font-black">O teste de {trial.days} dias terminou em {endsAt}.</p><p className="mt-1">O acesso foi pausado. Para voltar a usar a empresa, gere a fatura de ativação abaixo. Nada que você consumiu no teste será adicionado a ela.</p></div>;
+    return <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/25 dark:text-amber-100"><p className="font-black">O teste de {trial.days} dias terminou em {endsAt}.</p><p className="mt-1">O acesso foi pausado. Para voltar a usar a empresa, gere a fatura de ativação abaixo: ela traz a mensalidade mais o consumo de IA e WhatsApp que você usou. Se você não assinar, nada é cobrado.</p></div>;
   }
-  return <div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-100"><p className="font-black">Você está no teste gratuito de {trial.days} dias.</p><p className="mt-1">Restam {trial.daysRemaining} {trial.daysRemaining === 1 ? "dia" : "dias"}; o período termina em {endsAt}. Use tudo normalmente: IA e WhatsApp são medidos, mas os custos deste teste são pagos pela ChegowIA.</p><p className="mt-1 text-xs font-semibold">Ao final, sua operação será pausada. Você só paga se quiser ativar o plano por {formatCurrency(planPrice)}/mês.</p></div>;
+  return <div className="mt-5 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/25 dark:text-sky-100"><p className="font-black">Você está no teste gratuito de {trial.days} dias.</p><p className="mt-1">Restam {trial.daysRemaining} {trial.daysRemaining === 1 ? "dia" : "dias"}; o período termina em {endsAt}. Use tudo normalmente: IA e WhatsApp são medidos e aparecem aqui a cada evento.</p><p className="mt-1 text-xs font-semibold">Ao final, sua operação será pausada. Se você não assinar, não paga nada. Se assinar, a primeira fatura traz a mensalidade de {formatCurrency(planPrice)} mais o consumo de IA e WhatsApp que você usou.</p></div>;
 }
 
 function Amount({ label, value, hint, tone, delta, preciso }: {

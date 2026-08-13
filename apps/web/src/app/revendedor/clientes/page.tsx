@@ -164,7 +164,7 @@ function SaleModal({ open, close, sale, setSale, result, mutation }: any) {
         <div className="space-y-4">
           <div className="rounded-2xl bg-emerald-50 p-4 text-sm font-bold text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
             {result.trialStarted
-              ? "Teste gratuito de 7 dias iniciado. O cliente recebeu a confirmação por e-mail para acessar a empresa; IA e WhatsApp do teste ficam cobertos pela ChegowIA."
+              ? "Teste gratuito de 7 dias iniciado. O cliente recebeu a confirmação por e-mail para acessar a empresa; IA e WhatsApp são medidos e entram na primeira fatura apenas se ele decidir assinar."
               : result.message}
           </div>
           {result.checkoutUrl && <><Input readOnly value={result.checkoutUrl} /><div className="grid grid-cols-2 gap-2"><Button onClick={() => navigator.clipboard.writeText(result.checkoutUrl)}>Copiar link</Button><Button variant="outline" onClick={() => window.open(result.checkoutUrl, "_blank")}>Abrir Stripe</Button></div></>}
