@@ -70,6 +70,26 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
   private db() { return this.prisma as any; }
 
+  /**
+   * Quando cada consulta de conciliação foi feita pela última vez.
+   *
+   * As rotinas rodam a cada 5s, mas as coisas que elas observam mudam em horas:
+   * uma cobrança vira vencida na virada do dia do Asaas, uma cobrança apagada
+   * segue apagada. Sem isso, uma empresa fora do período pago geraria centenas
+   * de chamadas por hora à API deles até pagar.
+   *
+   * Em memória de propósito: perder o registro no restart custa uma consulta a
+   * mais, e não vale uma coluna no banco.
+   */
+  private readonly ultimaConferencia = new Map<string, number>();
+
+  private deveConferir(chave: string, intervaloMs: number) {
+    const anterior = this.ultimaConferencia.get(chave) ?? 0;
+    if (Date.now() - anterior < intervaloMs) return false;
+    this.ultimaConferencia.set(chave, Date.now());
+    return true;
+  }
+
   onModuleInit() {
     // Nas réplicas de HTTP puro a fila não roda: quem processa é o serviço com
     // APP_ROLE=worker. Ver common/config/app-role.ts.
@@ -1943,6 +1963,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     });
 
     for (const assinatura of vencidas) {
+      // O Asaas marca vencida na virada do dia dele; conferir de minuto em
+      // minuto não antecipa nada.
+      if (!this.deveConferir(`vencimento:${assinatura.id}`, 15 * 60_000)) continue;
       try {
         const cobrancas = await this.asaas.listSubscriptionPayments(assinatura.asaasSubscriptionId!);
         if (!cobrancas.some((item) => item.status === "OVERDUE")) continue;
@@ -2119,6 +2142,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     for (const item of candidatos) {
       const paymentId = String(item.asaasPaymentId);
+      // Cobrança que existe continua existindo: reconferir a cada rodada só
+      // gastaria chamada.
+      if (!this.deveConferir(`orfao:${paymentId}`, 60 * 60_000)) continue;
       try {
         const cobranca = await this.asaas.findPayment(paymentId);
         // Ausente ou apagada. Erro de rede não chega aqui: `findPayment` só

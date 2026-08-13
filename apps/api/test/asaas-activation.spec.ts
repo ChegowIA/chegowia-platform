@@ -487,3 +487,62 @@ describe("consumo do teste na ativação", () => {
     }
   });
 });
+
+/**
+ * As rotinas de conciliação rodam a cada 5 segundos, mas o que elas observam muda
+ * em horas. Sem intervalo próprio, uma única empresa fora do período pago geraria
+ * centenas de chamadas por hora à API do Asaas até pagar.
+ */
+describe("intervalo entre conferências", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.BILLING_PROVIDER = "ASAAS";
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it("não reconsulta o vencimento da mesma assinatura a cada rodada", async () => {
+    const prisma = {
+      clientSubscription: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "sub-1", companyId: "empresa-1", asaasSubscriptionId: "sub_asaas_1" },
+        ]),
+        update: jest.fn(),
+      },
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([{ id: "pay_1", status: "PENDING", value: 5 }]),
+    };
+    const service = buildBillingService({ prisma, asaas });
+    service.onModuleDestroy();
+
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+    await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
+
+    expect(asaas.listSubscriptionPayments).toHaveBeenCalledTimes(1);
+  });
+
+  it("não reconsulta a mesma cobrança de consumo a cada rodada", async () => {
+    const prisma = {
+      usageLedger: {
+        findMany: jest.fn().mockResolvedValue([{ asaasPaymentId: "pay_1" }]),
+        updateMany: jest.fn(),
+      },
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      findPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", value: 5 }),
+    };
+    const service = buildBillingService({ prisma, asaas });
+    service.onModuleDestroy();
+
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+    await (service as never as Record<string, any>).reconcileOrphanUsage();
+
+    expect(asaas.findPayment).toHaveBeenCalledTimes(1);
+  });
+});

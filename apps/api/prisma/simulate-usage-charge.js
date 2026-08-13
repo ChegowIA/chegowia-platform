@@ -25,6 +25,11 @@
  * cenário em que o consumo entra somado à mensalidade na mesma fatura:
  *   node ... --renovar --mensalidade=5 --ia=1.20
  *
+ * Com `--vencer`, faz o ciclo seguinte inteiro: cria a cobrança do mês, espera a
+ * rotina somar o consumo a ela e então joga o vencimento para ontem, como se o
+ * dia da cobrança tivesse chegado. Implica `--renovar`:
+ *   node ... --vencer --mensalidade=5 --ia=1.20
+ *
  * Reverter os lançamentos de teste (não apaga cobrança no Asaas):
  *   node apps/api/prisma/simulate-usage-charge.js --limpar
  */
@@ -132,11 +137,60 @@ async function renovarAssinatura(assinatura, mensalidadeInformada) {
   return emAberto ?? null;
 }
 
+/**
+ * Espera a rotina somar o consumo e então joga o vencimento para ontem.
+ *
+ * A ordem importa: a rotina só altera cobrança PENDING, então vencer antes de o
+ * consumo entrar deixaria a fatura sem ele. Por isso o script confere o valor
+ * antes de mexer na data, em vez de confiar no tempo.
+ *
+ * O Asaas troca o status para OVERDUE na virada do dia dele, não na hora — o que
+ * o script garante é a data vencida, não o rótulo.
+ */
+async function vencerCobranca(cobranca, valorIa) {
+  const esperado = Math.round((Number(cobranca.value) + valorIa) * 100) / 100;
+  console.log(`\nEsperando o consumo entrar na cobrança (alvo ${reais(esperado)})...`);
+
+  let atual = null;
+  for (let tentativa = 0; tentativa < 15; tentativa += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    atual = await asaas(`/payments/${encodeURIComponent(cobranca.id)}`);
+    if (Math.round(Number(atual.value) * 100) / 100 >= esperado) break;
+    atual = null;
+  }
+
+  if (!atual) {
+    console.log("O consumo não entrou na cobrança em 45s. Não vou vencer a fatura sem ele — ficaria incompleta.");
+    console.log("Verifique nos logs se a rotina está rodando (procure por \"acumulando\" ou erro do Asaas).");
+    return;
+  }
+  console.log(`Consumo somado: a cobrança está em ${reais(atual.value)}.`);
+
+  const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  await asaas(`/payments/${encodeURIComponent(cobranca.id)}`, { method: "POST", body: { dueDate: ontem } });
+  console.log(`Vencimento movido para ${ontem}.`);
+
+  const assinaturaLocal = await prisma.clientSubscription.findFirst({
+    where: { asaasPaymentId: cobranca.id },
+    select: { id: true },
+  });
+  if (assinaturaLocal) {
+    await prisma.clientSubscription.update({
+      where: { id: assinaturaLocal.id },
+      data: { currentPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    });
+  }
+
+  console.log("\nO Asaas marca OVERDUE na virada do dia dele, não neste instante.");
+  console.log("Quando marcar, a rotina bloqueia o painel em até 5 segundos, mesmo com o webhook desligado.");
+}
+
 async function main() {
   const email = arg("email", "contato@chegowia.com.br");
   const valorIa = Number(arg("ia", "1.20"));
   const limpar = process.argv.includes("--limpar");
-  const renovar = process.argv.includes("--renovar");
+  const vencer = process.argv.includes("--vencer");
+  const renovar = process.argv.includes("--renovar") || vencer;
 
   if (!Number.isFinite(valorIa) || valorIa <= 0) {
     throw new Error("Informe --ia com um valor positivo, por exemplo --ia=1.20");
@@ -244,21 +298,22 @@ async function main() {
   });
   console.log(`3. Lançado ${reais(valorIa)} de consumo de IA como pendente (ref. ${referencia}).`);
 
-  const minimo = Number(process.env.ASAAS_USAGE_MIN_CHARGE ?? 5);
   console.log("\nA rotina de fundo roda a cada 5 segundos. O que esperar:");
   if (cobranca) {
     console.log(
       `  A mensalidade ${cobranca.id} deve passar de ${reais(cobranca.value)} para ${reais(Number(cobranca.value) + valorIa)}.`,
     );
-  } else if (valorIa >= minimo) {
-    console.log(`  Uma cobrança própria de ${reais(valorIa)} deve ser criada, com vencimento em 5 dias.`);
   } else {
-    console.log(
-      `  Nada será cobrado agora: ${reais(valorIa)} está abaixo do mínimo de ${reais(minimo)} para emitir cobrança avulsa.`,
-    );
-    console.log(`  O lançamento fica pendente e acumula. Para ver a cobrança sair, use --ia=${minimo.toFixed(2)} ou mais.`);
+    console.log("  Sem mensalidade em aberto, o consumo fica pendente e entra na cobrança seguinte.");
+    console.log("  Nunca sai cobrança à parte: a regra é uma fatura só, com o total.");
   }
   console.log("Confira em Cobranças no painel do Asaas, ou em /painel/assinatura na aba Faturas.");
+
+  if (vencer && cobranca) {
+    await vencerCobranca(cobranca, valorIa);
+  } else if (vencer) {
+    console.log("\nNada a vencer: não há cobrança em aberto.");
+  }
 }
 
 main()
