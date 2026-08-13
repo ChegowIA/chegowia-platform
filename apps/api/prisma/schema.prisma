@@ -246,6 +246,14 @@ enum PayoutBatchStatus {
   FALHOU
 }
 
+/// Provedor de cobrança de um evento ou assinatura. Os dois convivem durante a
+/// migração: o Stripe segue atendendo quem já assinou até a última assinatura
+/// dele terminar.
+enum BillingProvider {
+  STRIPE
+  ASAAS
+}
+
 enum StripeEventStatus {
   PENDENTE
   PROCESSANDO
@@ -1313,6 +1321,13 @@ model ResellerProfile {
   commissionRate     Decimal  @default(0.30) @db.Decimal(5, 4)
   stripeAccountId    String?  @unique
   stripeOnboardingOk Boolean  @default(false)
+  // Subconta Asaas do revendedor. O walletId endereça as transferências; a
+  // chave de API é devolvida uma única vez na criação, então é guardada cifrada
+  // — sem ela não há como consultar o saldo da subconta depois.
+  asaasWalletId      String?  @unique
+  asaasAccountId     String?  @unique
+  asaasApiKeyEncrypted String? @db.Text
+  asaasOnboardingOk  Boolean  @default(false)
   isActive           Boolean  @default(true)
   approvedAt         DateTime @default(now())
   createdAt          DateTime @default(now())
@@ -1336,6 +1351,7 @@ model SoftwarePlan {
   monthlyPrice  Decimal  @db.Decimal(10, 2)
   currency      String   @default("brl")
   stripePriceId String?  @unique
+  // O Asaas não tem catálogo de preços: o valor vai na criação da assinatura.
   features      Json
   isActive      Boolean  @default(true)
   isFeatured    Boolean  @default(false)
@@ -1378,6 +1394,7 @@ model ClientApplication {
   aiFeedback                  String?           @db.Text
   aiAnalysis                  Json?
   stripeSessionId             String?           @unique
+  asaasPaymentId              String?           @unique
   sourceLeadId                String?           @unique
   createdAt                   DateTime          @default(now())
   updatedAt                   DateTime          @updatedAt
@@ -1405,6 +1422,11 @@ model ClientSubscription {
   stripeCustomerId        String?            @unique
   stripeSubscriptionId    String?            @unique
   stripeCheckoutSessionId String?            @unique
+  asaasCustomerId         String?            @unique
+  asaasSubscriptionId     String?            @unique
+  // Cobrança de ativação em aberto. Guardada para reaproveitar o link em vez de
+  // gerar uma segunda cobrança a cada clique.
+  asaasPaymentId          String?            @unique
   referralCode            String?
   referralLockedAt        DateTime?
   discountEndsAt          DateTime?
@@ -1426,7 +1448,8 @@ model CommissionLedger {
   id               String           @id @default(cuid())
   resellerId       String
   subscriptionId   String
-  stripeInvoiceId  String           @unique
+  stripeInvoiceId  String?          @unique
+  asaasPaymentId   String?          @unique
   grossAmount      Decimal          @db.Decimal(10, 2)
   commissionRate   Decimal          @db.Decimal(5, 4)
   commissionAmount Decimal          @db.Decimal(10, 2)
@@ -1435,6 +1458,7 @@ model CommissionLedger {
   availableAt      DateTime?
   paidAt           DateTime?
   stripeTransferId String?
+  asaasTransferId  String?
   payoutBatchId    String?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
@@ -1455,6 +1479,7 @@ model PayoutBatch {
   amount           Decimal           @db.Decimal(10, 2)
   currency         String            @default("brl")
   stripeTransferId String?           @unique
+  asaasTransferId  String?           @unique
   failureReason    String?           @db.Text
   attempts         Int               @default(0)
   nextAttemptAt    DateTime?
@@ -1472,8 +1497,13 @@ model PayoutBatch {
   @@index([status, nextAttemptAt])
 }
 
+/// Fila de webhooks de cobrança. Nasceu para o Stripe e passou a atender também
+/// o Asaas: o retry, o alerta de esgotamento e a tela de saúde operacional são
+/// os mesmos, e duplicá-los daria dois lugares para corrigir o mesmo problema.
+/// O nome do modelo permanece por ora para não renomear a tabela em produção.
 model StripeEvent {
   id          String            @id
+  provider    BillingProvider   @default(STRIPE)
   type        String
   payload     Json
   status      StripeEventStatus @default(PENDENTE)
@@ -1940,6 +1970,9 @@ model UsageLedger {
   status              UsageLedgerStatus @default(PENDENTE)
   stripeInvoiceItemId String?
   stripeInvoiceId     String?
+  // No Asaas o consumo é somado ao valor da cobrança seguinte; guardamos qual
+  // cobrança absorveu cada lançamento para não faturar duas vezes.
+  asaasPaymentId      String?
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
 
