@@ -147,6 +147,36 @@ describe("login multiacesso do superadmin", () => {
       ).resolves.toBe(true);
     });
 
+    it("bloqueia a rota assumida quando o período da assinatura já terminou", async () => {
+      const originalEnforcement = process.env.BILLING_ENFORCEMENT;
+      process.env.BILLING_ENFORCEMENT = "true";
+      const prisma = {
+        user: { findUnique: jest.fn().mockResolvedValue(superAdmin) },
+        company: {
+          findUnique: jest.fn().mockResolvedValue({
+            isActive: true,
+            subscription: {
+              status: "ATIVA",
+              trialEndsAt: null,
+              currentPeriodEnd: new Date(Date.now() - 1_000),
+            },
+          }),
+        },
+      };
+      const guard = new AccountStatusGuard(reflector, prisma as never);
+
+      try {
+        await expect(
+          guard.canActivate(
+            buildContext({ sub: superAdmin.id, email: ALLOWED, role: Role.ADMIN, companyId: "empresa-1", assumed: true }),
+          ),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+      } finally {
+        if (originalEnforcement === undefined) delete process.env.BILLING_ENFORCEMENT;
+        else process.env.BILLING_ENFORCEMENT = originalEnforcement;
+      }
+    });
+
     it("derruba a sessão assumida se a conta deixar de ser superadmin", async () => {
       const prisma = {
         user: { findUnique: jest.fn().mockResolvedValue({ ...superAdmin, role: Role.ADMIN }) },

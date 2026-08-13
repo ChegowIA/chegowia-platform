@@ -347,7 +347,7 @@ describe("revalidação de vencimento ao abrir o painel", () => {
     process.env = { ...ORIGINAL_ENV };
   });
 
-  it("marca inadimplente ao consultar o status de uma fatura Asaas vencida", async () => {
+  it("marca inadimplente ao consultar o status depois do fim do período, mesmo antes do Asaas atualizar a fatura", async () => {
     const subscription = {
       id: "sub-1",
       companyId: "empresa-1",
@@ -366,12 +366,13 @@ describe("revalidação de vencimento ao abrir o painel", () => {
     const clientSubscription = {
       findUnique: jest.fn().mockResolvedValue(subscription),
       update: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     };
     const usage = { getBillingUsage: jest.fn().mockResolvedValue({ estimatedTotal: 0 }) };
     const asaas = {
       isConfigured: jest.fn().mockReturnValue(true),
       listSubscriptionPayments: jest.fn().mockResolvedValue([
-        { id: "pay_1", status: "PENDING", dueDate: "2026-08-01", value: 5 },
+        { id: "pay_1", status: "PENDING", dueDate: "2099-01-01", value: 5 },
       ]),
     };
     const service = buildBillingService({ prisma: { clientSubscription }, usage, asaas });
@@ -379,9 +380,13 @@ describe("revalidação de vencimento ao abrir o painel", () => {
 
     const result = await service.companyBillingStatus("empresa-1");
 
-    expect(clientSubscription.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+    expect(clientSubscription.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "sub-1", status: "ATIVA" }),
+        data: { status: "INADIMPLENTE" },
+      }),
     );
+    expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
     expect(result).toMatchObject({ status: "INADIMPLENTE", accessRestricted: true });
     expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 0);
   });
@@ -394,6 +399,7 @@ describe("revalidação de vencimento ao abrir o painel", () => {
     for (const method of [
       "processPendingStripeEvents",
       "processPendingPayouts",
+      "reconcileExpiredSubscriptionPeriods",
       "reconcilePendingAsaasPayments",
       "reconcileOverdueAsaasPayments",
       "reconcileOrphanUsage",
@@ -406,6 +412,7 @@ describe("revalidação de vencimento ao abrir o painel", () => {
 
     await internal.processBackgroundJobs();
 
+    expect(internal.reconcileExpiredSubscriptionPeriods).toHaveBeenCalledTimes(1);
     expect(internal.reconcilePendingAsaasPayments).toHaveBeenCalledTimes(1);
     expect(internal.reconcileOverdueAsaasPayments).toHaveBeenCalledTimes(1);
     expect(internal.syncVariableUsageToAsaas).toHaveBeenCalledTimes(1);

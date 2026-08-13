@@ -92,7 +92,7 @@ export class AccountStatusGuard implements CanActivate {
         where: { id: identity.companyId },
         select: {
           isActive: true,
-          subscription: { select: { status: true, trialEndsAt: true } },
+          subscription: { select: { status: true, trialEndsAt: true, currentPeriodEnd: true } },
         },
       });
       if (!company?.isActive) throw new ForbiddenException("Empresa inativa.");
@@ -102,7 +102,14 @@ export class AccountStatusGuard implements CanActivate {
         && Boolean(company.subscription.trialEndsAt && company.subscription.trialEndsAt.getTime() > Date.now());
       const trialExpired = company.subscription?.status === SubscriptionStatus.EM_TESTE
         && Boolean(company.subscription.trialEndsAt && company.subscription.trialEndsAt.getTime() <= Date.now());
-      const subscriptionAllowsAccess = company.subscription?.status === SubscriptionStatus.ATIVA || trialActive;
+      // `currentPeriodEnd` é o limite de acesso que temos registrado. Não é
+      // seguro manter a operação liberada só porque o webhook do provedor ainda
+      // não mudou o status: depois desse instante, a assinatura ATIVA já não
+      // representa um período pago vigente.
+      const paidPeriodExpired = company.subscription?.status === SubscriptionStatus.ATIVA
+        && Boolean(company.subscription.currentPeriodEnd && company.subscription.currentPeriodEnd.getTime() <= Date.now());
+      const subscriptionAllowsAccess = (company.subscription?.status === SubscriptionStatus.ATIVA && !paidPeriodExpired)
+        || trialActive;
       if (
         !allowInactiveSubscription
         && (trialExpired || (enforce && !subscriptionAllowsAccess))
@@ -110,6 +117,8 @@ export class AccountStatusGuard implements CanActivate {
         throw new ForbiddenException(
           trialExpired
             ? "Seu teste gratuito terminou. Pague a fatura de ativação para liberar todos os recursos."
+            : paidPeriodExpired
+            ? "O período da assinatura terminou. Regularize o pagamento para continuar."
             : company.subscription?.status === SubscriptionStatus.INADIMPLENTE
             ? "Assinatura inadimplente. Regularize o pagamento para continuar."
             : "A assinatura da empresa não está ativa.",

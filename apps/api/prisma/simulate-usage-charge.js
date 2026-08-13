@@ -280,9 +280,18 @@ async function main() {
 
   // 3. Consumo de IA pendente. Chave única por execução para poder repetir.
   const referencia = `${REFERENCIA}-${ontem.getTime()}`;
+  // O painel marca como "sem taxa ativa" qualquer lançamento que não carregue
+  // a tarifa que originou o valor. Como esta simulação já usa a métrica real de
+  // IA, vinculamos a taxa ativa quando ela existir — assim o alerta continua
+  // reservado para um problema de precificação de verdade.
+  const taxaDeIa = await prisma.usageRate.findFirst({
+    where: { metric: "IA_TOKENS_SAIDA", isActive: true },
+    select: { id: true },
+  });
   await prisma.usageLedger.create({
     data: {
       companyId,
+      usageRateId: taxaDeIa?.id ?? null,
       source: "IA",
       metric: "IA_TOKENS_SAIDA",
       quantity: 1000,
@@ -297,6 +306,9 @@ async function main() {
     },
   });
   console.log(`3. Lançado ${reais(valorIa)} de consumo de IA como pendente (ref. ${referencia}).`);
+  if (!taxaDeIa) {
+    console.warn("   Aviso: não há taxa ativa para IA_TOKENS_SAIDA; o painel sinalizará esse lançamento como sem precificação.");
+  }
 
   console.log("\nA rotina de fundo roda a cada 5 segundos. O que esperar:");
   if (cobranca) {

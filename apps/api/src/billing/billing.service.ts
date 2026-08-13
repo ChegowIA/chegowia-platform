@@ -806,11 +806,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         usage,
       };
     }
-    // O worker é o caminho contínuo, mas esta consulta é feita antes de montar
-    // o painel. Revalidar uma assinatura já fora do período pago impede que um
-    // worker reiniciado, uma configuração trocada ou uma janela de cache deixem
-    // a operação aberta até a próxima rodada em segundo plano.
-    if (await this.reconcileAsaasSubscriptionOverdue(subscription, { bypassInterval: true })) {
+    // `currentPeriodEnd` é a nossa fonte de verdade para o direito de acesso.
+    // Não aguardamos webhook, cache ou uma consulta externa para fechar um
+    // período que já terminou. A conciliação Asaas continua útil para registrar
+    // o motivo da pendência e cobrir registros antigos sem período consistente.
+    const periodExpired = await this.markSubscriptionOverdueIfPeriodExpired(subscription, now);
+    if (periodExpired || await this.reconcileAsaasSubscriptionOverdue(subscription, { bypassInterval: true })) {
       subscription = { ...subscription, status: SubscriptionStatus.INADIMPLENTE };
     }
     const trialActive = this.isTrialActive(subscription, now);
@@ -1764,6 +1765,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.processPendingStripeEvents();
       await this.processPendingPayouts();
+      // O fim do período é suficiente para interromper o acesso, mesmo se o
+      // provedor externo estiver fora, com webhook atrasado ou sem configuração
+      // temporariamente. Cada provedor ainda concilia pagamento em seguida.
+      await this.reconcileExpiredSubscriptionPeriods();
       // O provedor global decide novas contratações, não o provedor de cada
       // assinatura existente. Durante uma migração podemos ter assinaturas dos
       // dois lados; deixar de conciliar uma delas porque o padrão mudou abre
@@ -1980,6 +1985,69 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     });
 
     for (const assinatura of vencidas) await this.reconcileAsaasSubscriptionOverdue(assinatura);
+  }
+
+  /**
+   * O período registrado localmente é o limite de acesso. Atualizamos o status
+   * de modo condicional para não sobrescrever uma renovação que tenha chegado
+   * entre a leitura e esta escrita.
+   */
+  private async markSubscriptionOverdueIfPeriodExpired(
+    assinatura: {
+      id: string;
+      companyId: string;
+      status: SubscriptionStatus;
+      currentPeriodEnd?: Date | string | null;
+    },
+    now = new Date(),
+  ) {
+    const fimDoPeriodo = assinatura.currentPeriodEnd ? new Date(assinatura.currentPeriodEnd) : null;
+    if (
+      assinatura.status !== SubscriptionStatus.ATIVA
+      || !fimDoPeriodo
+      || Number.isNaN(fimDoPeriodo.getTime())
+      || fimDoPeriodo.getTime() >= now.getTime()
+    ) {
+      return false;
+    }
+    const result = await this.db().clientSubscription.updateMany({
+      where: {
+        id: assinatura.id,
+        status: SubscriptionStatus.ATIVA,
+        currentPeriodEnd: { lt: now },
+      },
+      data: { status: SubscriptionStatus.INADIMPLENTE },
+    }).catch((error: unknown) => {
+      this.logger.error(
+        `Não foi possível registrar o vencimento da empresa ${assinatura.companyId}.`,
+        this.stripeErrorForLog(error),
+      );
+      return { count: 0 };
+    });
+    if (result.count > 0) {
+      this.logger.warn(
+        `Conciliação: empresa ${assinatura.companyId} marcada INADIMPLENTE porque o período contratado terminou.`,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  /** Garante a mesma transição para empresas que não abrirem o painel. */
+  private async reconcileExpiredSubscriptionPeriods() {
+    const result = await this.db().clientSubscription.updateMany({
+      where: {
+        status: SubscriptionStatus.ATIVA,
+        currentPeriodEnd: { lt: new Date() },
+      },
+      data: { status: SubscriptionStatus.INADIMPLENTE },
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível encerrar períodos de assinatura vencidos.", this.stripeErrorForLog(error));
+      return { count: 0 };
+    });
+    if (result.count > 0) {
+      this.logger.warn(`Conciliação: ${result.count} assinatura(s) marcada(s) INADIMPLENTE por fim de período.`);
+    }
   }
 
   /**
