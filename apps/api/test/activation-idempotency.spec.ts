@@ -16,7 +16,9 @@ describe("chave de idempotência da ativação", () => {
     join(__dirname, "..", "src", "billing", "billing.service.ts"),
     "utf8",
   );
-  const trecho = fonte.slice(fonte.indexOf("async companyCheckout"));
+  // Busca exata: `async companyCheckout` também casaria com companyCheckoutAsaas,
+  // que é o caminho do outro provedor e não usa chave de idempotência.
+  const trecho = fonte.slice(fonte.indexOf("async companyCheckout(companyId: string) {"));
   const corpo = trecho.slice(0, trecho.indexOf("\n  async "));
 
   it("não deriva a chave de updatedAt", () => {

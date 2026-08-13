@@ -1,5 +1,5 @@
 import { PayoutBatchStatus, StripeEventStatus } from "@prisma/client";
-import { BillingService } from "../src/billing/billing.service";
+import { buildBillingService } from "./support/messaging-services";
 
 /**
  * Evento Stripe com 10 tentativas some da fila e lote de repasse FALHOU é
@@ -33,7 +33,7 @@ describe("alerta de dead-letter da fila de cobrança", () => {
       },
     };
     const mail = { sendOperationsAlert: jest.fn().mockResolvedValue(undefined) };
-    const service = new BillingService(prisma as never, {} as never, {} as never, {} as never, mail as never);
+    const service = buildBillingService({ prisma: prisma, mail: mail });
     service.onModuleDestroy();
     return { service, prisma, mail };
   }

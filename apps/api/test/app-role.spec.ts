@@ -1,5 +1,5 @@
 import { appRole, runsBackgroundJobs } from "../src/common/config/app-role";
-import { BillingService } from "../src/billing/billing.service";
+import { buildBillingService } from "./support/messaging-services";
 import { MaintenanceService } from "../src/common/maintenance/maintenance.service";
 
 /**
@@ -39,7 +39,7 @@ describe("papel do processo", () => {
       // não explodir para o teste medir o agendamento, não o processamento.
       const vazio = { findMany: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) };
       const prisma = { stripeEvent: vazio, payoutBatch: vazio, usageLedger: vazio };
-      return new BillingService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+      return buildBillingService({ prisma: prisma });
     }
 
     it("réplica de API não liga o worker de cobrança", () => {

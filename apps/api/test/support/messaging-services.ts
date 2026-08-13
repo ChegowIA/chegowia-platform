@@ -1,3 +1,4 @@
+import { BillingService } from "../../src/billing/billing.service";
 import { MessagingService } from "../../src/messaging/messaging.service";
 import { PlatformWhatsAppService } from "../../src/messaging/platform-whatsapp.service";
 
@@ -55,5 +56,23 @@ export function buildPlatformWhatsAppService(deps: {
     (deps.storage ?? {}) as never,
     (deps.aiProvider ?? {}) as never,
     (deps.realtime ?? {}) as never,
+  );
+}
+
+export function buildBillingService(deps: {
+  prisma?: Dep;
+  ai?: Dep;
+  auth?: Dep;
+  usage?: Dep;
+  mail?: Dep;
+  asaas?: Dep;
+} = {}) {
+  return new BillingService(
+    (deps.prisma ?? {}) as never,
+    (deps.ai ?? {}) as never,
+    (deps.auth ?? {}) as never,
+    (deps.usage ?? {}) as never,
+    (deps.mail ?? {}) as never,
+    (deps.asaas ?? {}) as never,
   );
 }

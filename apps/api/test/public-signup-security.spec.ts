@@ -1,4 +1,4 @@
-import { BillingService } from "../src/billing/billing.service";
+import { buildBillingService } from "./support/messaging-services";
 import { ResellersService } from "../src/resellers/resellers.service";
 
 describe("segurança das rotas anônimas de cadastro", () => {
@@ -15,7 +15,7 @@ describe("segurança das rotas anônimas de cadastro", () => {
           update: jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ id: existingPending?.id, ...data })),
         },
       };
-      const service = new BillingService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+      const service = buildBillingService({ prisma: prisma });
       service.onModuleDestroy();
       // evaluateClient depende da IA; isolamos para o teste focar no armazenamento
       (service as any).evaluateClient = jest.fn().mockImplementation((application: any) => application);
@@ -117,7 +117,7 @@ describe("exposição de dados em rotas públicas de consulta", () => {
         ]),
       },
     };
-    const service = new BillingService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+    const service = buildBillingService({ prisma: prisma });
     service.onModuleDestroy();
 
     const result: any = await service.publicPricing();
@@ -140,7 +140,7 @@ describe("exposição de dados em rotas públicas de consulta", () => {
         }),
       },
     };
-    const service = new BillingService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+    const service = buildBillingService({ prisma: prisma });
     service.onModuleDestroy();
 
     const result: any = await service.validateCode("maria1234");
@@ -153,7 +153,7 @@ describe("exposição de dados em rotas públicas de consulta", () => {
 
   it("código inválido não vaza nada além do veredito", async () => {
     const prisma = { resellerProfile: { findFirst: jest.fn().mockResolvedValue(null) } };
-    const service = new BillingService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+    const service = buildBillingService({ prisma: prisma });
     service.onModuleDestroy();
 
     const result: any = await service.validateCode("INEXISTENTE1");

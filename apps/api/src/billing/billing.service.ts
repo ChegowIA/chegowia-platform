@@ -29,6 +29,7 @@ import { AI_PROVIDER, AIProvider } from "../ai/providers/ai-provider.interface";
 import { ClientApplicationDto } from "./dto/client-application.dto";
 import { normalizeBrazilDocument } from "../common/validators/brazil-document.validator";
 import { AuthService } from "../auth/auth.service";
+import { AsaasProvider } from "./asaas.provider";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
@@ -50,6 +51,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     private readonly auth: AuthService,
     private readonly usage: UsageService,
     private readonly mail: MailService,
+    private readonly asaas: AsaasProvider,
   ) {}
 
   private db() { return this.prisma as any; }
@@ -672,6 +674,94 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * checkout. Não reutilizamos consumo nem período do teste: ele foi um custo
    * assumido pela ChegowIA e a assinatura paga começa limpa a partir daqui.
    */
+  /**
+   * Provedor que atende contratações novas. Assinatura já criada no Stripe
+   * continua nele até terminar — trocar o provedor de quem já paga exigiria
+   * refazer o meio de pagamento do cliente sem que ele tenha pedido.
+   */
+  private billingProvider(): "STRIPE" | "ASAAS" {
+    return process.env.BILLING_PROVIDER === "ASAAS" && this.asaas.isConfigured() ? "ASAAS" : "STRIPE";
+  }
+
+  /**
+   * Cliente do Asaas correspondente à empresa. O Asaas exige CPF/CNPJ para
+   * emitir cobrança, então uma empresa sem documento cadastrado não consegue
+   * ativar — e é melhor dizer isso do que falhar dentro da API deles.
+   */
+  private async ensureAsaasCustomer(subscription: any, admin: { email: string; name?: string }) {
+    if (subscription.asaasCustomerId) return subscription.asaasCustomerId;
+
+    const company = await this.db().company.findUnique({
+      where: { id: subscription.companyId },
+      select: { name: true, cnpj: true, phone: true },
+    });
+    const document = (company?.cnpj ?? "").replace(/\D/g, "");
+    if (!document) {
+      this.logger.error(
+        `Ativação bloqueada: a empresa ${subscription.companyId} não tem CNPJ, exigido pelo Asaas para emitir cobrança.`,
+      );
+      throw new BadRequestException(
+        "Falta o CNPJ da empresa para emitir a cobrança. Preencha em Configurações e tente de novo.",
+      );
+    }
+
+    const customer = await this.asaas.createCustomer({
+      name: company?.name ?? admin.name ?? "Cliente ChegowIA",
+      email: admin.email,
+      cpfCnpj: document,
+      phone: company?.phone ?? null,
+      externalReference: subscription.companyId,
+    });
+    await this.db().clientSubscription.update({
+      where: { id: subscription.id },
+      data: { asaasCustomerId: customer.id },
+    });
+    return customer.id;
+  }
+
+  /**
+   * Ativação pós-teste pelo Asaas: cria a assinatura mensal com vencimento hoje
+   * e devolve a fatura para pagamento. A cobrança em aberto é guardada para o
+   * empresário reabrir o mesmo link em vez de gerar uma segunda a cada clique.
+   */
+  private async companyCheckoutAsaas(subscription: any, admin: { email: string; name?: string }) {
+    if (subscription.asaasPaymentId) {
+      try {
+        const existing = await this.asaas.getPayment(subscription.asaasPaymentId);
+        if (existing.invoiceUrl && !["RECEIVED", "CONFIRMED"].includes(existing.status)) {
+          return { url: existing.invoiceUrl, reused: true };
+        }
+      } catch {
+        // Cobrança apagada no painel do Asaas: seguimos e criamos outra.
+      }
+    }
+
+    const customerId = await this.ensureAsaasCustomer(subscription, admin);
+    const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    const created = await this.asaas.createSubscription({
+      customer: customerId,
+      value: monthlyPrice,
+      nextDueDate: hoje,
+      description: `ChegowIA — ${subscription.plan.name}`,
+      externalReference: subscription.id,
+    });
+
+    // A assinatura já nasce com a primeira cobrança; é dela que sai o link.
+    const payments = await this.asaas.listSubscriptionPayments(created.id);
+    const first = payments[0];
+    if (!first?.invoiceUrl) {
+      throw new BadGatewayException("O Asaas não devolveu o link de pagamento da ativação.");
+    }
+
+    await this.db().clientSubscription.update({
+      where: { id: subscription.id },
+      data: { asaasSubscriptionId: created.id, asaasPaymentId: first.id },
+    });
+    return { url: first.invoiceUrl, reused: false };
+  }
+
   async companyCheckout(companyId: string) {
     const subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
@@ -685,6 +775,26 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!this.isTrialExpired(subscription)) {
       throw new BadRequestException("A ativação paga fica disponível quando os 7 dias de teste terminarem.");
     }
+    const admin = await this.db().user.findFirst({
+      where: { companyId, role: Role.ADMIN, isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { email: true, name: true },
+    });
+    if (!admin) {
+      // Quem lê esta tela é o empresário, que não tem acesso ao painel da
+      // plataforma nem como resolver isso sozinho.
+      this.logger.error(
+        `Ativação bloqueada: a empresa ${companyId} não tem usuário ADMIN ativo, e é o e-mail dele que identifica o cliente na cobrança.`,
+      );
+      throw new BadRequestException(
+        "Não conseguimos identificar o responsável pela conta desta empresa. Fale com o suporte da ChegowIA para liberar a ativação.",
+      );
+    }
+
+    if (this.billingProvider() === "ASAAS") {
+      return this.companyCheckoutAsaas(subscription, admin);
+    }
+
     if (!this.stripe) {
       throw new BadRequestException("A cobrança ainda está sendo configurada. Tente novamente em alguns instantes.");
     }
@@ -711,16 +821,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const admin = await this.db().user.findFirst({
-      where: { companyId, role: Role.ADMIN, isActive: true },
-      orderBy: { createdAt: "asc" },
-      select: { email: true },
-    });
-    // O e-mail deste usuário vira o cliente no Stripe e aparece na fatura, então
-    // não dá para cair no usuário logado: um superadmin gerando a fatura pelo
-    // contexto assumido colocaria o endereço da plataforma na cobrança do
-    // cliente. A mensagem diz o que fazer porque a causa não é óbvia para quem
-    // está vendo a tela como administrador.
+    // O admin já foi resolvido acima: o e-mail dele vira o cliente na cobrança,
+    // e não pode cair no usuário logado — um superadmin gerando a fatura pelo
+    // contexto assumido colocaria o endereço da plataforma na conta do cliente.
     if (!admin) {
       // Quem lê esta tela é o empresário, que não tem acesso ao painel da
       // plataforma nem como resolver isso sozinho. O detalhe acionável vai para

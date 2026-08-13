@@ -1,5 +1,5 @@
 import { ApplicationStatus, SubscriptionStatus } from "@prisma/client";
-import { BillingService } from "../src/billing/billing.service";
+import { buildBillingService } from "./support/messaging-services";
 
 describe("teste gratuito de empresas", () => {
   it("cria empresa e assinatura EM_TESTE por sete dias sem checkout antecipado", async () => {
@@ -42,7 +42,7 @@ describe("teste gratuito de empresas", () => {
       $transaction: jest.fn((work: (tx: typeof transaction) => unknown) => work(transaction)),
     };
     const auth = { sendVerificationForUser: jest.fn().mockResolvedValue(undefined) };
-    const service = new BillingService(prisma as never, {} as never, auth as never, {} as never, {} as never);
+    const service = buildBillingService({ prisma: prisma, auth: auth });
     service.onModuleDestroy();
 
     const result = await service.startTrial("app-1");
@@ -77,7 +77,7 @@ describe("teste gratuito de empresas", () => {
         }),
       },
     };
-    const service = new BillingService(prisma as never, {} as never, {} as never, usage as never, {} as never);
+    const service = buildBillingService({ prisma: prisma, usage: usage });
     service.onModuleDestroy();
 
     const status = await service.companyBillingStatus("empresa-1");
@@ -97,13 +97,7 @@ describe("teste gratuito de empresas", () => {
         ]),
       },
     };
-    const service = new BillingService(
-      prisma as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
+    const service = buildBillingService({ prisma: prisma });
     service.onModuleDestroy();
 
     await expect(service.listPlans()).resolves.toEqual([

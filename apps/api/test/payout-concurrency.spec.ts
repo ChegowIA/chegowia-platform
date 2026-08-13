@@ -1,5 +1,5 @@
 import { PayoutBatchStatus } from "@prisma/client";
-import { BillingService } from "../src/billing/billing.service";
+import { buildBillingService } from "./support/messaging-services";
 
 /**
  * Simula o comportamento atômico do `updateMany` do banco: só a primeira
@@ -33,7 +33,7 @@ function prismaWithBatch(batch: any, options?: { claimable?: boolean }) {
 }
 
 function buildService(prisma: any) {
-  const service = new BillingService(prisma as never, {} as never, {} as never, {} as never, {} as never);
+  const service = buildBillingService({ prisma: prisma });
   // impede que o worker de background dispare durante o teste
   service.onModuleDestroy();
   return service;

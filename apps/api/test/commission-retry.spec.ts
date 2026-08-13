@@ -1,5 +1,5 @@
 import { CommissionStatus } from "@prisma/client";
-import { BillingService } from "../src/billing/billing.service";
+import { buildBillingService } from "./support/messaging-services";
 
 /**
  * A comissão do revendedor é lançada *depois* do commit da transação que cria a
@@ -35,7 +35,7 @@ describe("comissão do revendedor no reprocessamento do checkout", () => {
       commissionLedger,
     };
     const auth = { sendVerificationForUser: jest.fn().mockResolvedValue(undefined) };
-    const service = new BillingService(prisma as never, {} as never, auth as never, {} as never, {} as never);
+    const service = buildBillingService({ prisma: prisma, auth: auth });
     service.onModuleDestroy();
     (service as any).stripe = {
       subscriptions: { retrieve: jest.fn().mockResolvedValue({ latest_invoice: invoice }) },
