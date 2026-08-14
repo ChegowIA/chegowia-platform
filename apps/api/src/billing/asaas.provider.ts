@@ -37,6 +37,14 @@ export type AsaasTransfer = {
   value: number;
 };
 
+/** Recebível antecipado; para a conciliação só interessa o crédito confirmado. */
+export type AsaasAnticipation = {
+  id: string;
+  payment?: string | null;
+  status: string;
+  netValue?: number | null;
+};
+
 export type AsaasSubaccount = {
   id: string;
   walletId: string;
@@ -185,6 +193,26 @@ export class AsaasProvider {
    */
   async findPayment(paymentId: string): Promise<AsaasPayment | null> {
     return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "GET", notFoundAsNull: true });
+  }
+
+  /**
+   * Contingência para o webhook de antecipação: se o Asaas já creditou o
+   * recebível, a comissão não deve ficar aguardando o prazo normal da cobrança.
+   * O filtro por cobrança deixa a consulta limitada a um único crédito.
+   */
+  async findCreditedAnticipationForPayment(paymentId: string): Promise<AsaasAnticipation | null> {
+    const result = await this.request(
+      `/anticipations?payment=${encodeURIComponent(paymentId)}&status=CREDITED&limit=1`,
+      { method: "GET" },
+    );
+    const found = Array.isArray(result?.data) ? result.data[0] : null;
+    if (!found?.id || String(found.status ?? "").toUpperCase() !== "CREDITED") return null;
+    return {
+      id: String(found.id),
+      payment: found.payment ? String(found.payment) : null,
+      status: "CREDITED",
+      netValue: found.netValue == null ? null : Number(found.netValue),
+    };
   }
 
   async updatePayment(paymentId: string, params: Record<string, unknown>): Promise<AsaasPayment> {

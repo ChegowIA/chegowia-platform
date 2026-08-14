@@ -232,6 +232,25 @@ describe("webhook do Asaas", () => {
     expect(commissionLedger.upsert).not.toHaveBeenCalled();
   });
 
+  it("não reabre comissão por uma antecipação antiga de cobrança já estornada", async () => {
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      findPayment: jest.fn().mockResolvedValue({
+        ...cobrancaPaga.payment,
+        status: "REFUNDED",
+        billingType: "CREDIT_CARD",
+      }),
+    };
+    const { service, commissionLedger } = build({ asaas });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      event: "RECEIVABLE_ANTICIPATION_CREDITED",
+      anticipation: { payment: "pay_1", status: "CREDITED" },
+    });
+
+    expect(commissionLedger.upsert).not.toHaveBeenCalled();
+  });
+
   it("só baixa o saque quando chega TRANSFER_DONE", async () => {
     const { service, payoutBatch, commissionLedger } = build();
     payoutBatch.findUnique.mockResolvedValue({ id: "lote-1", status: "PROCESSANDO" });
@@ -272,6 +291,34 @@ describe("webhook do Asaas", () => {
 
     await (service as never as Record<string, any>).reconcilePendingAsaasCommissions();
 
+    expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "DISPONIVEL" }) }),
+    );
+  });
+
+  it("recupera uma antecipação creditada caso o webhook dela se perca", async () => {
+    const entry = { asaasPaymentId: "pay_1", subscription: assinatura };
+    const { service, commissionLedger, asaas } = build({
+      commissionLedger: {
+        findMany: jest.fn().mockResolvedValue([{ asaasPaymentId: "pay_1" }]),
+        findUnique: jest.fn().mockResolvedValue(entry),
+      },
+      asaas: {
+        isConfigured: jest.fn().mockReturnValue(true),
+        findPayment: jest.fn().mockResolvedValue({
+          id: "pay_1",
+          status: "CONFIRMED",
+          billingType: "CREDIT_CARD",
+          value: 159.9,
+          subscription: "sub_asaas_1",
+        }),
+        findCreditedAnticipationForPayment: jest.fn().mockResolvedValue({ id: "ant_1", status: "CREDITED" }),
+      },
+    });
+
+    await (service as never as Record<string, any>).reconcilePendingAsaasCommissions();
+
+    expect(asaas.findCreditedAnticipationForPayment).toHaveBeenCalledWith("pay_1");
     expect(commissionLedger.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "DISPONIVEL" }) }),
     );

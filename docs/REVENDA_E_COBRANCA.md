@@ -91,7 +91,9 @@ um marcar assinatura como paga.
   libera a comissão elegível sem esperar o ciclo normal de recebimento. Segundo
   a documentação do Asaas, o valor antecipado é creditado em até dois dias úteis;
   isso vale apenas para recebíveis de cartão elegíveis, não para Pix, boleto ou
-  uma promessa genérica de liquidação.
+  uma promessa genérica de liquidação. Se esse webhook se perder, a rotina de
+  conciliação consulta periodicamente a antecipação creditada da cobrança; a
+  entrega do webhook continua sendo o caminho mais rápido.
 - **Consumo variável**: **nunca vira cobrança separada.** É somado à cobrança da
   mensalidade, uma fatura só com o valor total. Sem mensalidade em aberto onde
   somar, o consumo continua `PENDENTE` e entra na cobrança seguinte — acumular é
@@ -178,6 +180,7 @@ stripe listen \
 - https://docs.asaas.com/reference/criar-nova-assinatura
 - https://docs.asaas.com/docs/webhook-para-cobrancas
 - https://docs.asaas.com/docs/webhook-para-antecipacoes
+- https://docs.asaas.com/reference/listar-antecipacoes
 - https://docs.asaas.com/changelog/endpoint-para-configurar-antecipação-automática-de-cobranças-de-cartão-de-crédito
 - https://docs.asaas.com/reference/criar-subconta
 - https://docs.asaas.com/reference/transferir-para-conta-asaas

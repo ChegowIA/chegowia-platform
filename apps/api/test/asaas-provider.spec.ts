@@ -91,4 +91,22 @@ describe("cliente do Asaas", () => {
     fetchMock.mockResolvedValue({ ok: false, status: 500, text: async () => "" });
     await expect(provider.findPayment("pay_1")).rejects.toThrow();
   });
+
+  it("consulta apenas uma antecipação já creditada para a cobrança", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        data: [{ id: "ant_1", payment: "pay_1", status: "CREDITED", netValue: 142.37 }],
+      }),
+    });
+
+    await expect(provider.findCreditedAnticipationForPayment("pay_1")).resolves.toEqual({
+      id: "ant_1",
+      payment: "pay_1",
+      status: "CREDITED",
+      netValue: 142.37,
+    });
+    expect(chamada().url).toContain("/anticipations?payment=pay_1&status=CREDITED&limit=1");
+  });
 });

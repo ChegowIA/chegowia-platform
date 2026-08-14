@@ -52,6 +52,8 @@ const ASAAS_OVERDUE_RECHECK_INTERVAL_MS = 60_000;
 const ASAAS_USAGE_RECHECK_INTERVAL_MS = 60_000;
 /** Uma transferência interna que não voltou como concluída é conferida logo. */
 const ASAAS_PAYOUT_RECHECK_INTERVAL_MS = 60_000;
+/** Consulta de contingência, caso o webhook de antecipação não tenha chegado. */
+const ASAAS_ANTICIPATION_RECHECK_INTERVAL_MS = 15 * 60_000;
 /** Regra comercial única: 30% da mensalidade do plano pertence ao revendedor. */
 const RESELLER_COMMISSION_RATE = 0.30;
 /** Prazo máximo comunicado ao revendedor depois que ele pede o repasse. */
@@ -2326,9 +2328,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Se o callback PAYMENT_RECEIVED se perder, uma previsão de comissão não
-   * pode ficar eternamente em compensação. Consultamos a cobrança de forma
-   * limitada e a liberamos somente quando a API do Asaas confirma o crédito.
+   * Se o callback PAYMENT_RECEIVED ou o de antecipação se perder, uma previsão
+   * de comissão não pode ficar eternamente em compensação. Consultamos a
+   * cobrança de forma limitada e, para cartão, também a antecipação creditada.
    */
   private async reconcilePendingAsaasCommissions() {
     const ledger = this.db().commissionLedger;
@@ -2352,14 +2354,27 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       if (!paymentId || !this.deveConferir(`comissao:${paymentId}`, ASAAS_USAGE_RECHECK_INTERVAL_MS)) continue;
       try {
         const payment = await this.asaas.findPayment(paymentId);
-        if (!payment || !this.asaasPaymentHasSettledFunds(payment)) continue;
+        if (!payment) continue;
+        const receivedNormally = this.asaasPaymentHasSettledFunds(payment);
+        // O crédito antecipado de cartão mantém a cobrança como CONFIRMED até
+        // a liquidação normal. Não basta existir uma antecipação histórica:
+        // status de estorno/contestação jamais pode reabrir uma comissão.
+        const anticipation = !receivedNormally
+          && String(payment.status ?? "").toUpperCase() === "CONFIRMED"
+          && String(payment.billingType ?? "").toUpperCase() === "CREDIT_CARD"
+          && this.deveConferir(`antecipacao:${paymentId}`, ASAAS_ANTICIPATION_RECHECK_INTERVAL_MS)
+          ? await this.asaas.findCreditedAnticipationForPayment?.(paymentId)
+          : null;
+        if (!receivedNormally && !anticipation) continue;
         const entry = await ledger.findUnique({
           where: { asaasPaymentId: paymentId },
           include: { subscription: { include: { reseller: true, plan: true } } },
         });
         if (!entry?.subscription) continue;
         await this.recordAsaasCommission(entry.subscription, payment, { fundsReceived: true });
-        this.logger.warn(`Conciliação: comissão da cobrança ${paymentId} foi liberada sem webhook PAYMENT_RECEIVED.`);
+        this.logger.warn(
+          `Conciliação: comissão da cobrança ${paymentId} foi liberada sem webhook ${receivedNormally ? "PAYMENT_RECEIVED" : "RECEIVABLE_ANTICIPATION_CREDITED"}.`,
+        );
       } catch (error) {
         this.logger.error(
           `Não foi possível conciliar a comissão da cobrança ${paymentId}.`,
@@ -3164,6 +3179,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const cobranca = await this.asaas.findPayment(paymentId);
     if (!cobranca) {
       this.logger.warn(`Antecipação creditada para cobrança ${paymentId} não encontrada no Asaas.`);
+      return;
+    }
+    if (!ASAAS_PAID_STATUSES.includes(String(cobranca.status ?? ""))) {
+      this.logger.warn(
+        `Antecipação creditada para cobrança ${paymentId} ignorada: o pagamento está em ${String(cobranca.status ?? "desconhecido")}.`,
+      );
       return;
     }
     await this.activateFromAsaasPayment(cobranca, { fundsReceived: true });
