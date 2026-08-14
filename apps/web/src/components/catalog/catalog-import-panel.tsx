@@ -163,22 +163,25 @@ export function CatalogImportPanel({ onComplete }: { onComplete: () => void }) {
             <Step number="3" title="Você confirma" text="Nada entra no cardápio sem a sua revisão." />
           </div>
 
-          <div className="grid gap-4 rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950/25 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-            <div>
-              <FileUpload
-                key={file ? `${file.name}-${file.lastModified}` : "empty-import-file"}
-                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                file={file}
-                onFile={(nextFile) => {
-                  setFile(nextFile);
-                  setError(null);
-                }}
-                hint="Planilhas XLSX ou XLS · até 5 MB · até 250 produtos por importação"
-              />
+          <div className="rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-950/25">
+            <FileUpload
+              key={file ? `${file.name}-${file.lastModified}` : "empty-import-file"}
+              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              file={file}
+              onFile={(nextFile) => {
+                setFile(nextFile);
+                setError(null);
+              }}
+              hint="Planilhas XLSX ou XLS · até 5 MB · até 250 produtos por importação"
+            />
+            <div className="mt-4 flex flex-col gap-3 border-t border-slate-200/80 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
+              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                Com o arquivo selecionado, gere a prévia para conferir cada produto antes de publicar.
+              </p>
+              <Button className="w-full shrink-0 sm:w-auto" disabled={!file} isLoading={createPreview.isPending} onClick={() => createPreview.mutate()}>
+                Interpretar e revisar
+              </Button>
             </div>
-            <Button className="w-full lg:w-auto" disabled={!file} isLoading={createPreview.isPending} onClick={() => createPreview.mutate()}>
-              Interpretar e revisar
-            </Button>
           </div>
 
           <div className="grid gap-3 text-xs leading-5 text-slate-500 dark:text-slate-400 md:grid-cols-2">

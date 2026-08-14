@@ -984,6 +984,9 @@ model Product {
   name        String
   description String? @db.Text
   price       Decimal @db.Decimal(10, 2)
+  // Custo de compra/produção. É opcional para não transformar lucro em uma
+  // estimativa quando a empresa ainda não cadastrou o custo do item.
+  costPrice   Decimal? @db.Decimal(10, 2)
   imageUrl    String?
   isActive    Boolean @default(true)
   isFeatured  Boolean @default(false)

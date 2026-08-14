@@ -133,7 +133,7 @@ describe("CatalogImportService", () => {
 
     const result = await service.apply("empresa-1", "admin-1", "import-1", {
       duplicateStrategy: "SKIP" as never,
-      items: [{ rowKey: "row_1", include: true, category: "Lanches", name: "X-Burger", price: 24.9, variations: [{ name: "Duplo", priceDelta: 8 }], addons: [{ name: "Bacon", price: 4 }] }],
+      items: [{ rowKey: "row_1", include: true, category: "Lanches", name: "X-Burger", price: 24.9, costPrice: 10.5, variations: [{ name: "Duplo", priceDelta: 8 }], addons: [{ name: "Bacon", price: 4 }] }],
     });
 
     expect(prisma.$transaction).toHaveBeenCalled();
@@ -145,6 +145,7 @@ describe("CatalogImportService", () => {
         companyId: "empresa-1",
         categoryId: "category-1",
         name: "X-Burger",
+        costPrice: 10.5,
         variations: { create: [{ name: "Duplo", priceDelta: 8 }] },
         addons: { create: [{ name: "Bacon", price: 4 }] },
       }),
