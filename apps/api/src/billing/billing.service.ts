@@ -32,7 +32,7 @@ import { AI_PROVIDER, AIProvider } from "../ai/providers/ai-provider.interface";
 import { ClientApplicationDto } from "./dto/client-application.dto";
 import { normalizeBrazilDocument } from "../common/validators/brazil-document.validator";
 import { AuthService } from "../auth/auth.service";
-import { AsaasProvider, AsaasPayment } from "./asaas.provider";
+import { AsaasProvider, AsaasPayment, AsaasTransfer } from "./asaas.provider";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
@@ -50,6 +50,18 @@ const FREE_TRIAL_DAYS = 7;
 const ASAAS_OVERDUE_RECHECK_INTERVAL_MS = 60_000;
 /** A baixa do consumo é rechecada rapidamente quando não houver webhook. */
 const ASAAS_USAGE_RECHECK_INTERVAL_MS = 60_000;
+/** Uma transferência interna que não voltou como concluída é conferida logo. */
+const ASAAS_PAYOUT_RECHECK_INTERVAL_MS = 60_000;
+/** Regra comercial única: 30% da mensalidade do plano pertence ao revendedor. */
+const RESELLER_COMMISSION_RATE = 0.30;
+/**
+ * `CONFIRMED` autoriza a assinatura, mas não é saldo disponível. Para saque do
+ * revendedor só importam os estados em que o Asaas efetivamente recebeu o
+ * dinheiro na conta raiz.
+ */
+const ASAAS_SETTLED_PAYMENT_STATUSES = ["RECEIVED", "RECEIVED_IN_CASH"];
+const COMMISSION_HOLD_AWAITING_SETTLEMENT = "AGUARDANDO_COMPENSACAO_ASAAS";
+const COMMISSION_HOLD_CHARGEBACK = "CONTESTACAO_DE_PAGAMENTO";
 /**
  * Situações em que o dinheiro já é nosso. `CONFIRMED` é pagamento reconhecido com
  * saldo ainda a liberar e `RECEIVED` é saldo disponível — para liberar acesso os
@@ -139,6 +151,63 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return subscription.monthlyPriceSnapshot === null || subscription.monthlyPriceSnapshot === undefined
       ? Number(subscription.plan.monthlyPrice)
       : Number(subscription.monthlyPriceSnapshot);
+  }
+
+  /**
+   * Não usamos uma taxa configurável na emissão: o programa comercial vigente
+   * promete 30%, e a taxa gravada no razão é o snapshot auditável dessa regra.
+   * Se houver dado legado divergente, preservamos o registro antigo, mas nunca
+   * criamos uma nova comissão diferente do contrato anunciado ao revendedor.
+   */
+  private resellerCommissionRate(reseller?: { commissionRate?: unknown } | null) {
+    const configured = Number(reseller?.commissionRate);
+    if (Number.isFinite(configured) && Math.abs(configured - RESELLER_COMMISSION_RATE) > 0.0001) {
+      this.logger.warn(
+        `Taxa de comissão divergente (${configured}) encontrada; aplicando a regra comercial de ${RESELLER_COMMISSION_RATE * 100}%.`,
+      );
+    }
+    return RESELLER_COMMISSION_RATE;
+  }
+
+  /** A comissão incide na mensalidade, nunca nos créditos de IA/WhatsApp. */
+  private commissionableMonthlyAmount(subscription: any, paymentValue: unknown) {
+    const received = Math.max(0, Number(paymentValue ?? 0));
+    const monthly = subscription?.plan
+      ? Math.max(0, this.effectiveSubscriptionMonthlyPrice(subscription))
+      : received;
+    // Uma cobrança pode conter consumo variável além do plano. Também nunca
+    // prometemos comissão maior que o dinheiro efetivamente pago pelo cliente.
+    return Math.min(received, monthly);
+  }
+
+  /** Cadastros históricos sem teste continuam conciliáveis; os novos exigem os 7 dias completos. */
+  private hasCompletedCommissionTrial(subscription: { trialEndsAt?: Date | string | null }) {
+    if (!subscription.trialEndsAt) return true;
+    const trialEnd = new Date(subscription.trialEndsAt);
+    return !Number.isNaN(trialEnd.getTime()) && trialEnd.getTime() <= Date.now();
+  }
+
+  private asaasPostReceiptHoldDays() {
+    const value = Number(process.env.ASAAS_COMMISSION_POST_RECEIPT_HOLD_DAYS ?? 0);
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  }
+
+  private asaasPaymentHasSettledFunds(payment: { status?: unknown } | null | undefined) {
+    return ASAAS_SETTLED_PAYMENT_STATUSES.includes(String(payment?.status ?? ""));
+  }
+
+  /**
+   * O mesmo cliente pode ter outras cobranças no Asaas. Só a cobrança vinculada
+   * à assinatura recorrente — ou a ativação que ainda está em aberto — gera
+   * comissão. Isso impede pagar 30% sobre uso avulso ou depósito estranho.
+   */
+  private isAsaasSubscriptionMonthlyPayment(subscription: any, payment: any) {
+    const paymentId = String(payment?.id ?? "");
+    const remoteSubscription = payment?.subscription ? String(payment.subscription) : null;
+    return Boolean(
+      (remoteSubscription && subscription?.asaasSubscriptionId === remoteSubscription)
+      || (paymentId && subscription?.asaasPaymentId === paymentId),
+    );
   }
 
   /**
@@ -597,10 +666,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!viaAsaas && !this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
 
     /**
-     * Claim atômico antes de qualquer chamada à Stripe — mesmo padrão de
-     * processStripeEvent. Sem isso, dois workers leem o mesmo `attempts`,
-     * ambos incrementam e ambos seguem para a transferência: hoje só o
-     * idempotencyKey da Stripe segura a duplicata, e ele expira em 24h.
+     * Claim atômico antes de qualquer chamada ao provedor. Sem isso, dois
+     * workers poderiam transferir o mesmo lote; a referência externa do Asaas
+     * complementa a proteção quando a resposta se perde depois da criação.
      */
     const claimed = await this.db().payoutBatch.updateMany({
       where: {
@@ -663,9 +731,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     const attempt = batch.attempts;
     try {
-      const transferId = viaAsaas
-        ? await this.transferPayoutViaAsaas(batch)
-        : (await this.stripe!.transfers.create(
+      const asaasTransfer = viaAsaas ? await this.transferPayoutViaAsaas(batch) : null;
+      const transferId = asaasTransfer?.id
+        ?? (await this.stripe!.transfers.create(
           {
             amount: Math.round(Number(batch.amount) * 100),
             currency: batch.currency,
@@ -678,30 +746,32 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           },
           { idempotencyKey: `reseller-payout-batch-${batch.id}` },
         )).id;
-      const identificacao = viaAsaas ? { asaasTransferId: transferId } : { stripeTransferId: transferId };
-      await this.db().$transaction([
-        this.db().payoutBatch.update({
+
+      // Em transferências entre carteiras o retorno costuma ser imediato, mas
+      // não assumimos isso: `PENDING` não é dinheiro entregue. O lote continua
+      // bloqueado até a confirmação para que o revendedor não receba duas vezes.
+      if (asaasTransfer && !this.isAsaasTransferDone(asaasTransfer)) {
+        if (this.isAsaasTransferTerminalFailure(asaasTransfer)) {
+          throw new BadGatewayException("O Asaas recusou ou cancelou o repasse antes da conclusão.");
+        }
+        await this.db().payoutBatch.update({
           where: { id: batch.id },
           data: {
-            status: PayoutBatchStatus.PAGO,
-            ...identificacao,
-            failureReason: null,
-            nextAttemptAt: null,
-            completedAt: new Date(),
+            asaasTransferId: transferId,
+            failureReason: "Transferência criada e aguardando confirmação do Asaas.",
+            nextAttemptAt: new Date(Date.now() + ASAAS_PAYOUT_RECHECK_INTERVAL_MS),
           },
-        }),
-        this.db().commissionLedger.updateMany({
-          where: {
-            payoutBatchId: batch.id,
-            status: CommissionStatus.PROCESSANDO,
-          },
-          data: {
-            status: CommissionStatus.PAGA,
-            paidAt: new Date(),
-            ...identificacao,
-          },
-        }),
-      ]);
+        });
+        return {
+          transferId,
+          amount: Number(batch.amount),
+          count: batch.commissions.length,
+          processing: true,
+        };
+      }
+
+      const identificacao = viaAsaas ? { asaasTransferId: transferId } : { stripeTransferId: transferId };
+      await this.completePayoutBatch(batch.id, identificacao);
       return {
         transferId,
         amount: Number(batch.amount),
@@ -711,6 +781,27 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       const safeReason = viaAsaas
         ? this.asaasErrorForUser(error, "Falha ao enviar o repasse.")
         : this.stripeErrorForUser(error, "Falha ao enviar o repasse.");
+      // A API do Asaas não tem idempotency key. Em uma queda entre a criação e
+      // a resposta, liberar as comissões agora permitiria um segundo lote com
+      // outra referência e pagamento duplicado. Mantemos o lote travado e
+      // conferimos a referência original antes de qualquer nova tentativa.
+      if (viaAsaas && attempt < MAX_PAYOUT_ATTEMPTS) {
+        const retryDelayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(attempt - 1, 6));
+        await this.db().payoutBatch.update({
+          where: { id: batch.id },
+          data: {
+            failureReason: safeReason,
+            nextAttemptAt: new Date(Date.now() + retryDelayMs),
+          },
+        });
+        this.logger.warn(
+          `Repasse Asaas ${batch.id} sem confirmação; conferiremos a mesma referência em ${Math.round(retryDelayMs / 1000)}s (tentativa ${attempt}).`,
+        );
+        if (background) return null;
+        throw new BadGatewayException(
+          "O Asaas ainda não confirmou o repasse. Estamos conferindo a transferência com segurança; não faça nova solicitação.",
+        );
+      }
       if (this.isRetryableStripeError(error) && attempt < MAX_PAYOUT_ATTEMPTS) {
         const retryDelayMs = Math.min(5 * 60_000, 5_000 * 2 ** Math.min(attempt - 1, 6));
         await this.db().payoutBatch.update({
@@ -748,17 +839,53 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    */
   private async transferPayoutViaAsaas(batch: { id: string; amount: unknown; reseller: { asaasWalletId: string | null } }) {
     const referencia = `payout-${batch.id}`;
-    const existente = await this.asaas.findTransferByReference(referencia).catch(() => null);
-    if (existente && existente.status !== "FAILED" && existente.status !== "CANCELLED") {
+    // Se a consulta falhar, não é seguro concluir que a transferência não
+    // existe: ela pode ter sido criada pouco antes de uma queda de rede. O erro
+    // sobe para o lote, que fica em processamento e consulta a mesma referência
+    // mais tarde — criar outra agora poderia pagar o revendedor em duplicidade.
+    const existente = await this.asaas.findTransferByReference(referencia);
+    if (existente) {
       this.logger.warn(`Repasse ${batch.id} já tinha transferência ${existente.id} no Asaas; nenhuma nova foi criada.`);
-      return existente.id;
+      return existente;
     }
     const transferencia = await this.asaas.transferToWallet({
       value: Number(batch.amount),
       walletId: batch.reseller.asaasWalletId!,
       externalReference: referencia,
     });
-    return transferencia.id;
+    return transferencia;
+  }
+
+  private isAsaasTransferDone(transfer: { status?: string | null }) {
+    return String(transfer.status ?? "").toUpperCase() === "DONE";
+  }
+
+  private isAsaasTransferTerminalFailure(transfer: { status?: string | null }) {
+    return ["FAILED", "CANCELLED", "REFUSED", "BLOCKED"].includes(String(transfer.status ?? "").toUpperCase());
+  }
+
+  /** Marca o dinheiro como pago somente depois da confirmação do provedor. */
+  private async completePayoutBatch(
+    batchId: string,
+    identification: { stripeTransferId?: string; asaasTransferId?: string },
+  ) {
+    await this.db().$transaction(async (tx: any) => {
+      const claimed = await tx.payoutBatch.updateMany({
+        where: { id: batchId, status: PayoutBatchStatus.PROCESSANDO },
+        data: {
+          status: PayoutBatchStatus.PAGO,
+          ...identification,
+          failureReason: null,
+          nextAttemptAt: null,
+          completedAt: new Date(),
+        },
+      });
+      if (claimed.count !== 1) return;
+      await tx.commissionLedger.updateMany({
+        where: { payoutBatchId: batchId, status: CommissionStatus.PROCESSANDO },
+        data: { status: CommissionStatus.PAGA, paidAt: new Date(), ...identification },
+      });
+    });
   }
 
   /** Mensagem do Asaas já vem pronta para o usuário; só evitamos vazar texto longo. */
@@ -768,27 +895,24 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async failPayoutBatch(batchId: string, reason: string) {
-    await this.db().$transaction([
-      this.db().payoutBatch.update({
-        where: { id: batchId },
+    await this.db().$transaction(async (tx: any) => {
+      // Nunca troca um repasse já confirmado para FALHOU por causa de um evento
+      // atrasado do Asaas ou de uma tentativa concorrente.
+      const claimed = await tx.payoutBatch.updateMany({
+        where: { id: batchId, status: PayoutBatchStatus.PROCESSANDO },
         data: {
           status: PayoutBatchStatus.FALHOU,
           failureReason: reason,
           nextAttemptAt: null,
           completedAt: new Date(),
         },
-      }),
-      this.db().commissionLedger.updateMany({
-        where: {
-          payoutBatchId: batchId,
-          status: CommissionStatus.PROCESSANDO,
-        },
-        data: {
-          status: CommissionStatus.DISPONIVEL,
-          payoutBatchId: null,
-        },
-      }),
-    ]);
+      });
+      if (claimed.count !== 1) return;
+      await tx.commissionLedger.updateMany({
+        where: { payoutBatchId: batchId, status: CommissionStatus.PROCESSANDO },
+        data: { status: CommissionStatus.DISPONIVEL, payoutBatchId: null },
+      });
+    });
   }
 
   async companyBillingStatus(companyId: string) {
@@ -1171,9 +1295,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           await this.activateFromAsaasPayment({
             id: existing.id,
             value: existing.value,
+            status: existing.status,
             subscription: existing.subscription ?? subscription.asaasSubscriptionId,
             customer: existing.customer,
-          });
+          }, { fundsReceived: this.asaasPaymentHasSettledFunds(existing) });
           return { activated: true, reused: true };
         }
         if (existing.invoiceUrl) {
@@ -1770,12 +1895,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   private async recordCommission(invoice: Stripe.Invoice) {
     const stripeSubscriptionId = this.subscriptionIdFromInvoice(invoice);
     if (!stripeSubscriptionId) return;
-    const subscription = await this.db().clientSubscription.findUnique({ where: { stripeSubscriptionId }, include: { reseller: true } });
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { stripeSubscriptionId },
+      include: { reseller: true, plan: true },
+    });
     if (!subscription) return;
     await this.db().clientSubscription.update({ where: { id: subscription.id }, data: { status: SubscriptionStatus.ATIVA } });
     if (!subscription.resellerId || !subscription.reseller?.isActive) return;
-    const gross = Number(invoice.amount_paid ?? 0) / 100;
-    const rate = Number(subscription.reseller.commissionRate);
+    if (!this.hasCompletedCommissionTrial(subscription)) return;
+    const gross = this.commissionableMonthlyAmount(subscription, Number(invoice.amount_paid ?? 0) / 100);
+    if (!gross) return;
+    const rate = this.resellerCommissionRate(subscription.reseller);
     const holdDays = Math.max(
       0,
       Number(process.env.STRIPE_COMMISSION_HOLD_DAYS ?? 7),
@@ -1806,6 +1936,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!original) return;
     const rate = Number(original.commissionRate);
     const refunded = Number(charge.amount_refunded) / 100;
+    // A fatura pode conter consumo variável que nunca compôs a comissão.
+    const commissionableRefund = Math.min(Math.max(0, Number(original.grossAmount)), refunded);
+    if (!commissionableRefund) return;
     const reversalId = `${invoiceId}:refund:${charge.id}`;
     if (
       original.status === CommissionStatus.PAGA
@@ -1817,20 +1950,20 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           resellerId: original.resellerId,
           subscriptionId: original.subscriptionId,
           stripeInvoiceId: reversalId,
-          grossAmount: -refunded,
+          grossAmount: -commissionableRefund,
           commissionRate: rate,
-          commissionAmount: -(Math.round(refunded * rate * 100) / 100),
+          commissionAmount: -(Math.round(commissionableRefund * rate * 100) / 100),
           currency: charge.currency,
           status: CommissionStatus.DISPONIVEL,
           availableAt: new Date(),
         },
         update: {
-          grossAmount: -refunded,
-          commissionAmount: -(Math.round(refunded * rate * 100) / 100),
+          grossAmount: -commissionableRefund,
+          commissionAmount: -(Math.round(commissionableRefund * rate * 100) / 100),
         },
       });
     } else {
-      const remainingCommission = Math.max(0, Math.round((Number(original.grossAmount) - refunded) * rate * 100) / 100);
+      const remainingCommission = Math.max(0, Math.round((Number(original.grossAmount) - commissionableRefund) * rate * 100) / 100);
       await this.db().commissionLedger.update({
         where: { id: original.id },
         data: {
@@ -1883,12 +2016,16 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     this.backgroundJobsRunning = true;
     try {
       await this.processPendingStripeEvents();
+      // Reserva pós-crédito opcional: a liberação não depende de o revendedor
+      // abrir o painel, e a notificação sai só depois de o saldo estar sacável.
+      await this.releaseMatureCommissions();
       await this.processPendingPayouts();
       // Recupere primeiro uma renovação Asaas já paga cujo webhook se perdeu.
       // Só depois disso a data local pode transformar o acesso em inadimplência.
       if (this.asaas.isConfigured()) {
         await this.reconcilePendingAsaasPayments();
         await this.reconcilePaidAsaasRenewals();
+        await this.reconcilePendingAsaasCommissions();
       }
       // O fim do período é suficiente para interromper o acesso, mesmo se o
       // provedor externo estiver fora, com webhook atrasado ou sem configuração
@@ -1999,20 +2136,27 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processPendingPayouts() {
-    if (!this.stripe) return;
+    const viaAsaas = this.billingProvider() === "ASAAS";
+    if (!viaAsaas && !this.stripe) return;
     const batches = await this.db().payoutBatch.findMany({
       where: {
         status: PayoutBatchStatus.PROCESSANDO,
-        attempts: { lt: MAX_PAYOUT_ATTEMPTS },
         createdAt: { lt: new Date(Date.now() - 10_000) },
-        OR: [
-          { nextAttemptAt: null },
-          { nextAttemptAt: { lte: new Date() } },
+        AND: [
+          {
+            OR: [
+              { nextAttemptAt: null },
+              { nextAttemptAt: { lte: new Date() } },
+            ],
+          },
+          ...(viaAsaas
+            ? [{ OR: [{ asaasTransferId: { not: null } }, { attempts: { lt: MAX_PAYOUT_ATTEMPTS } }] }]
+            : [{ attempts: { lt: MAX_PAYOUT_ATTEMPTS } }]),
         ],
       },
       orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
       take: 10,
-      select: { id: true },
+      select: { id: true, asaasTransferId: true },
     }).catch((error: unknown) => {
       this.logger.error(
         "Não foi possível consultar repasses pendentes.",
@@ -2021,13 +2165,75 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       return [];
     });
     for (const batch of batches) {
-      await this.executePayoutBatch(batch.id, true).catch((error: unknown) => {
+      const process = viaAsaas && batch.asaasTransferId
+        ? this.reconcileAsaasPayoutBatch(batch.id)
+        : this.executePayoutBatch(batch.id, true);
+      await process.catch((error: unknown) => {
         this.logger.error(
           `Falha ao recuperar o repasse ${batch.id}.`,
           this.stripeErrorForLog(error),
         );
       });
     }
+  }
+
+  /** Confere uma transferência interna que ainda não retornou como concluída. */
+  private async reconcileAsaasPayoutBatch(batchId: string) {
+    const batch = await this.db().payoutBatch.findUnique({
+      where: { id: batchId },
+      select: { id: true, status: true, asaasTransferId: true },
+    });
+    if (!batch || batch.status !== PayoutBatchStatus.PROCESSANDO || !batch.asaasTransferId) return null;
+
+    let transfer: AsaasTransfer | null;
+    try {
+      transfer = await this.asaas.findTransferByReference(`payout-${batch.id}`);
+    } catch (error) {
+      // Falha de consulta não autoriza uma nova transferência nem deve fazer o
+      // worker chamar o Asaas a cada rodada de 5 segundos. Mantemos o lote
+      // bloqueado e voltamos a conferir em um minuto.
+      await this.db().payoutBatch.update({
+        where: { id: batch.id },
+        data: {
+          failureReason: "Não foi possível confirmar a transferência no Asaas; nova conferência agendada.",
+          nextAttemptAt: new Date(Date.now() + ASAAS_PAYOUT_RECHECK_INTERVAL_MS),
+        },
+      });
+      this.logger.warn(
+        `Não foi possível consultar o repasse Asaas ${batch.id}; a mesma referência será verificada novamente.`,
+        this.stripeErrorForLog(error),
+      );
+      return { transferId: batch.asaasTransferId, processing: true };
+    }
+    if (!transfer) {
+      // Não recriamos por conta própria quando a consulta falha/está atrasada:
+      // a referência é nossa barreira contra pagamento em duplicidade.
+      await this.db().payoutBatch.update({
+        where: { id: batch.id },
+        data: {
+          failureReason: "Aguardando localização da transferência no Asaas.",
+          nextAttemptAt: new Date(Date.now() + ASAAS_PAYOUT_RECHECK_INTERVAL_MS),
+        },
+      });
+      return { transferId: batch.asaasTransferId, processing: true };
+    }
+    if (this.isAsaasTransferDone(transfer)) {
+      await this.completePayoutBatch(batch.id, { asaasTransferId: transfer.id });
+      return { transferId: transfer.id, completed: true };
+    }
+    if (this.isAsaasTransferTerminalFailure(transfer)) {
+      await this.failPayoutBatch(batch.id, "O Asaas informou que o repasse foi recusado ou cancelado; o saldo voltou a ficar disponível.");
+      return { transferId: transfer.id, failed: true };
+    }
+    await this.db().payoutBatch.update({
+      where: { id: batch.id },
+      data: {
+        asaasTransferId: transfer.id,
+        failureReason: "Transferência em processamento no Asaas.",
+        nextAttemptAt: new Date(Date.now() + ASAAS_PAYOUT_RECHECK_INTERVAL_MS),
+      },
+    });
+    return { transferId: transfer.id, processing: true };
   }
 
   /**
@@ -2070,13 +2276,58 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         await this.activateFromAsaasPayment({
           id: cobranca.id,
           value: cobranca.value,
+          status: cobranca.status,
           subscription: cobranca.subscription ?? assinatura.asaasSubscriptionId,
           customer: cobranca.customer,
-        });
+        }, { fundsReceived: this.asaasPaymentHasSettledFunds(cobranca) });
         await this.markAsaasUsagePaid(cobranca.id);
       } catch (error) {
         this.logger.error(
           `Não foi possível conciliar a cobrança da empresa ${assinatura.companyId}.`,
+          this.stripeErrorForLog(error),
+        );
+      }
+    }
+  }
+
+  /**
+   * Se o callback PAYMENT_RECEIVED se perder, uma previsão de comissão não
+   * pode ficar eternamente em compensação. Consultamos a cobrança de forma
+   * limitada e a liberamos somente quando a API do Asaas confirma o crédito.
+   */
+  private async reconcilePendingAsaasCommissions() {
+    const ledger = this.db().commissionLedger;
+    if (!ledger?.findMany || !ledger?.findUnique || !this.asaas.isConfigured?.()) return;
+    const candidates = await ledger.findMany({
+      where: {
+        asaasPaymentId: { not: null },
+        status: CommissionStatus.PENDENTE,
+        settledAt: null,
+      },
+      select: { asaasPaymentId: true },
+      distinct: ["asaasPaymentId"],
+      take: 20,
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível listar comissões Asaas em compensação.", this.stripeErrorForLog(error));
+      return [];
+    });
+
+    for (const candidate of candidates) {
+      const paymentId = String(candidate.asaasPaymentId ?? "");
+      if (!paymentId || !this.deveConferir(`comissao:${paymentId}`, ASAAS_USAGE_RECHECK_INTERVAL_MS)) continue;
+      try {
+        const payment = await this.asaas.findPayment(paymentId);
+        if (!payment || !this.asaasPaymentHasSettledFunds(payment)) continue;
+        const entry = await ledger.findUnique({
+          where: { asaasPaymentId: paymentId },
+          include: { subscription: { include: { reseller: true, plan: true } } },
+        });
+        if (!entry?.subscription) continue;
+        await this.recordAsaasCommission(entry.subscription, payment, { fundsReceived: true });
+        this.logger.warn(`Conciliação: comissão da cobrança ${paymentId} foi liberada sem webhook PAYMENT_RECEIVED.`);
+      } catch (error) {
+        this.logger.error(
+          `Não foi possível conciliar a comissão da cobrança ${paymentId}.`,
           this.stripeErrorForLog(error),
         );
       }
@@ -2106,7 +2357,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       const activation = await this.activateFromAsaasPayment({
         ...paga,
         subscription: paga.subscription ?? assinatura.asaasSubscriptionId,
-      });
+      }, { fundsReceived: this.asaasPaymentHasSettledFunds(paga) });
       if (!activation) return null;
       await this.markAsaasUsagePaid(paga.id);
       this.logger.warn(
@@ -2764,15 +3015,24 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Eventos de cobrança do Asaas. `PAYMENT_CONFIRMED` chega quando o pagamento é
-   * reconhecido e `PAYMENT_RECEIVED` quando o dinheiro entra; para liberar o
-   * acesso o primeiro basta, e tratar os dois deixa o cliente esperando menos.
+   * reconhecido e `PAYMENT_RECEIVED` quando o dinheiro entra; em espécie o
+   * equivalente é `PAYMENT_RECEIVED_IN_CASH`. Para liberar o acesso o primeiro
+   * basta, e tratar os três deixa o cliente esperando menos sem antecipar saque.
    */
   private async applyAsaasEvent(payload: any) {
     const evento = String(payload?.event ?? "");
+    if (evento.startsWith("TRANSFER_")) {
+      await this.applyAsaasTransferEvent(payload);
+      return;
+    }
     const cobranca = payload?.payment;
     if (!cobranca?.id) return;
 
-    if (evento === "PAYMENT_CONFIRMED" || evento === "PAYMENT_RECEIVED") {
+    if (
+      evento === "PAYMENT_CONFIRMED"
+      || evento === "PAYMENT_RECEIVED"
+      || evento === "PAYMENT_RECEIVED_IN_CASH"
+    ) {
       // Não emitimos mais cobrança avulsa de consumo, mas as que já saíram antes
       // dessa regra continuam existindo. Tratá-las como mensalidade paga
       // renovaria o vínculo do revendedor e pagaria comissão sobre elas.
@@ -2780,7 +3040,11 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         await this.markAsaasUsagePaid(String(cobranca.id));
         return;
       }
-      await this.activateFromAsaasPayment(cobranca);
+      await this.activateFromAsaasPayment(cobranca, {
+        // A confirmação libera o acesso para não fazer o empresário esperar,
+        // mas o saque do revendedor só ocorre quando o Asaas credita o valor.
+        fundsReceived: evento === "PAYMENT_RECEIVED" || evento === "PAYMENT_RECEIVED_IN_CASH",
+      });
       await this.markAsaasUsagePaid(String(cobranca.id));
       return;
     }
@@ -2795,17 +3059,25 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       await this.returnUsageToQueue(String(cobranca.id));
       return;
     }
-    // Os três caminhos pelos quais um dinheiro já recebido volta atrás. Não
-    // existe `PAYMENT_REVERSED` no Asaas — o desfazimento de recebimento em
+    // Contestação ainda não é estorno definitivo. Ela retira o saldo de saque
+    // até a decisão do Asaas, sem gerar ajuste negativo antes da hora.
+    if (evento === "PAYMENT_CHARGEBACK_REQUESTED") {
+      await this.suspendAsaasCommission(cobranca);
+      await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE, {
+        onlyIfCurrentPeriodPayment: true,
+      });
+      return;
+    }
+    // Os dois caminhos finais pelos quais um dinheiro recebido volta atrás.
+    // Não existe `PAYMENT_REVERSED` no Asaas — o desfazimento de recebimento em
     // dinheiro é que ocupa esse lugar.
     if (
       evento === "PAYMENT_REFUNDED"
-      || evento === "PAYMENT_CHARGEBACK_REQUESTED"
       || evento === "PAYMENT_RECEIVED_IN_CASH_UNDONE"
     ) {
-      // Estorno/chargeback cancela o recebimento: os itens já baixados voltam
-      // à fila para não desaparecerem. No desfazimento de dinheiro em espécie,
-      // a própria fatura é reaberta; manter o vínculo evita uma segunda cobrança.
+      // Estorno final cancela o recebimento: os itens já baixados voltam à fila
+      // para não desaparecerem. No desfazimento de dinheiro em espécie, a
+      // própria fatura é reaberta; manter o vínculo evita nova cobrança.
       if (evento === "PAYMENT_RECEIVED_IN_CASH_UNDONE") {
         await this.reopenUsageOnSameAsaasPayment(String(cobranca.id));
       } else {
@@ -2829,12 +3101,49 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * O mesmo webhook do Asaas também pode receber os eventos da transferência.
+   * Eles aceleram a baixa do saque; a reconciliação por referência continua como
+   * contingência caso essa notificação não esteja habilitada na conta.
+   */
+  private async applyAsaasTransferEvent(payload: any) {
+    const evento = String(payload?.event ?? "");
+    const transfer = payload?.transfer;
+    if (!transfer?.id) return;
+    const batch = await this.db().payoutBatch.findUnique({
+      where: { asaasTransferId: String(transfer.id) },
+      select: { id: true, status: true },
+    }).catch(() => null);
+    if (!batch || batch.status !== PayoutBatchStatus.PROCESSANDO) return;
+
+    if (evento === "TRANSFER_DONE" || this.isAsaasTransferDone(transfer)) {
+      await this.completePayoutBatch(batch.id, { asaasTransferId: String(transfer.id) });
+      return;
+    }
+    if (
+      evento === "TRANSFER_FAILED"
+      || evento === "TRANSFER_CANCELLED"
+      || evento === "TRANSFER_BLOCKED"
+      || this.isAsaasTransferTerminalFailure(transfer)
+    ) {
+      await this.failPayoutBatch(batch.id, "O Asaas informou que o repasse foi recusado ou cancelado; o saldo voltou a ficar disponível.");
+      return;
+    }
+    await this.db().payoutBatch.update({
+      where: { id: batch.id },
+      data: {
+        failureReason: "Transferência em processamento no Asaas.",
+        nextAttemptAt: new Date(Date.now() + ASAAS_PAYOUT_RECHECK_INTERVAL_MS),
+      },
+    });
+  }
+
   /** Localiza a assinatura da plataforma a partir da cobrança do Asaas. */
   private async subscriptionFromAsaas(cobranca: any) {
     if (cobranca.subscription) {
       const porAssinatura = await this.db().clientSubscription.findUnique({
         where: { asaasSubscriptionId: String(cobranca.subscription) },
-        include: { reseller: true },
+        include: { reseller: true, plan: true },
       });
       if (porAssinatura) return porAssinatura;
     }
@@ -2842,16 +3151,25 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (cobranca.customer) {
       return this.db().clientSubscription.findUnique({
         where: { asaasCustomerId: String(cobranca.customer) },
-        include: { reseller: true },
+        include: { reseller: true, plan: true },
       });
     }
     return null;
   }
 
-  private async activateFromAsaasPayment(cobranca: any) {
+  private async activateFromAsaasPayment(
+    cobranca: any,
+    options: { fundsReceived?: boolean } = {},
+  ) {
     const assinatura = await this.subscriptionFromAsaas(cobranca);
     if (!assinatura) {
       this.logger.warn(`Cobrança ${cobranca.id} paga no Asaas sem assinatura correspondente.`);
+      return null;
+    }
+    if (!this.isAsaasSubscriptionMonthlyPayment(assinatura, cobranca)) {
+      this.logger.warn(
+        `Cobrança ${cobranca.id} da assinatura ${assinatura.id} não é a mensalidade vinculada; acesso e comissão preservados.`,
+      );
       return null;
     }
 
@@ -2869,6 +3187,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           data: { status: SubscriptionStatus.ATIVA, canceledAt: null },
         });
       }
+      await this.recordAsaasCommission(assinatura, cobranca, options);
       return {
         paymentId,
         currentPeriodStart: assinatura.currentPeriodStart ?? null,
@@ -2900,7 +3219,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           : assinatura.discountEndsAt,
       },
     });
-    await this.recordAsaasCommission(assinatura, cobranca);
+    await this.recordAsaasCommission(assinatura, cobranca, options);
     return { paymentId, currentPeriodStart: inicioDoPeriodo, currentPeriodEnd: fimDoPeriodo };
   }
 
@@ -2937,45 +3256,169 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Comissão do revendedor. Nasce pendente e só fica disponível após a carência,
-   * que existe para cobrir estorno e contestação — por isso não usamos o split
-   * do Asaas, que repassaria no ato.
+   * Cria a previsão na confirmação e só a libera quando o Asaas informa que o
+   * valor foi recebido. Assim o teste não gera comissão, o pagamento confirmado
+   * ainda não vira saque e cada recorrência recebe seu próprio lançamento.
    */
-  private async recordAsaasCommission(assinatura: any, cobranca: any) {
+  private async recordAsaasCommission(
+    assinatura: any,
+    cobranca: any,
+    options: { fundsReceived?: boolean } = {},
+  ) {
     if (!assinatura.resellerId || !assinatura.reseller?.isActive) return;
+    if (!this.hasCompletedCommissionTrial(assinatura)) {
+      this.logger.warn(
+        `Comissão da cobrança ${cobranca.id} ignorada: o teste da assinatura ${assinatura.id} ainda não terminou.`,
+      );
+      return;
+    }
+    if (!this.isAsaasSubscriptionMonthlyPayment(assinatura, cobranca)) return;
 
-    const bruto = Number(cobranca.value ?? 0);
-    if (!bruto) return;
-    const taxa = Number(assinatura.reseller.commissionRate);
-    const carenciaDias = Math.max(0, Number(process.env.COMMISSION_HOLD_DAYS ?? process.env.STRIPE_COMMISSION_HOLD_DAYS ?? 7));
-    const disponivelEm = new Date(Date.now() + carenciaDias * 24 * 60 * 60 * 1000);
+    const paymentId = String(cobranca.id ?? "");
+    const bruto = this.commissionableMonthlyAmount(assinatura, cobranca.value);
+    if (!paymentId || !bruto) return;
 
-    await this.db().commissionLedger.upsert({
-      // O id da cobrança é único: reprocessar o mesmo evento não duplica lançamento.
-      where: { asaasPaymentId: String(cobranca.id) },
+    const taxa = this.resellerCommissionRate(assinatura.reseller);
+    const valorComissao = Math.round(bruto * taxa * 100) / 100;
+    const fundsReceived = Boolean(options.fundsReceived || this.asaasPaymentHasSettledFunds(cobranca));
+    const now = new Date();
+    const holdDays = this.asaasPostReceiptHoldDays();
+    const disponivelEm = fundsReceived
+      ? new Date(now.getTime() + holdDays * 24 * 60 * 60 * 1000)
+      : null;
+    const status = fundsReceived && holdDays === 0
+      ? CommissionStatus.DISPONIVEL
+      : CommissionStatus.PENDENTE;
+    const ledger = this.db().commissionLedger;
+
+    await ledger.upsert({
+      // O id da cobrança é único: CONFIRMED/RECEIVED e retries não duplicam.
+      where: { asaasPaymentId: paymentId },
       create: {
         resellerId: assinatura.resellerId,
         subscriptionId: assinatura.id,
-        asaasPaymentId: String(cobranca.id),
+        asaasPaymentId: paymentId,
+        // O total da cobrança pode incluir IA/WhatsApp; a base aqui é somente
+        // a mensalidade contratada, para proteger a margem operacional.
         grossAmount: bruto,
         commissionRate: taxa,
-        commissionAmount: Math.round(bruto * taxa * 100) / 100,
+        commissionAmount: valorComissao,
         currency: "brl",
-        status: carenciaDias === 0 ? CommissionStatus.DISPONIVEL : CommissionStatus.PENDENTE,
+        status,
+        settledAt: fundsReceived ? now : null,
         availableAt: disponivelEm,
+        holdReason: fundsReceived ? null : COMMISSION_HOLD_AWAITING_SETTLEMENT,
       },
       update: {},
     });
+
+    if (!fundsReceived) return;
+
+    // Se CONFIRMED chegou antes, transforma somente a previsão pendente. Nunca
+    // reabre lançamento estornado, pago ou já enviado para a subconta.
+    await ledger.updateMany({
+      where: {
+        asaasPaymentId: paymentId,
+        status: CommissionStatus.PENDENTE,
+      },
+      data: {
+        status,
+        settledAt: now,
+        availableAt: disponivelEm,
+        holdReason: null,
+      },
+    });
+    if (status === CommissionStatus.DISPONIVEL) {
+      await this.notifyAvailableAsaasCommissions(assinatura.resellerId);
+    }
   }
 
-  /** Estorno depois de paga: a comissão daquele mês deixa de ser devida. */
-  private async reverseAsaasCommission(cobranca: any) {
+  /** A contestação impede novo saque, mas não é um estorno definitivo. */
+  private async suspendAsaasCommission(cobranca: any) {
     await this.db().commissionLedger.updateMany({
       where: {
         asaasPaymentId: String(cobranca.id),
         status: { in: [CommissionStatus.PENDENTE, CommissionStatus.DISPONIVEL] },
       },
-      data: { status: CommissionStatus.ESTORNADA },
+      data: {
+        status: CommissionStatus.PENDENTE,
+        settledAt: null,
+        availableAt: null,
+        holdReason: COMMISSION_HOLD_CHARGEBACK,
+      },
+    });
+  }
+
+  /**
+   * Estorno final remove comissão ainda não sacada. Se ela já saiu ou estava
+   * sendo enviada, gera um ajuste negativo idempotente que será compensado em
+   * comissões futuras — nunca cobra o mesmo cliente nem paga duas vezes.
+   */
+  private async reverseAsaasCommission(cobranca: any) {
+    const paymentId = String(cobranca.id ?? "");
+    if (!paymentId) return;
+    const ledger = this.db().commissionLedger;
+    const reversed = await ledger.updateMany({
+      where: {
+        asaasPaymentId: paymentId,
+        status: { in: [CommissionStatus.PENDENTE, CommissionStatus.DISPONIVEL] },
+      },
+      data: {
+        status: CommissionStatus.ESTORNADA,
+        holdReason: "PAGAMENTO_ESTORNADO",
+      },
+    });
+    if (reversed.count > 0 || !ledger.findUnique) return;
+
+    const original = await ledger.findUnique({ where: { asaasPaymentId: paymentId } });
+    if (!original) {
+      // O evento final pode chegar antes do de recebimento. Deixar uma marca
+      // estornada evita que um callback atrasado crie saldo depois do estorno.
+      const assinatura = await this.subscriptionFromAsaas(cobranca);
+      if (!assinatura?.resellerId || !assinatura.reseller?.isActive) return;
+      // Mesmo se algum evento final chegar fora de ordem, a marca de estorno é
+      // conservada. Assim um PAYMENT_RECEIVED atrasado jamais cria saldo para
+      // uma cobrança que já foi desfeita — inclusive em dados históricos.
+      if (!this.isAsaasSubscriptionMonthlyPayment(assinatura, cobranca)) return;
+      const bruto = this.commissionableMonthlyAmount(assinatura, cobranca.value);
+      if (!bruto) return;
+      const taxa = this.resellerCommissionRate(assinatura.reseller);
+      await ledger.upsert({
+        where: { asaasPaymentId: paymentId },
+        create: {
+          resellerId: assinatura.resellerId,
+          subscriptionId: assinatura.id,
+          asaasPaymentId: paymentId,
+          grossAmount: bruto,
+          commissionRate: taxa,
+          commissionAmount: Math.round(bruto * taxa * 100) / 100,
+          currency: "brl",
+          status: CommissionStatus.ESTORNADA,
+          holdReason: "PAGAMENTO_ESTORNADO",
+        },
+        update: {},
+      });
+      return;
+    }
+
+    if (original.status !== CommissionStatus.PAGA && original.status !== CommissionStatus.PROCESSANDO) return;
+    const reference = `asaas-reversal:${paymentId}`;
+    await ledger.upsert({
+      where: { externalReference: reference },
+      create: {
+        resellerId: original.resellerId,
+        subscriptionId: original.subscriptionId,
+        externalReference: reference,
+        grossAmount: -Number(original.grossAmount),
+        commissionRate: Number(original.commissionRate),
+        commissionAmount: -Math.abs(Number(original.commissionAmount)),
+        currency: original.currency,
+        status: CommissionStatus.DISPONIVEL,
+        settledAt: new Date(),
+        availableAt: new Date(),
+        holdReason: "AJUSTE_DE_ESTORNO",
+      },
+      update: {},
     });
   }
 
@@ -3088,7 +3531,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async releaseMatureCommissions(resellerId?: string) {
-    await this.db().commissionLedger.updateMany({
+    const ledger = this.db().commissionLedger;
+    if (!ledger?.updateMany) return;
+    const released = await ledger.updateMany({
       where: {
         ...(resellerId ? { resellerId } : {}),
         status: CommissionStatus.PENDENTE,
@@ -3096,6 +3541,60 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       },
       data: { status: CommissionStatus.DISPONIVEL },
     });
+    if (released.count > 0) await this.notifyAvailableAsaasCommissions(resellerId);
+  }
+
+  /**
+   * A página explica a regra, e este e-mail avisa no momento em que o valor
+   * passa a ficar sacável. A reivindicação condicional evita e-mails repetidos
+   * quando API e worker observam a mesma comissão em paralelo.
+   */
+  private async notifyAvailableAsaasCommissions(resellerId?: string) {
+    const ledger = this.db().commissionLedger;
+    if (!ledger?.findMany || !ledger?.updateMany || !this.mail?.sendResellerCommissionAvailable) return;
+    const entries = await ledger.findMany({
+      where: {
+        ...(resellerId ? { resellerId } : {}),
+        asaasPaymentId: { not: null },
+        settledAt: { not: null },
+        availabilityNotifiedAt: null,
+        status: CommissionStatus.DISPONIVEL,
+        commissionAmount: { gt: 0 },
+      },
+      include: {
+        reseller: { include: { user: { select: { name: true, email: true } } } },
+        subscription: { include: { company: { select: { name: true } } } },
+      },
+      take: 30,
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível consultar comissões prontas para aviso.", this.stripeErrorForLog(error));
+      return [];
+    });
+
+    for (const entry of entries) {
+      const claimedAt = new Date();
+      const claimed = await ledger.updateMany({
+        where: { id: entry.id, availabilityNotifiedAt: null },
+        data: { availabilityNotifiedAt: claimedAt },
+      }).catch(() => ({ count: 0 }));
+      if (claimed.count !== 1) continue;
+      try {
+        await this.mail.sendResellerCommissionAvailable({
+          email: entry.reseller.user.email,
+          name: entry.reseller.user.name,
+          amount: Number(entry.commissionAmount),
+          companyName: entry.subscription.company.name,
+        });
+      } catch (error) {
+        // O dinheiro continua correto; recolocamos apenas a notificação para
+        // tentar de novo numa próxima rodada, sem bloquear o saque.
+        await ledger.updateMany({
+          where: { id: entry.id, availabilityNotifiedAt: claimedAt },
+          data: { availabilityNotifiedAt: null },
+        }).catch(() => undefined);
+        this.logger.error(`Não foi possível avisar a comissão ${entry.id}.`, this.stripeErrorForLog(error));
+      }
+    }
   }
 
   private async assertStripePrice(

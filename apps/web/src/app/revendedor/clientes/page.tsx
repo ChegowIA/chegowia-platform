@@ -189,7 +189,7 @@ function SaleModal({ open, close, sale, setSale, result, mutation }: any) {
           </div>
           {mutation.error && <ErrorMessage error={mutation.error} />}
           <Button className="w-full" disabled={!sale.confirmPassword || sale.password !== sale.confirmPassword || !sale.acceptTerms || !sale.acceptPrivacy || !sale.acceptAutomatedAnalysis} isLoading={mutation.isPending} onClick={() => mutation.mutate()}>Validar e iniciar teste grátis</Button>
-          <p className="text-center text-[11px] text-slate-400">Marque os consentimentos somente após a autorização expressa do cliente. Não há pagamento agora; o cliente decide se ativa a assinatura ao fim do teste.</p>
+          <p className="text-center text-[11px] text-slate-400">Marque os consentimentos somente após a autorização expressa do cliente. Não há pagamento agora; sua comissão só nasce se ele concluir o teste, pagar a mensalidade e o Asaas creditar o valor.</p>
         </div>
       )}
     </Modal>

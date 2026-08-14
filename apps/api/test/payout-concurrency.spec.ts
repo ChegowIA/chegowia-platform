@@ -33,7 +33,10 @@ function prismaWithBatch(batch: any, options?: { claimable?: boolean }) {
 }
 
 function buildService(prisma: any) {
-  const service = buildBillingService({ prisma: prisma });
+  const service = buildBillingService({
+    prisma,
+    asaas: { isConfigured: jest.fn().mockReturnValue(true) },
+  });
   // impede que o worker de background dispare durante o teste
   service.onModuleDestroy();
   return service;
@@ -53,14 +56,25 @@ const baseBatch = {
 
 describe("concorrência no repasse ao revendedor", () => {
   const originalKey = process.env.STRIPE_SECRET_KEY;
-  afterAll(() => { process.env.STRIPE_SECRET_KEY = originalKey; });
+  const originalProvider = process.env.BILLING_PROVIDER;
+  beforeEach(() => {
+    // A proteção de concorrência é independente do provedor. Usamos Asaas
+    // explicitamente para que a suíte não dependa de uma chave Stripe local.
+    process.env.BILLING_PROVIDER = "ASAAS";
+  });
+  afterAll(() => {
+    if (originalKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = originalKey;
+    if (originalProvider === undefined) delete process.env.BILLING_PROVIDER;
+    else process.env.BILLING_PROVIDER = originalProvider;
+  });
 
   it("só um worker reivindica o lote; o segundo não executa a transferência", async () => {
     const prisma = prismaWithBatch(baseBatch);
     const service = buildService(prisma);
     const execute = (service as any).executePayoutBatch.bind(service);
 
-    // Sem conta Stripe configurada, o vencedor encerra o lote; o perdedor
+    // Sem conta de recebimento configurada, o vencedor encerra o lote; o perdedor
     // precisa sair sem tentar transferir.
     const [first, second] = await Promise.all([
       execute("lote-1", true).catch(() => "erro"),

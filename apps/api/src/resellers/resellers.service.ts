@@ -24,6 +24,30 @@ export class ResellersService {
 
   private db() { return this.prisma as any; }
 
+  private commissionLifecycle(item: any) {
+    if (item.status === CommissionStatus.DISPONIVEL) {
+      return Number(item.commissionAmount) < 0
+        ? { code: "AJUSTE", label: "Ajuste de estorno", detail: "Será compensado nos próximos valores disponíveis." }
+        : { code: "DISPONIVEL", label: "Liberado para saque", detail: "O saldo já foi recebido pelo Asaas e pode ser repassado." };
+    }
+    if (item.status === CommissionStatus.PROCESSANDO) {
+      return { code: "PROCESSANDO", label: "Repasse em processamento", detail: "A transferência para sua conta Asaas está sendo confirmada." };
+    }
+    if (item.status === CommissionStatus.PAGA) {
+      return { code: "PAGA", label: "Repassada", detail: "A transferência foi confirmada." };
+    }
+    if (item.status === CommissionStatus.ESTORNADA) {
+      return { code: "ESTORNADA", label: "Estornada", detail: "O pagamento do cliente foi desfeito; não há comissão neste ciclo." };
+    }
+    if (item.holdReason === "CONTESTACAO_DE_PAGAMENTO") {
+      return { code: "EM_ANALISE", label: "Em análise pelo Asaas", detail: "O saque fica suspenso até a resolução da contestação." };
+    }
+    if (item.availableAt && new Date(item.availableAt).getTime() > Date.now()) {
+      return { code: "RESERVA", label: "Reserva de segurança", detail: "O crédito já ocorreu; aguardamos a reserva configurada pela plataforma." };
+    }
+    return { code: "EM_COMPENSACAO", label: "Em compensação", detail: "O pagamento foi confirmado, mas o Asaas ainda não creditou o valor na conta raiz." };
+  }
+
   async apply(dto: ResellerApplicationDto, file?: any) {
     if (!file) throw new BadRequestException("Envie seu currículo em PDF, DOC ou DOCX.");
     const normalizedEmail = dto.email.trim().toLowerCase();
@@ -228,9 +252,39 @@ export class ResellersService {
       this.db().resellerProspect.count({ where: { resellerId: reseller.id } }),
       this.db().salesLead.count({ where: { resellerId: reseller.id, status: LeadStatus.EM_ATENDIMENTO } }),
     ]);
-    const available = commissions.filter((item: any) => item.status === CommissionStatus.DISPONIVEL).reduce((sum: number, item: any) => sum + Number(item.commissionAmount), 0);
-    const paid = commissions.filter((item: any) => item.status === CommissionStatus.PAGA).reduce((sum: number, item: any) => sum + Number(item.commissionAmount), 0);
-    return { profile: reseller, balances: { available, paid }, activeSubscriptions, prospects, activeLeads: leads, commissions };
+    const total = (items: any[]) => items.reduce((sum: number, item: any) => sum + Number(item.commissionAmount), 0);
+    const available = total(commissions.filter((item: any) => item.status === CommissionStatus.DISPONIVEL));
+    const paid = total(commissions.filter((item: any) => item.status === CommissionStatus.PAGA));
+    const pendingSettlement = total(commissions.filter((item: any) => {
+      const lifecycle = this.commissionLifecycle(item);
+      return lifecycle.code === "EM_COMPENSACAO";
+    }));
+    const underReview = total(commissions.filter((item: any) => this.commissionLifecycle(item).code === "EM_ANALISE"));
+    const safetyHold = total(commissions.filter((item: any) => this.commissionLifecycle(item).code === "RESERVA"));
+    const processing = total(commissions.filter((item: any) => item.status === CommissionStatus.PROCESSANDO));
+    const visibleCommissions = commissions.map((item: any) => ({
+      ...item,
+      lifecycle: this.commissionLifecycle(item),
+      // Transparência: a base é a mensalidade do plano, e não o total de uma
+      // fatura que possa conter IA ou WhatsApp.
+      commissionBase: Number(item.grossAmount),
+      commissionRatePercent: Math.round(Number(item.commissionRate) * 10000) / 100,
+    }));
+    return {
+      profile: reseller,
+      balances: { available, paid, pendingSettlement, underReview, safetyHold, processing },
+      commissionPolicy: {
+        trialDays: 7,
+        commissionRatePercent: 30,
+        appliesTo: "Somente à mensalidade do plano; consumo de IA e WhatsApp não entra na comissão.",
+        releaseRule: "A comissão é liberada para saque somente após o evento PAYMENT_RECEIVED do Asaas.",
+        settlementNotice: "O pagamento pode aparecer como confirmado antes de o saldo ficar disponível. Em cartão, a compensação pode levar até cerca de 32 dias.",
+      },
+      activeSubscriptions,
+      prospects,
+      activeLeads: leads,
+      commissions: visibleCommissions,
+    };
   }
 
   async listProspects(userId: string) {
@@ -357,7 +411,7 @@ export class ResellersService {
             "Você é o assistente comercial do painel de revendedores da ChegowIA.",
             "Responda em português do Brasil, com clareza, objetividade e tom de parceiro comercial experiente.",
             "Ajude a organizar leads e prospects, preparar abordagem, explicar comissão, código de revendedor, saldo e próximos passos.",
-            "A comissão do revendedor é de 30% da mensalidade efetivamente paga enquanto o cliente indicado permanecer ativo.",
+            "A comissão do revendedor é de 30% somente da mensalidade do plano: nasce após os 7 dias de teste, fica em compensação quando o pagamento é confirmado e só entra em saque quando o Asaas informa o crédito recebido.",
             "O cliente que vincula um código válido recebe 15% de desconto nos primeiros 3 meses. O vínculo não pode ser trocado enquanto a conta estiver ativa.",
             "Não invente contatos, valores, pagamentos, vendas ou dados ausentes. Não prometa aprovação, saque ou conversão.",
             "Não exponha dados de outros revendedores. Não execute mudanças: apenas oriente com base no contexto fornecido.",
@@ -375,7 +429,7 @@ export class ResellersService {
   private resellerAssistantFallback(message: string, context: any) {
     const normalized = message.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     if (normalized.includes("saldo") || normalized.includes("comissao")) {
-      return `Seu saldo disponível é R$ ${Number(context.availableBalance).toFixed(2).replace(".", ",")} e o total já pago é R$ ${Number(context.paidBalance).toFixed(2).replace(".", ",")}. Você recebe 30% das mensalidades efetivamente pagas pelos clientes ativos vinculados ao seu código.`;
+      return `Seu saldo disponível é R$ ${Number(context.availableBalance).toFixed(2).replace(".", ",")} e o total já pago é R$ ${Number(context.paidBalance).toFixed(2).replace(".", ",")}. Você recebe 30% da mensalidade do plano dos clientes vinculados ao seu código, depois dos 7 dias de teste e da confirmação de crédito pelo Asaas.`;
     }
     if (normalized.includes("codigo") || normalized.includes("desconto")) {
       return `Seu código é **${context.resellerCode}**. O cliente recebe 15% de desconto nos 3 primeiros meses, e o vínculo com o revendedor permanece enquanto a conta estiver ativa.`;

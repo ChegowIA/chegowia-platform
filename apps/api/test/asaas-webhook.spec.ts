@@ -16,7 +16,7 @@ describe("webhook do Asaas", () => {
 
   beforeEach(() => {
     process.env.ASAAS_WEBHOOK_TOKEN = TOKEN;
-    process.env.COMMISSION_HOLD_DAYS = "7";
+    process.env.ASAAS_COMMISSION_POST_RECEIPT_HOLD_DAYS = "0";
   });
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
@@ -28,10 +28,11 @@ describe("webhook do Asaas", () => {
     resellerId: "rev-1",
     discountEndsAt: null,
     asaasSubscriptionId: "sub_asaas_1",
+    plan: { monthlyPrice: 159.9 },
     reseller: { isActive: true, commissionRate: 0.3 },
   };
 
-  function build(overrides: { assinatura?: any } = {}) {
+  function build(overrides: { assinatura?: any; asaas?: any; commissionLedger?: Record<string, unknown> } = {}) {
     const stripeEvent = {
       upsert: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -42,14 +43,33 @@ describe("webhook do Asaas", () => {
       findUnique: jest.fn().mockResolvedValue("assinatura" in overrides ? overrides.assinatura : assinatura),
       update: jest.fn().mockResolvedValue({}),
     };
-    const commissionLedger = { upsert: jest.fn().mockResolvedValue({}), updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
+    const commissionLedger = {
+      upsert: jest.fn().mockResolvedValue({}),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUnique: jest.fn().mockResolvedValue(null),
+      ...(overrides.commissionLedger ?? {}),
+    };
+    const payoutBatch = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      update: jest.fn().mockResolvedValue({}),
+    };
     // O consumo variável entra na mesma cobrança da mensalidade, então o
     // pagamento confirmado também o concilia.
     const usageLedger = { updateMany: jest.fn().mockResolvedValue({ count: 0 }) };
-    const prisma = { stripeEvent, clientSubscription, commissionLedger, usageLedger };
-    const service = buildBillingService({ prisma });
+    const prisma = {
+      stripeEvent,
+      clientSubscription,
+      commissionLedger,
+      payoutBatch,
+      usageLedger,
+      $transaction: jest.fn(async (operation: any) => (typeof operation === "function"
+        ? operation({ payoutBatch, commissionLedger })
+        : Promise.all(operation))),
+    };
+    const service = buildBillingService({ prisma, asaas: overrides.asaas ?? {} });
     service.onModuleDestroy();
-    return { service, stripeEvent, clientSubscription, commissionLedger, usageLedger };
+    return { service, stripeEvent, clientSubscription, commissionLedger, payoutBatch, usageLedger, asaas: overrides.asaas };
   }
 
   const cobrancaPaga = {
@@ -118,7 +138,7 @@ describe("webhook do Asaas", () => {
     expect(clientSubscription.update).not.toHaveBeenCalled();
   });
 
-  it("registra a comissão pendente, respeitando a carência", async () => {
+  it("registra a comissão em compensação quando o pagamento está apenas confirmado", async () => {
     const { service, commissionLedger } = build();
 
     await (service as never as Record<string, any>).applyAsaasEvent(cobrancaPaga);
@@ -126,10 +146,168 @@ describe("webhook do Asaas", () => {
     const chamada = commissionLedger.upsert.mock.calls[0][0];
     expect(chamada.where).toEqual({ asaasPaymentId: "pay_1" });
     expect(chamada.create).toEqual(
-      expect.objectContaining({ commissionAmount: 47.97, status: "PENDENTE" }),
+      expect.objectContaining({
+        grossAmount: 159.9,
+        commissionAmount: 47.97,
+        status: "PENDENTE",
+        settledAt: null,
+        availableAt: null,
+        holdReason: "AGUARDANDO_COMPENSACAO_ASAAS",
+      }),
     );
     // Reprocessar não pode duplicar lançamento.
     expect(chamada.update).toEqual({});
+  });
+
+  it("libera a comissão somente quando o Asaas confirma o crédito recebido", async () => {
+    const { service, commissionLedger } = build();
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_RECEIVED",
+    });
+
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "DISPONIVEL", settledAt: expect.any(Date) }),
+      }),
+    );
+    expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ asaasPaymentId: "pay_1", status: "PENDENTE" }),
+        data: expect.objectContaining({ status: "DISPONIVEL", settledAt: expect.any(Date) }),
+      }),
+    );
+  });
+
+  it("também libera a comissão quando o Asaas registra recebimento em espécie", async () => {
+    const { service, commissionLedger } = build();
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_RECEIVED_IN_CASH",
+    });
+
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "DISPONIVEL", settledAt: expect.any(Date) }),
+      }),
+    );
+  });
+
+  it("só baixa o saque quando chega TRANSFER_DONE", async () => {
+    const { service, payoutBatch, commissionLedger } = build();
+    payoutBatch.findUnique.mockResolvedValue({ id: "lote-1", status: "PROCESSANDO" });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      event: "TRANSFER_DONE",
+      transfer: { id: "tra-1", status: "DONE" },
+    });
+
+    expect(payoutBatch.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PAGO", asaasTransferId: "tra-1" }) }),
+    );
+    expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PAGA", asaasTransferId: "tra-1" }) }),
+    );
+  });
+
+  it("recupera a comissão em compensação se o webhook PAYMENT_RECEIVED se perder", async () => {
+    const entry = {
+      asaasPaymentId: "pay_1",
+      subscription: assinatura,
+    };
+    const { service, commissionLedger } = build({
+      commissionLedger: {
+        findMany: jest.fn().mockResolvedValue([{ asaasPaymentId: "pay_1" }]),
+        findUnique: jest.fn().mockResolvedValue(entry),
+      },
+      asaas: {
+        isConfigured: jest.fn().mockReturnValue(true),
+        findPayment: jest.fn().mockResolvedValue({
+          id: "pay_1",
+          status: "RECEIVED",
+          value: 159.9,
+          subscription: "sub_asaas_1",
+        }),
+      },
+    });
+
+    await (service as never as Record<string, any>).reconcilePendingAsaasCommissions();
+
+    expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "DISPONIVEL" }) }),
+    );
+  });
+
+  it("calcula os 30% só sobre a mensalidade, não sobre o consumo anexado à fatura", async () => {
+    const { service, commissionLedger } = build({
+      assinatura: { ...assinatura, plan: { monthlyPrice: 100 } },
+    });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      payment: { ...cobrancaPaga.payment, value: 145 },
+    });
+
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ grossAmount: 100, commissionAmount: 30 }),
+      }),
+    );
+  });
+
+  it("mantém os 30% do programa mesmo se houver taxa legada divergente no perfil", async () => {
+    const { service, commissionLedger } = build({
+      assinatura: { ...assinatura, reseller: { isActive: true, commissionRate: 0.5 }, plan: { monthlyPrice: 100 } },
+    });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      payment: { ...cobrancaPaga.payment, value: 100 },
+    });
+
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ commissionRate: 0.3, commissionAmount: 30 }) }),
+    );
+  });
+
+  it("não gera comissão antes do fim real dos 7 dias de teste", async () => {
+    const { service, commissionLedger } = build({
+      assinatura: { ...assinatura, trialEndsAt: new Date(Date.now() + 60_000) },
+    });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_RECEIVED",
+    });
+
+    expect(commissionLedger.upsert).not.toHaveBeenCalled();
+  });
+
+  it("cria uma comissão por mensalidade recebida em cada renovação", async () => {
+    const { service, commissionLedger } = build();
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_RECEIVED",
+      payment: { ...cobrancaPaga.payment, id: "pay_renovacao_2" },
+    });
+
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { asaasPaymentId: "pay_renovacao_2" } }),
+    );
+  });
+
+  it("não comissiona outra cobrança do mesmo cliente que não pertença à assinatura", async () => {
+    const { service, commissionLedger } = build();
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      payment: { ...cobrancaPaga.payment, subscription: "sub_estranha" },
+    });
+
+    expect(commissionLedger.upsert).not.toHaveBeenCalled();
   });
 
   it("não cria comissão quando não há revendedor", async () => {
@@ -151,10 +329,37 @@ describe("webhook do Asaas", () => {
     });
 
     expect(commissionLedger.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { status: "ESTORNADA" } }),
+      expect.objectContaining({ data: expect.objectContaining({ status: "ESTORNADA" }) }),
     );
     expect(clientSubscription.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+    );
+  });
+
+  it("cria ajuste negativo idempotente se o estorno chegar depois de um saque", async () => {
+    const { service, commissionLedger } = build();
+    commissionLedger.updateMany.mockResolvedValueOnce({ count: 0 });
+    commissionLedger.findUnique.mockResolvedValue({
+      id: "com-1",
+      resellerId: "rev-1",
+      subscriptionId: "sub-1",
+      grossAmount: 159.9,
+      commissionRate: 0.3,
+      commissionAmount: 47.97,
+      currency: "brl",
+      status: "PAGA",
+    });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_REFUNDED",
+    });
+
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { externalReference: "asaas-reversal:pay_1" },
+        create: expect.objectContaining({ commissionAmount: -47.97, status: "DISPONIVEL" }),
+      }),
     );
   });
 
@@ -232,7 +437,7 @@ describe("webhook do Asaas", () => {
    * abaixo, conferidos na conta real.
    */
   describe("nomes de evento aceitos", () => {
-    const reverte = ["PAYMENT_REFUNDED", "PAYMENT_CHARGEBACK_REQUESTED", "PAYMENT_RECEIVED_IN_CASH_UNDONE"];
+    const reverte = ["PAYMENT_REFUNDED", "PAYMENT_RECEIVED_IN_CASH_UNDONE"];
 
     it.each(reverte)("%s estorna a comissão e marca inadimplência", async (evento) => {
       const { service, commissionLedger, clientSubscription } = build();
@@ -240,7 +445,25 @@ describe("webhook do Asaas", () => {
       await (service as never as Record<string, any>).applyAsaasEvent({ ...cobrancaPaga, event: evento });
 
       expect(commissionLedger.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { status: "ESTORNADA" } }),
+        expect.objectContaining({ data: expect.objectContaining({ status: "ESTORNADA" }) }),
+      );
+      expect(clientSubscription.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
+      );
+    });
+
+    it("PAYMENT_CHARGEBACK_REQUESTED suspende o saque até a decisão final", async () => {
+      const { service, commissionLedger, clientSubscription } = build();
+
+      await (service as never as Record<string, any>).applyAsaasEvent({
+        ...cobrancaPaga,
+        event: "PAYMENT_CHARGEBACK_REQUESTED",
+      });
+
+      expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: "PENDENTE", holdReason: "CONTESTACAO_DE_PAGAMENTO" }),
+        }),
       );
       expect(clientSubscription.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { status: "INADIMPLENTE" } }),

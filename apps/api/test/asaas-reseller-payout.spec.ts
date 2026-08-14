@@ -167,14 +167,14 @@ describe("recebimento do revendedor pelo Asaas", () => {
     it("transfere para a carteira usando o lote como referência", async () => {
       const { service, asaas } = build();
 
-      const id = await (service as never as Record<string, any>).transferPayoutViaAsaas(lote);
+      const transfer = await (service as never as Record<string, any>).transferPayoutViaAsaas(lote);
 
       expect(asaas.transferToWallet).toHaveBeenCalledWith({
         value: 47.97,
         walletId: "wal_1",
         externalReference: "payout-lote-1",
       });
-      expect(id).toBe("tra_1");
+      expect(transfer).toEqual(expect.objectContaining({ id: "tra_1", status: "PENDING" }));
     });
 
     it("não transfere de novo quando a referência já existe no Asaas", async () => {
@@ -184,23 +184,36 @@ describe("recebimento do revendedor pelo Asaas", () => {
         },
       });
 
-      const id = await (service as never as Record<string, any>).transferPayoutViaAsaas(lote);
+      const transfer = await (service as never as Record<string, any>).transferPayoutViaAsaas(lote);
 
       expect(asaas.transferToWallet).not.toHaveBeenCalled();
-      expect(id).toBe("tra_antiga");
+      expect(transfer).toEqual(expect.objectContaining({ id: "tra_antiga", status: "DONE" }));
     });
 
-    it("refaz a transferência que falhou no Asaas", async () => {
+    it("não recria automaticamente uma transferência que o Asaas já marcou como falha", async () => {
       const { service, asaas } = build({
         asaas: {
           findTransferByReference: jest.fn().mockResolvedValue({ id: "tra_ruim", status: "FAILED", value: 47.97 }),
         },
       });
 
-      const id = await (service as never as Record<string, any>).transferPayoutViaAsaas(lote);
+      const transfer = await (service as never as Record<string, any>).transferPayoutViaAsaas(lote);
 
-      expect(asaas.transferToWallet).toHaveBeenCalled();
-      expect(id).toBe("tra_1");
+      expect(asaas.transferToWallet).not.toHaveBeenCalled();
+      expect(transfer).toEqual(expect.objectContaining({ id: "tra_ruim", status: "FAILED" }));
+    });
+
+    it("não cria novo repasse se não consegue confirmar a referência existente", async () => {
+      const { service, asaas } = build({
+        asaas: {
+          findTransferByReference: jest.fn().mockRejectedValue(new Error("consulta indisponível")),
+        },
+      });
+
+      await expect(
+        (service as never as Record<string, any>).transferPayoutViaAsaas(lote),
+      ).rejects.toThrow("consulta indisponível");
+      expect(asaas.transferToWallet).not.toHaveBeenCalled();
     });
   });
 
@@ -208,6 +221,79 @@ describe("recebimento do revendedor pelo Asaas", () => {
     it("recusa quem ainda não abriu a conta de recebimento", async () => {
       const { service } = build();
       await expect(service.requestPayout("user-1")).rejects.toThrow(/conta de recebimento/);
+    });
+  });
+
+  describe("confirmação do repasse", () => {
+    function payoutService(transferStatus: string) {
+      const batch = {
+        id: "lote-1",
+        status: "PROCESSANDO",
+        attempts: 0,
+        amount: 47.97,
+        currency: "brl",
+        resellerId: "rev-1",
+        asaasTransferId: null,
+        reseller: { stripeAccountId: null, asaasWalletId: "wal_1" },
+        commissions: [{ id: "com-1" }],
+      };
+      const payoutBatch = {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue(batch),
+        update: jest.fn().mockResolvedValue({}),
+      };
+      const commissionLedger = { updateMany: jest.fn().mockResolvedValue({ count: 1 }) };
+      const prisma = {
+        payoutBatch,
+        commissionLedger,
+        $transaction: jest.fn(async (operation: any) => operation({ payoutBatch, commissionLedger })),
+      };
+      const asaas = {
+        isConfigured: jest.fn().mockReturnValue(true),
+        findTransferByReference: jest.fn().mockResolvedValue(null),
+        transferToWallet: jest.fn().mockResolvedValue({ id: "tra-1", status: transferStatus, value: 47.97 }),
+      };
+      const service = buildBillingService({ prisma, asaas });
+      service.onModuleDestroy();
+      return { service, payoutBatch, commissionLedger, asaas, prisma };
+    }
+
+    it("não marca comissão como paga quando a transferência ainda está pendente", async () => {
+      const { service, payoutBatch, commissionLedger, prisma } = payoutService("PENDING");
+
+      const result = await (service as never as Record<string, any>).executePayoutBatch("lote-1");
+
+      expect(result).toEqual(expect.objectContaining({ transferId: "tra-1", processing: true }));
+      expect(commissionLedger.updateMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(payoutBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ asaasTransferId: "tra-1" }) }),
+      );
+    });
+
+    it("marca como paga somente depois de o Asaas devolver DONE", async () => {
+      const { service, commissionLedger, prisma } = payoutService("DONE");
+
+      const result = await (service as never as Record<string, any>).executePayoutBatch("lote-1");
+
+      expect(result).toEqual(expect.objectContaining({ transferId: "tra-1" }));
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(commissionLedger.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "PAGA", asaasTransferId: "tra-1" }) }),
+      );
+    });
+
+    it("não devolve o saldo quando a resposta do Asaas se perde após o envio", async () => {
+      const { service, asaas, payoutBatch, commissionLedger, prisma } = payoutService("PENDING");
+      asaas.transferToWallet.mockRejectedValueOnce(new Error("conexão interrompida"));
+
+      await expect((service as never as Record<string, any>).executePayoutBatch("lote-1")).rejects.toThrow(/não confirmou/i);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(commissionLedger.updateMany).not.toHaveBeenCalled();
+      expect(payoutBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ nextAttemptAt: expect.any(Date) }) }),
+      );
     });
   });
 });

@@ -1457,12 +1457,24 @@ model CommissionLedger {
   subscriptionId   String
   stripeInvoiceId  String?          @unique
   asaasPaymentId   String?          @unique
+  // Referência interna para ajustes financeiros. Diferente dos IDs dos
+  // provedores, ela permite registrar uma recuperação de estorno sem fingir
+  // que o ajuste é uma nova cobrança Asaas/Stripe.
+  externalReference String?         @unique
   grossAmount      Decimal          @db.Decimal(10, 2)
   commissionRate   Decimal          @db.Decimal(5, 4)
   commissionAmount Decimal          @db.Decimal(10, 2)
   currency         String           @default("brl")
   status           CommissionStatus @default(DISPONIVEL)
+  // `settledAt` só é preenchido quando o dinheiro entrou no saldo da conta
+  // raiz. `PAYMENT_CONFIRMED` libera o produto, mas ainda não autoriza saque.
+  settledAt        DateTime?
   availableAt      DateTime?
+  // A tela diferencia compensação, reserva e contestação sem expor jargão do
+  // provedor. O motivo não altera o histórico financeiro, apenas explica por
+  // que uma comissão ainda não está disponível.
+  holdReason       String?          @db.VarChar(191)
+  availabilityNotifiedAt DateTime?
   paidAt           DateTime?
   stripeTransferId String?
   asaasTransferId  String?
@@ -1475,6 +1487,7 @@ model CommissionLedger {
   payoutBatch  PayoutBatch?       @relation(fields: [payoutBatchId], references: [id])
 
   @@index([resellerId, status])
+  @@index([status, settledAt])
   @@index([stripeTransferId])
   @@index([payoutBatchId])
 }

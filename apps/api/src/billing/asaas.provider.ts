@@ -242,8 +242,8 @@ export class AsaasProvider {
 
   /**
    * Transferência entre a conta raiz e uma subconta. Segundo a documentação do
-   * Asaas, é gratuita e imediata — é o que permite manter a carência de 7 dias
-   * da comissão sem custo, em vez de repassar no ato pelo split.
+   * Asaas, costuma ser gratuita e imediata. Ainda assim, quem chama deve
+   * respeitar o status devolvido e só concluir o saque em `DONE`.
    */
   async transferToWallet(params: {
     value: number;

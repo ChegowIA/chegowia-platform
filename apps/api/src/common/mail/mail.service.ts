@@ -117,6 +117,37 @@ export class MailService {
     });
   }
 
+  /**
+   * Aviso transacional ao revendedor: o valor só é comunicado depois de a
+   * compensação estar concluída e a comissão efetivamente entrar em saque.
+   * Falhas neste e-mail nunca podem desfazer nem atrasar o lançamento contábil.
+   */
+  async sendResellerCommissionAvailable(input: {
+    email: string;
+    name: string;
+    amount: number;
+    companyName: string;
+  }) {
+    const amount = new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    }).format(input.amount);
+    const url = `${this.appUrl()}/revendedor/financeiro`;
+    await this.send({
+      to: input.email,
+      subject: "Sua comissão está disponível para saque",
+      text: `Olá, ${input.name}. A comissão de ${amount} referente a ${input.companyName} foi compensada e está disponível para saque no ChegowIA. Acesse ${url} para consultar o extrato e solicitar o repasse.`,
+      html: this.template(
+        "Comissão disponível para saque",
+        `Olá, ${escapeHtml(input.name)}. A comissão de <strong>${escapeHtml(amount)}</strong> referente a <strong>${escapeHtml(input.companyName)}</strong> foi compensada pelo Asaas e já está disponível para saque.`,
+        "Abrir financeiro",
+        url,
+        "A disponibilidade acontece somente após o pagamento da mensalidade ser recebido pelo Asaas.",
+      ),
+      developmentUrl: url,
+    });
+  }
+
   async verifyConnection() {
     if (!this.transporter) return process.env.NODE_ENV !== "production";
     return this.transporter.verify();
