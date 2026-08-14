@@ -195,6 +195,43 @@ describe("webhook do Asaas", () => {
     );
   });
 
+  it("libera a comissão quando uma antecipação automática é efetivamente creditada", async () => {
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      findPayment: jest.fn().mockResolvedValue({
+        ...cobrancaPaga.payment,
+        status: "CONFIRMED",
+      }),
+    };
+    const { service, commissionLedger } = build({ asaas });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      id: "evt_anticipacao_1",
+      event: "RECEIVABLE_ANTICIPATION_CREDITED",
+      anticipation: { payment: "pay_1", status: "CREDITED", netValue: 150 },
+    });
+
+    expect(asaas.findPayment).toHaveBeenCalledWith("pay_1");
+    expect(commissionLedger.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "DISPONIVEL", settledAt: expect.any(Date) }),
+      }),
+    );
+  });
+
+  it("não antecipa comissão quando o Asaas ainda não creditou o recebível", async () => {
+    const asaas = { isConfigured: jest.fn().mockReturnValue(true), findPayment: jest.fn() };
+    const { service, commissionLedger } = build({ asaas });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      event: "RECEIVABLE_ANTICIPATION_PENDING",
+      anticipation: { payment: "pay_1", status: "PENDING" },
+    });
+
+    expect(asaas.findPayment).not.toHaveBeenCalled();
+    expect(commissionLedger.upsert).not.toHaveBeenCalled();
+  });
+
   it("só baixa o saque quando chega TRANSFER_DONE", async () => {
     const { service, payoutBatch, commissionLedger } = build();
     payoutBatch.findUnique.mockResolvedValue({ id: "lote-1", status: "PROCESSANDO" });

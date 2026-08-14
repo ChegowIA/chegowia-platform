@@ -8,15 +8,20 @@ que o cliente tenha solicitado.
 
 ## Regras que não dependem do provedor
 
-- Comissão do revendedor: 30% do valor efetivamente recebido em cada cobrança.
+- Comissão do revendedor: 30% da mensalidade do plano efetivamente recebida em
+  cada cobrança. Consumo de IA e WhatsApp não entra na base de comissão.
 - Benefício do cliente indicado: 15% nas três primeiras mensalidades.
 - O vínculo do revendedor é gravado em `ClientSubscription` e não possui endpoint
   de troca. Mudança de plano preserva `resellerId` e `referralCode`.
 - A empresa e o primeiro ADMIN só são criados após o pagamento confirmado.
-- A comissão nasce **pendente** e só fica disponível após `COMMISSION_HOLD_DAYS`
-  (padrão 7), prazo que cobre estorno e contestação. Por isso não usamos split
-  automático, que repassaria no ato.
-- Estorno ou chargeback marca a comissão como `ESTORNADA`.
+- A comissão só nasce depois dos sete dias completos de teste e começa
+  **pendente**. Ela fica disponível quando o Asaas informa que recebeu o valor
+  na conta raiz ou que uma antecipação automática elegível foi creditada.
+  `ASAAS_COMMISSION_POST_RECEIPT_HOLD_DAYS`, se configurada, acrescenta uma
+  reserva opcional após esse crédito. Não usamos split automático, que
+  repassaria antes dessa conciliação.
+- Estorno final marca a comissão como `ESTORNADA`; chargeback suspende o saldo
+  até a decisão do Asaas.
 - Repasse mínimo de R$ 10,00 e um lote em processamento por vez.
 - O consumo variável (IA e WhatsApp) do período de teste entra na fatura de
   ativação de quem assina; quem não assina não paga nada. A promessa está escrita
@@ -32,7 +37,7 @@ BILLING_PROVIDER=ASAAS
 ASAAS_API_KEY=$aact_prod_...        # a chave carrega o ambiente
 ASAAS_WEBHOOK_TOKEN=...             # mínimo 20 caracteres
 ASAAS_SUBACCOUNT_ENCRYPTION_KEY=    # opcional, 32 bytes em base64 ou hex
-COMMISSION_HOLD_DAYS=7
+ASAAS_COMMISSION_POST_RECEIPT_HOLD_DAYS=0 # reserva opcional após o crédito
 ASAAS_USAGE_MIN_CHARGE=5              # mínimo para emitir cobrança de consumo
 API_PUBLIC_URL=https://DOMINIO-DA-API
 ```
@@ -52,9 +57,13 @@ homologação marcando `NODE_ENV=production` é recusado no boot, a menos que
    - Token de autenticação: o mesmo valor de `ASAAS_WEBHOOK_TOKEN`
    - Versão da API: v3, envio com fila ativada
    - Eventos, em Cobranças: `PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`,
-     `PAYMENT_OVERDUE`, `PAYMENT_REFUNDED`, `PAYMENT_CHARGEBACK_REQUESTED`,
-     `PAYMENT_RECEIVED_IN_CASH_UNDONE`, `PAYMENT_DELETED`
+     `PAYMENT_RECEIVED_IN_CASH`, `PAYMENT_OVERDUE`, `PAYMENT_REFUNDED`,
+     `PAYMENT_CHARGEBACK_REQUESTED`, `PAYMENT_RECEIVED_IN_CASH_UNDONE`,
+     `PAYMENT_DELETED`
    - Eventos, em Assinaturas: `SUBSCRIPTION_DELETED`, `SUBSCRIPTION_INACTIVATED`
+   - Eventos, em Antecipações: `RECEIVABLE_ANTICIPATION_CREDITED`
+   - Eventos, em Transferências: `TRANSFER_DONE`, `TRANSFER_FAILED`,
+     `TRANSFER_CANCELLED`
 
    Os nomes são comparados como string exata: um evento marcado no painel com
    nome que o código não conhece chega e é descartado em silêncio. As etapas
@@ -77,6 +86,12 @@ um marcar assinatura como paga.
 - **Liberação de acesso**: só pelo webhook. `PAYMENT_CONFIRMED` e
   `PAYMENT_RECEIVED` ativam; o evento é gravado na fila (`StripeEvent`, com
   `provider = ASAAS`) e reprocessado até dar certo, de forma idempotente.
+- **Antecipação automática de cartão**: quando o Asaas enviar
+  `RECEIVABLE_ANTICIPATION_CREDITED`, a API busca a cobrança relacionada e
+  libera a comissão elegível sem esperar o ciclo normal de recebimento. Segundo
+  a documentação do Asaas, o valor antecipado é creditado em até dois dias úteis;
+  isso vale apenas para recebíveis de cartão elegíveis, não para Pix, boleto ou
+  uma promessa genérica de liquidação.
 - **Consumo variável**: **nunca vira cobrança separada.** É somado à cobrança da
   mensalidade, uma fatura só com o valor total. Sem mensalidade em aberto onde
   somar, o consumo continua `PENDENTE` e entra na cobrança seguinte — acumular é
@@ -118,8 +133,10 @@ transferências, e uma `apiKey` que só existe naquele instante — ela é guard
 cifrada quando `ASAAS_SUBACCOUNT_ENCRYPTION_KEY` está configurada, e descartada
 caso contrário. Perdê-la não impede o repasse: a transferência sai da conta raiz.
 
-A transferência entre a conta raiz e a subconta é gratuita e imediata, o que
-permite manter a carência de 7 dias sem custo.
+A transferência entre a conta raiz e a subconta costuma ser rápida, mas o
+sistema só marca o lote como pago depois de `TRANSFER_DONE`. Ao solicitar o
+repasse, o revendedor vê e recebe por e-mail o prazo operacional de **até 5 dias
+úteis**; se o Asaas concluir antes, o painel é atualizado antes do prazo.
 
 Como a API do Asaas não aceita chave de idempotência, duas proteções foram
 adicionadas: antes de criar a subconta, uma falha é seguida de consulta por
@@ -160,6 +177,8 @@ stripe listen \
 
 - https://docs.asaas.com/reference/criar-nova-assinatura
 - https://docs.asaas.com/docs/webhook-para-cobrancas
+- https://docs.asaas.com/docs/webhook-para-antecipacoes
+- https://docs.asaas.com/changelog/endpoint-para-configurar-antecipação-automática-de-cobranças-de-cartão-de-crédito
 - https://docs.asaas.com/reference/criar-subconta
 - https://docs.asaas.com/reference/transferir-para-conta-asaas
 - https://docs.stripe.com/billing/subscriptions/webhooks

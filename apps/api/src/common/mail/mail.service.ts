@@ -148,6 +148,38 @@ export class MailService {
     });
   }
 
+  /**
+   * Confirma o pedido do saque sem prometer a velocidade eventual da
+   * transferência. A baixa contábil continua dependente do status final do
+   * Asaas, não deste aviso.
+   */
+  async sendResellerPayoutRequested(input: {
+    email: string;
+    name: string;
+    amount: number;
+    maxBusinessDays: number;
+  }) {
+    const amount = new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    }).format(input.amount);
+    const url = `${this.appUrl()}/revendedor/financeiro`;
+    const prazo = `até ${input.maxBusinessDays} dias úteis`;
+    await this.send({
+      to: input.email,
+      subject: "Solicitação de repasse recebida",
+      text: `Olá, ${input.name}. Recebemos sua solicitação de repasse de ${amount}. O prazo para concluir o recebimento é de ${prazo}. Se o Asaas concluir antes, o status será atualizado no seu financeiro. Acompanhe em ${url}.`,
+      html: this.template(
+        "Solicitação de repasse recebida",
+        `Olá, ${escapeHtml(input.name)}. Recebemos sua solicitação de repasse de <strong>${escapeHtml(amount)}</strong>. Você receberá o valor em <strong>${escapeHtml(prazo)}</strong>. Se o Asaas concluir antes, atualizaremos o status no seu financeiro.`,
+        "Acompanhar repasse",
+        url,
+        "O prazo é contado em dias úteis e a confirmação depende do processamento final do Asaas.",
+      ),
+      developmentUrl: url,
+    });
+  }
+
   async verifyConnection() {
     if (!this.transporter) return process.env.NODE_ENV !== "production";
     return this.transporter.verify();

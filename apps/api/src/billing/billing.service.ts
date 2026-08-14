@@ -54,6 +54,8 @@ const ASAAS_USAGE_RECHECK_INTERVAL_MS = 60_000;
 const ASAAS_PAYOUT_RECHECK_INTERVAL_MS = 60_000;
 /** Regra comercial única: 30% da mensalidade do plano pertence ao revendedor. */
 const RESELLER_COMMISSION_RATE = 0.30;
+/** Prazo máximo comunicado ao revendedor depois que ele pede o repasse. */
+const RESELLER_PAYOUT_NOTICE_BUSINESS_DAYS = 5;
 /**
  * `CONFIRMED` autoriza a assinatura, mas não é saldo disponível. Para saque do
  * revendedor só importam os estados em que o Asaas efetivamente recebeu o
@@ -600,7 +602,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   async requestPayout(userId: string) {
     const asaas = this.billingProvider() === "ASAAS";
     if (!asaas && !this.stripe) throw new BadRequestException("Stripe Connect ainda não configurado.");
-    const reseller = await this.db().resellerProfile.findUnique({ where: { userId } });
+    const reseller = await this.db().resellerProfile.findUnique({
+      where: { userId },
+      include: { user: { select: { name: true, email: true } } },
+    });
     if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
 
     if (asaas) {
@@ -658,7 +663,37 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       return created;
     }, { isolationLevel: "Serializable" });
 
-    return this.executePayoutBatch(batch.id);
+    const result = await this.executePayoutBatch(batch.id);
+    // Esta chamada nasce em primeiro plano; `null` só é permitido no caminho
+    // de worker em segundo plano. Ainda assim, protegemos a borda para nunca
+    // responder sucesso sem uma situação explícita do repasse.
+    if (!result) {
+      throw new BadGatewayException("Não foi possível confirmar a solicitação de repasse.");
+    }
+    const notice = result.processing
+      ? `Solicitação registrada. Seu repasse será concluído em até ${RESELLER_PAYOUT_NOTICE_BUSINESS_DAYS} dias úteis. Você pode acompanhar o status nesta página.`
+      : "Repasse concluído e registrado no seu extrato.";
+
+    // O e-mail é uma confirmação de atendimento, não uma etapa financeira: uma
+    // indisponibilidade do provedor de e-mail jamais pode cancelar um repasse
+    // já criado com segurança no Asaas.
+    if (reseller.user?.email && this.mail?.sendResellerPayoutRequested) {
+      try {
+        await this.mail.sendResellerPayoutRequested({
+          email: reseller.user.email,
+          name: reseller.user.name,
+          amount: Number(result.amount),
+          maxBusinessDays: RESELLER_PAYOUT_NOTICE_BUSINESS_DAYS,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Não foi possível enviar o aviso de solicitação de repasse ${batch.id}.`,
+          this.stripeErrorForLog(error),
+        );
+      }
+    }
+
+    return { ...result, notice };
   }
 
   private async executePayoutBatch(batchId: string, background = false) {
@@ -3025,6 +3060,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       await this.applyAsaasTransferEvent(payload);
       return;
     }
+    if (evento.startsWith("RECEIVABLE_ANTICIPATION_")) {
+      await this.applyAsaasAnticipationEvent(payload);
+      return;
+    }
     const cobranca = payload?.payment;
     if (!cobranca?.id) return;
 
@@ -3099,6 +3138,35 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+  }
+
+  /**
+   * A antecipação automática é um crédito real na conta raiz, mas o Asaas a
+   * informa em um webhook separado de `PAYMENT_RECEIVED`. Buscar a cobrança
+   * pelo ID recebido evita confiar no payload parcial e reaproveita as mesmas
+   * validações de assinatura, teste e idempotência da conciliação normal.
+   */
+  private async applyAsaasAnticipationEvent(payload: any) {
+    if (String(payload?.event ?? "") !== "RECEIVABLE_ANTICIPATION_CREDITED") return;
+    const paymentId = String(payload?.anticipation?.payment ?? "").trim();
+    if (!paymentId) {
+      this.logger.warn("Antecipação creditada sem cobrança relacionada; evento ignorado.");
+      return;
+    }
+    if (!this.asaas.isConfigured()) {
+      this.logger.warn(`Antecipação ${paymentId} recebida sem integração Asaas configurada.`);
+      return;
+    }
+
+    // Se a consulta falhar por indisponibilidade, deixamos o processamento do
+    // evento falhar para a fila tentar novamente. `null`, por outro lado,
+    // significa que a cobrança não existe mais e não deve criar comissão.
+    const cobranca = await this.asaas.findPayment(paymentId);
+    if (!cobranca) {
+      this.logger.warn(`Antecipação creditada para cobrança ${paymentId} não encontrada no Asaas.`);
+      return;
+    }
+    await this.activateFromAsaasPayment(cobranca, { fundsReceived: true });
   }
 
   /**

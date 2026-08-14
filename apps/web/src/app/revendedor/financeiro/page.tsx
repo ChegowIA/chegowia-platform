@@ -14,6 +14,7 @@ export default function FinanceiroPage() {
   const queryClient=useQueryClient();
   const [form,setForm]=useState<ContaForm>(CONTA_VAZIA);
   const [abrirForm,setAbrirForm]=useState(false);
+  const [payoutNotice,setPayoutNotice]=useState<string | null>(null);
   const {data}=useQuery({queryKey:["reseller-dashboard"],queryFn:async()=>(await api.get("/resellers/me/dashboard")).data as any});
   const {data:connectStatus,error:statusError,isFetching:checkingStatus}=useQuery({queryKey:["reseller-connect-status"],queryFn:async()=>(await api.get("/billing/reseller/connect/status")).data as any,refetchInterval:(query)=>query.state.data?.status==="EM_ANALISE"?15_000:false});
   const asaas=connectStatus?.provider==="ASAAS";
@@ -30,7 +31,14 @@ export default function FinanceiroPage() {
       window.location.href=x.url;
     },
   });
-  const payout=useMutation({mutationFn:async()=> (await api.post("/billing/reseller/payout")).data,onSuccess:()=>queryClient.invalidateQueries({queryKey:["reseller-dashboard"]})});
+  const payout=useMutation({
+    mutationFn:async()=> (await api.post("/billing/reseller/payout")).data as {notice?:string},
+    onMutate:()=>setPayoutNotice(null),
+    onSuccess:(result)=>{
+      setPayoutNotice(result?.notice??"Solicitação registrada. Seu repasse será concluído em até 5 dias úteis.");
+      queryClient.invalidateQueries({queryKey:["reseller-dashboard"]});
+    },
+  });
   useEffect(()=>{if(new URLSearchParams(window.location.search).has("stripe")){queryClient.invalidateQueries({queryKey:["reseller-connect-status"]});queryClient.invalidateQueries({queryKey:["reseller-dashboard"]});window.history.replaceState(null,"",window.location.pathname)}},[queryClient]);
   const statusCopy:Record<string,{title:string;detail:string;tone:string}>={NAO_CONFIGURADO:{title:"Integração indisponível",detail:"A conta de recebimento ainda não foi configurada pelo ChegowIA.",tone:"bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/30 dark:border-rose-900/60 dark:text-rose-300"},NAO_INICIADO:{title:"Cadastro ainda não iniciado",detail:asaas?"Preencha seus dados para abrir a conta que recebe as comissões.":"Configure os dados de recebimento para solicitar seus repasses.",tone:"bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/60 dark:text-amber-300"},INCOMPLETO:{title:"Cadastro incompleto",detail:"Existem dados obrigatórios pendentes no Stripe. Continue o cadastro para liberar os repasses.",tone:"bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/60 dark:text-amber-300"},EM_ANALISE:{title:"Dados em análise",detail:"O Stripe recebeu seus dados e está verificando a conta. Atualizaremos este status automaticamente.",tone:"bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/30 dark:border-sky-900/60 dark:text-sky-300"},ATIVO:{title:"Conta pronta para receber",detail:asaas?"Sua conta Asaas está ativa e habilitada para receber as comissões.":"Sua conta está verificada e habilitada para repasses.",tone:"bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900/60 dark:text-emerald-300"}};
   const current=statusCopy[connectStatus?.status]??statusCopy.NAO_INICIADO;
@@ -49,7 +57,7 @@ export default function FinanceiroPage() {
   };
   const mostrarForm=asaas&&connectStatus?.requiresForm&&abrirForm;
   return <div className="space-y-6">
-    <div><p className="text-xs font-black uppercase tracking-wide text-brand-700 dark:text-brand-300">Financeiro</p><h1 className="mt-1 text-3xl font-black">Saldo e recebimentos</h1><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">O saldo só é liberado depois de a mensalidade ser efetivamente recebida pelo Asaas — confirmação de pagamento ainda não é saldo disponível.</p></div>
+    <div><p className="text-xs font-black uppercase tracking-wide text-brand-700 dark:text-brand-300">Financeiro</p><h1 className="mt-1 text-3xl font-black">Saldo e recebimentos</h1><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">O saldo só é liberado quando a mensalidade é efetivamente creditada pelo Asaas, seja por recebimento normal ou antecipação automática. A confirmação de pagamento ainda não é saldo disponível.</p></div>
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><div className="rounded-[28px] bg-emerald-600 p-6 text-white shadow-xl"><p className="text-xs font-bold uppercase text-emerald-100">Disponível para saque</p><p className="mt-3 text-4xl font-black">{formatCurrency(available)}</p><p className="mt-3 text-xs text-emerald-100">Comissões já compensadas</p></div><div className="rounded-[28px] bg-sky-700 p-6 text-white shadow-xl"><p className="text-xs font-bold uppercase text-sky-100">Em compensação</p><p className="mt-3 text-4xl font-black">{formatCurrency(balances.pendingSettlement??0)}</p><p className="mt-3 text-xs text-sky-100">Pagamento confirmado, aguardando crédito</p></div><div className="rounded-[28px] bg-violet-700 p-6 text-white shadow-xl"><p className="text-xs font-bold uppercase text-violet-100">Em repasse</p><p className="mt-3 text-4xl font-black">{formatCurrency(balances.processing??0)}</p><p className="mt-3 text-xs text-violet-100">Transferência sendo confirmada</p></div><div className="rounded-[28px] bg-slate-950 p-6 text-white"><p className="text-xs font-bold uppercase text-slate-400">Já recebido</p><p className="mt-3 text-4xl font-black">{formatCurrency(balances.paid??0)}</p><p className="mt-3 text-xs text-slate-400">Transferências concluídas</p></div></div>
     <section className="rounded-3xl border border-sky-200 bg-sky-50 p-6 dark:border-sky-900/60 dark:bg-sky-950/20"><p className="text-xs font-black uppercase tracking-wide text-sky-800 dark:text-sky-300">Regra de comissão</p><h2 className="mt-1 text-xl font-black text-slate-900 dark:text-white">30% recorrente, com liberação segura</h2><div className="mt-4 grid gap-3 text-sm leading-6 text-slate-600 md:grid-cols-4 dark:text-slate-300"><div><strong className="block text-slate-900 dark:text-white">1. Teste</strong>{policy?.trialDays??7} dias completos, sem comissão.</div><div><strong className="block text-slate-900 dark:text-white">2. Mensalidade</strong>O cliente precisa pagar a mensalidade do plano.</div><div><strong className="block text-slate-900 dark:text-white">3. Compensação</strong>O Asaas precisa creditar o valor na conta raiz.</div><div><strong className="block text-slate-900 dark:text-white">4. Saque</strong>Os 30% entram aqui e podem ser solicitados.</div></div><p className="mt-4 text-xs leading-5 text-sky-900/75 dark:text-sky-200/80">{policy?.appliesTo??"Somente a mensalidade do plano entra na comissão."} {policy?.settlementNotice??"A compensação depende da forma de pagamento escolhida pelo cliente."}</p>{Number(balances.underReview??0)!==0&&<p className="mt-3 rounded-xl bg-amber-100 px-3 py-2 text-xs font-bold text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">Há {formatCurrency(balances.underReview)} temporariamente em análise de contestação. Esse valor não pode ser sacado até o Asaas concluir o caso.</p>}</section>
     <section className="rounded-3xl border border-slate-200 bg-white p-6 dark:bg-slate-900 dark:border-slate-800">
@@ -76,8 +84,9 @@ export default function FinanceiroPage() {
             </Button>
             {connectStatus?.ready&&<Button variant="secondary" disabled={!canRequestPayout} isLoading={payout.isPending} onClick={()=>payout.mutate()}>{canRequestPayout?"Solicitar repasse":"Saldo mínimo de R$ 10,00"}</Button>}
           </div>}
+      {payoutNotice&&<p className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm font-medium text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200">{payoutNotice}</p>}
       {(connect.error||payout.error||statusError)&&<p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">{apiErrorMessage(connect.error||payout.error||statusError)}</p>}
-      <p className="mt-3 text-xs text-slate-400">Repasse mínimo: R$ 10,00. A transferência sai do saldo disponível da conta raiz para sua conta Asaas vinculada; em geral é imediata, mas o painel só a marca como recebida após confirmação.</p>
+      <p className="mt-3 text-xs text-slate-400">Repasse mínimo: R$ 10,00. A transferência sai do saldo disponível da conta raiz para sua conta Asaas vinculada. Depois da solicitação, considere o prazo máximo de até 5 dias úteis para a confirmação do recebimento; se concluir antes, o painel será atualizado.</p>
     </section>
   </div>;
 }

@@ -222,6 +222,43 @@ describe("recebimento do revendedor pelo Asaas", () => {
       const { service } = build();
       await expect(service.requestPayout("user-1")).rejects.toThrow(/conta de recebimento/);
     });
+
+    it("confirma o prazo máximo de cinco dias úteis no painel e por e-mail", async () => {
+      const resellerProfile = {
+        findUnique: jest.fn().mockResolvedValue({ ...revendedor, asaasWalletId: "wal_1" }),
+      };
+      const commissionLedger = { updateMany: jest.fn().mockResolvedValue({ count: 0 }) };
+      const payoutBatch = {
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn().mockResolvedValue({ id: "lote-1" }),
+      };
+      const prisma = {
+        resellerProfile,
+        commissionLedger,
+        $transaction: jest.fn(async (operation: any) => operation({ payoutBatch, commissionLedger: {
+          findMany: jest.fn().mockResolvedValue([{ id: "com-1", commissionAmount: 47.97 }]),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        } })),
+      };
+      const mail = { sendResellerPayoutRequested: jest.fn().mockResolvedValue(undefined) };
+      const service = buildBillingService({ prisma, asaas: { isConfigured: jest.fn().mockReturnValue(true) }, mail });
+      service.onModuleDestroy();
+      (service as never as Record<string, any>).executePayoutBatch = jest.fn().mockResolvedValue({
+        transferId: "tra-1",
+        amount: 47.97,
+        count: 1,
+        processing: true,
+      });
+
+      const result = await service.requestPayout("user-1");
+
+      expect(result).toEqual(expect.objectContaining({ processing: true, notice: expect.stringMatching(/até 5 dias úteis/) }));
+      expect(mail.sendResellerPayoutRequested).toHaveBeenCalledWith(expect.objectContaining({
+        email: "ana@rev.com.br",
+        amount: 47.97,
+        maxBusinessDays: 5,
+      }));
+    });
   });
 
   describe("confirmação do repasse", () => {
