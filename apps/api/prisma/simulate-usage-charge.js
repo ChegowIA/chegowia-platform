@@ -75,6 +75,22 @@ function reais(valor) {
   return `R$ ${Number(valor).toFixed(2).replace(".", ",")}`;
 }
 
+// `dueDate` no Asaas é uma data no fuso brasileiro. `toISOString()` muda para
+// amanhã depois das 21h em São Paulo, fazendo um teste de vencimento parecer em
+// dia; montamos a data pelas partes para não depender do timezone do container.
+function dataSaoPaulo(data = new Date()) {
+  const partes = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(data);
+  const valores = Object.fromEntries(
+    partes.filter((parte) => parte.type !== "literal").map((parte) => [parte.type, parte.value]),
+  );
+  return `${valores.year}-${valores.month}-${valores.day}`;
+}
+
 /**
  * Encerra a assinatura atual no Asaas e cria outra vencendo hoje.
  *
@@ -101,7 +117,7 @@ async function renovarAssinatura(assinatura, mensalidadeInformada) {
     console.log("2. Nenhuma assinatura anterior no Asaas para encerrar.");
   }
 
-  const hoje = new Date().toISOString().slice(0, 10);
+  const hoje = dataSaoPaulo();
   const nova = await asaas("/subscriptions", {
     method: "POST",
     body: {
@@ -166,7 +182,7 @@ async function vencerCobranca(cobranca, valorIa) {
   }
   console.log(`Consumo somado: a cobrança está em ${reais(atual.value)}.`);
 
-  const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const ontem = dataSaoPaulo(new Date(Date.now() - 24 * 60 * 60 * 1000));
   await asaas(`/payments/${encodeURIComponent(cobranca.id)}`, { method: "POST", body: { dueDate: ontem } });
   console.log(`Vencimento movido para ${ontem}.`);
 
@@ -255,7 +271,7 @@ async function main() {
   if (renovar) {
     cobranca = await renovarAssinatura(assinatura, arg("mensalidade", null));
   } else if (assinatura.asaasSubscriptionId) {
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = dataSaoPaulo();
     try {
       await asaas(`/subscriptions/${encodeURIComponent(assinatura.asaasSubscriptionId)}`, {
         method: "POST",

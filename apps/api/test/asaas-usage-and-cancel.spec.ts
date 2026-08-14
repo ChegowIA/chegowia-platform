@@ -271,6 +271,26 @@ describe("reconciliação de consumo sincronizado no Asaas", () => {
     });
   });
 
+  it("baixa imediatamente ao abrir o painel, sem esperar a idade do lançamento", async () => {
+    const { service, usageLedger, asaas } = build({ id: "pay_apagada", status: "RECEIVED", value: 6 });
+
+    await (service as never as Record<string, any>).reconcileAsaasUsagePayments("empresa-1", {
+      bypassInterval: true,
+    });
+
+    expect(asaas.findPayment).toHaveBeenCalledWith("pay_apagada");
+    expect(usageLedger.findMany.mock.calls[0][0].where).toEqual(expect.objectContaining({
+      companyId: "empresa-1",
+      status: "SINCRONIZADO",
+      asaasPaymentId: { not: null },
+    }));
+    expect(usageLedger.findMany.mock.calls[0][0].where.updatedAt).toBeUndefined();
+    expect(usageLedger.updateMany).toHaveBeenCalledWith({
+      where: { asaasPaymentId: "pay_apagada", status: "SINCRONIZADO" },
+      data: { status: "FATURADO" },
+    });
+  });
+
   it("não mexe em consumo cuja cobrança segue existindo", async () => {
     const { service, usageLedger } = build({ id: "pay_apagada", status: "PENDING", value: 6 });
 

@@ -70,6 +70,7 @@ type Invoice = {
   dueDate: string | null;
   status: string;
   paid: boolean;
+  payable?: boolean;
   url: string | null;
 };
 
@@ -77,6 +78,7 @@ type BillingData = {
   status: BillingStatus;
   provider?: "ASAAS" | "STRIPE" | null;
   manageable?: boolean;
+  payableInvoice?: { id: string; url: string; dueDate: string | null; value: number } | null;
   accessRestricted?: boolean;
   activationAvailable?: boolean;
   currentPeriodEnd?: string | null;
@@ -104,7 +106,10 @@ export default function SubscriptionPage() {
     },
   });
   const { data: invoiceData } = useQuery({
-    queryKey: ["company-invoices"],
+    // O mesmo lançamento muda de "próxima" para pagável quando o status da
+    // assinatura vira inadimplente; incluir o estado evita manter a tabela em
+    // cache com o rótulo/ação do ciclo anterior.
+    queryKey: ["company-invoices", data?.status],
     queryFn: async () => (await api.get("/billing/company/invoices")).data as { provider: string | null; invoices: Invoice[] },
     enabled: Boolean(data?.manageable),
   });
@@ -114,8 +119,8 @@ export default function SubscriptionPage() {
   const abrirFatura = (url: string) => {
     setFaturaAberta(url);
     const aba = window.open(url, "_blank", "noopener,noreferrer");
-    if (!aba) return;
     queryClient.invalidateQueries({ queryKey: ["company-billing-status"] });
+    if (!aba) return;
   };
   const portal = useMutation({
     mutationFn: async () => (await api.post("/billing/company/portal")).data as { url: string },
@@ -143,6 +148,8 @@ export default function SubscriptionPage() {
     },
   });
   const viaAsaas = data?.provider === "ASAAS";
+  const canPayAsaas = viaAsaas && Boolean(data?.payableInvoice?.url);
+  const canOpenStripePortal = !viaAsaas && Boolean(data?.manageable);
 
   const statusMeta: Record<BillingStatus, { label: string; tone: string; detail: string }> = {
     [SubscriptionStatus.ATIVA]: {
@@ -247,10 +254,12 @@ export default function SubscriptionPage() {
             <Button className="mt-4 w-full sm:w-auto" isLoading={activate.isPending} onClick={() => activate.mutate()}>Gerar fatura e liberar tudo</Button>
             {faturaAberta && <p className="mt-3 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura abriu em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui para abrir</a>. O acesso é liberado automaticamente após o pagamento.</p>}
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}
-          </div> : data?.manageable ? <>
-            <Button className="mt-6" isLoading={portal.isPending} onClick={() => portal.mutate()}>{viaAsaas ? "Abrir fatura em aberto" : "Abrir portal seguro do Stripe"}</Button>
-            {viaAsaas && <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">A forma de pagamento é escolhida na própria fatura: Pix, boleto ou cartão, a cada mês.</p>}
+          </div> : canPayAsaas ? <>
+            <Button className="mt-6" onClick={() => data?.payableInvoice?.url && abrirFatura(data.payableInvoice.url)}>Pagar fatura pendente</Button>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">A forma de pagamento é escolhida na própria fatura: Pix, boleto ou cartão.</p>
             {faturaAberta && <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Abrimos a fatura em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui</a>.</p>}
+          </> : canOpenStripePortal ? <>
+            <Button className="mt-6" isLoading={portal.isPending} onClick={() => portal.mutate()}>Abrir portal seguro do Stripe</Button>
             {portal.error && <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">{apiErrorMessage(portal.error)}</p>}
           </> : null}
         </>}
@@ -321,18 +330,18 @@ export default function SubscriptionPage() {
       {data?.manageable ? <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <p className="text-xs font-black uppercase tracking-[.14em] text-brand-700 dark:text-brand-300">Faturas</p>
         <h2 className="mt-1 text-xl font-black text-slate-950 dark:text-slate-100">Cobranças e forma de pagamento</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{viaAsaas ? "Histórico de cobranças desta assinatura. A que está aguardando pagamento é a mesma que abre no botão acima — não é uma cobrança extra. Em cada fatura você escolhe entre Pix, boleto ou cartão." : "As faturas ficam disponíveis no portal seguro do Stripe."}</p>
+        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{viaAsaas ? "Histórico e próximas cobranças desta assinatura. Apenas uma fatura pendente fica disponível para pagamento; a próxima mensalidade aparece aqui só como previsão." : "As faturas ficam disponíveis no portal seguro do Stripe."}</p>
 
         <div className="mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-100 dark:divide-slate-800 dark:border-slate-800">
           {invoiceData?.invoices?.length ? invoiceData.invoices.map((invoice) => (
             <div key={invoice.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatCurrency(invoice.value)}{!invoice.paid && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">Fatura atual</span>}</p>
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatCurrency(invoice.value)}{!invoice.paid && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black uppercase text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{invoice.payable ? "Fatura pendente" : "Próxima fatura"}</span>}</p>
                 <p className="text-xs text-slate-500 dark:text-slate-400">{invoice.dueDate ? `Vencimento ${formatDate(invoice.dueDate)}` : "Sem vencimento"} · {invoiceStatusLabel(invoice.status)}</p>
               </div>
               {invoice.paid
                 ? <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-black text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">Paga</span>
-                : invoice.url ? <a className="shrink-0 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-black text-white dark:bg-slate-100 dark:text-slate-900" href={invoice.url} target="_blank" rel="noopener noreferrer">Pagar</a> : null}
+                : invoice.payable && invoice.url ? <a className="shrink-0 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-black text-white dark:bg-slate-100 dark:text-slate-900" href={invoice.url} target="_blank" rel="noopener noreferrer">Pagar</a> : null}
             </div>
           )) : <div className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">Nenhuma cobrança emitida até agora.</div>}
         </div>

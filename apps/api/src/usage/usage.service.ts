@@ -212,13 +212,49 @@ export class UsageService {
     return { start, end };
   }
 
-  async getMonthlySummary(companyId: string, options?: { reference?: Date; baseMonthlyPrice?: number }) {
-    const { start, end } = this.monthRange(options?.reference);
-    const entries = await this.db().usageLedger.findMany({
+  /**
+   * A rota de consumo pode continuar consultando um mês civil, mas a página de
+   * cobrança precisa consultar o ciclo contratado (por exemplo, 13/08 a
+   * 13/09). Centralizar a escolha aqui evita que cada consumidor monte uma
+   * janela levemente diferente e cobre/oculte eventos na troca do ciclo.
+   */
+  private summaryRange(options?: { reference?: Date; periodStart?: Date | null; periodEnd?: Date | null }) {
+    const start = options?.periodStart ? new Date(options.periodStart) : null;
+    const end = options?.periodEnd ? new Date(options.periodEnd) : null;
+    if (
+      start
+      && end
+      && !Number.isNaN(start.getTime())
+      && !Number.isNaN(end.getTime())
+      && start.getTime() < end.getTime()
+    ) {
+      return { start, end };
+    }
+    return this.monthRange(options?.reference);
+  }
+
+  async getMonthlySummary(companyId: string, options?: {
+    reference?: Date;
+    baseMonthlyPrice?: number;
+    periodStart?: Date | null;
+    periodEnd?: Date | null;
+    /** Mantém o histórico na rota de uso; a fatura atual omite o que já foi quitado. */
+    includePaid?: boolean;
+  }) {
+    const { start, end } = this.summaryRange(options);
+    const recordedEntries = await this.db().usageLedger.findMany({
       where: { companyId, createdAt: { gte: start, lt: end } },
       include: { usageRate: true },
       orderBy: { createdAt: "desc" },
     });
+    // Uma linha FATURADO continua no razão e no histórico de faturas, mas não
+    // pode reaparecer no extrato do ciclo em curso. Sem esse filtro, um
+    // pagamento confirmado zerava o topo da tela e deixava IA/WhatsApp como se
+    // ainda fossem consumo atual — exatamente a divergência que confunde quem
+    // acabou de pagar.
+    const entries = options?.includePaid === false
+      ? recordedEntries.filter((item: any) => item.status !== UsageLedgerStatus.FATURADO)
+      : recordedEntries;
     const grouped = new Map<UsageMetric, {
       quantity: number;
       providerAmount: number;
@@ -239,8 +275,7 @@ export class UsageService {
 
     // Consumo que já entrou em alguma cobrança e o subconjunto já quitado. As
     // três situações são diferentes: PENDENTE ainda entra na próxima fatura,
-    // SINCRONIZADO está em uma fatura aberta e FATURADO não pode voltar a compor
-    // o valor devido na tela.
+    // SINCRONIZADO está em uma fatura aberta e FATURADO é histórico quitado.
     let invoicedAmount = 0;
     let paidAmount = 0;
     for (const item of entries) {
@@ -347,8 +382,8 @@ export class UsageService {
     const variablePending = roundMoneyPrecision(Math.max(0, variableTotal - invoicedAmount));
     const variablePendingCharged = roundToCents(variablePending);
     // `SINCRONIZADO` ainda está em uma fatura que pode não ter sido paga; só
-    // `FATURADO` sai do saldo devido. Assim não cobramos duas vezes o que já foi
-    // confirmado pelo provedor, mas mantemos visível uma fatura aberta.
+    // `FATURADO` sai do saldo devido. A página de cobrança pede
+    // `includePaid: false`, portanto ali esse histórico nem volta como item.
     const variableOutstanding = roundMoneyPrecision(Math.max(0, variableTotal - paidAmount));
     const variableOutstandingCharged = roundToCents(variableOutstanding);
     const baseMonthlyPrice = Number(options?.baseMonthlyPrice ?? 0);
@@ -411,15 +446,48 @@ export class UsageService {
   }
 
   /**
-   * Resumo do mês corrente e do anterior, para a tela de assinatura conseguir
-   * mostrar a variação — que é o que responde "por que a conta subiu?".
+   * Resumo do ciclo atual e do anterior para a tela de assinatura. Quando há
+   * período de assinatura, ele prevalece ao mês-calendário: pagar no dia 13
+   * começa um novo extrato no dia 13, sem reapresentar o que quitou no dia 12.
    */
-  async getBillingUsage(companyId: string, baseMonthlyPrice: number) {
+  async getBillingUsage(
+    companyId: string,
+    baseMonthlyPrice: number,
+    period?: { periodStart?: Date | null; periodEnd?: Date | null },
+  ) {
+    const periodStart = period?.periodStart ? new Date(period.periodStart) : null;
+    const periodEnd = period?.periodEnd ? new Date(period.periodEnd) : null;
+    const hasSubscriptionPeriod = Boolean(
+      periodStart
+      && periodEnd
+      && !Number.isNaN(periodStart.getTime())
+      && !Number.isNaN(periodEnd.getTime())
+      && periodStart.getTime() < periodEnd.getTime(),
+    );
+    if (hasSubscriptionPeriod && periodStart && periodEnd) {
+      const previousStart = new Date(periodStart);
+      previousStart.setMonth(previousStart.getMonth() - 1);
+      const [current, previous] = await Promise.all([
+        this.getMonthlySummary(companyId, {
+          baseMonthlyPrice,
+          periodStart,
+          periodEnd,
+          includePaid: false,
+        }),
+        this.getMonthlySummary(companyId, {
+          baseMonthlyPrice,
+          periodStart: previousStart,
+          periodEnd: periodStart,
+          includePaid: false,
+        }),
+      ]);
+      return { ...current, previous };
+    }
     const now = new Date();
     const previousReference = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const [current, previous] = await Promise.all([
-      this.getMonthlySummary(companyId, { baseMonthlyPrice }),
-      this.getMonthlySummary(companyId, { baseMonthlyPrice, reference: previousReference }),
+      this.getMonthlySummary(companyId, { baseMonthlyPrice, includePaid: false }),
+      this.getMonthlySummary(companyId, { baseMonthlyPrice, reference: previousReference, includePaid: false }),
     ]);
     return { ...current, previous };
   }

@@ -390,4 +390,49 @@ describe("resumo mensal para a tela de assinatura", () => {
     expect(result.previous).toBeDefined();
     expect(new Date(result.previous.periodStart).getTime()).toBeLessThan(new Date(result.periodStart).getTime());
   });
+
+  it("zera no extrato do ciclo o consumo já quitado e preserva somente o uso novo", async () => {
+    const inicio = new Date("2026-08-13T12:00:00.000Z");
+    const fim = new Date("2026-09-13T12:00:00.000Z");
+    const prisma = {
+      usageLedger: {
+        findMany: jest
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              source: UsageSource.IA,
+              metric: UsageMetric.IA_TOKENS_SAIDA,
+              quantity: 1_000,
+              providerAmount: 0.42,
+              billableAmount: 1.2,
+              usageRateId: "r-antiga",
+              usageRate: rate,
+              status: "FATURADO",
+            },
+            {
+              source: UsageSource.IA,
+              metric: UsageMetric.IA_TOKENS_SAIDA,
+              quantity: 100,
+              providerAmount: 0.042,
+              billableAmount: 0.12,
+              usageRateId: "r-nova",
+              usageRate: rate,
+              status: "PENDENTE",
+            },
+          ])
+          .mockResolvedValueOnce([]),
+      },
+    };
+    const service = new UsageService(prisma as never);
+
+    const summary = await service.getBillingUsage("empresa-1", 0, {
+      periodStart: inicio,
+      periodEnd: fim,
+    });
+
+    expect(summary.variableTotal).toBeCloseTo(0.12, 2);
+    expect(summary.variablePaid).toBe(0);
+    expect(summary.items).toEqual([expect.objectContaining({ quantity: 100, billableAmount: 0.12 })]);
+    expect(prisma.usageLedger.findMany.mock.calls[0][0].where.createdAt).toEqual({ gte: inicio, lt: fim });
+  });
 });

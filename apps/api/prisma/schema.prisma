@@ -1430,7 +1430,14 @@ model ClientSubscription {
   referralCode            String?
   referralLockedAt        DateTime?
   discountEndsAt          DateTime?
+  // Limites explícitos do ciclo já pago. O início impede que o painel use mês
+  // civil e reapresente consumo da fatura anterior depois da baixa.
+  currentPeriodStart      DateTime?
   currentPeriodEnd        DateTime?
+  // Identifica a cobrança Asaas que concedeu o período atual. Além de tornar
+  // PAYMENT_CONFIRMED/RECEIVED idempotentes, evita que um estorno antigo corte
+  // o acesso de uma renovação posterior.
+  asaasPeriodPaymentId    String?
   canceledAt              DateTime?
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt

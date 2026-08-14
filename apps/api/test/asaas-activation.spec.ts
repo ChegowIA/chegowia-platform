@@ -249,6 +249,17 @@ describe("conciliação de mensalidade vencida", () => {
     process.env = { ...ORIGINAL_ENV };
   });
 
+  function dataSaoPaulo(offsetDays = 0) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000));
+    const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  }
+
   function build(cobrancas: any[]) {
     const clientSubscription = {
       findMany: jest.fn().mockResolvedValue([
@@ -282,7 +293,7 @@ describe("conciliação de mensalidade vencida", () => {
   });
 
   it("não bloqueia quem só tem cobrança em aberto dentro do prazo", async () => {
-    const amanha = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const amanha = dataSaoPaulo(1);
     const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5, dueDate: amanha }]);
 
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
@@ -293,7 +304,7 @@ describe("conciliação de mensalidade vencida", () => {
   it("bloqueia por data passada mesmo sem o rótulo OVERDUE do Asaas", async () => {
     // O rótulo só aparece na virada do dia deles. Esperar por ele deixaria o
     // bloqueio na agenda do Asaas, e a cobrança já está vencida de fato.
-    const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const ontem = dataSaoPaulo(-1);
     const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5, dueDate: ontem }]);
 
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
@@ -306,7 +317,7 @@ describe("conciliação de mensalidade vencida", () => {
   it("não bloqueia no próprio dia do vencimento", async () => {
     // Vencer é ter passado do prazo, não chegar nele: quem paga no dia continua
     // com a operação de pé.
-    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const hoje = dataSaoPaulo();
     const { service, clientSubscription } = build([{ id: "pay_1", status: "PENDING", value: 5, dueDate: hoje }]);
 
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
@@ -314,8 +325,22 @@ describe("conciliação de mensalidade vencida", () => {
     expect(clientSubscription.update).not.toHaveBeenCalled();
   });
 
+  it("compara a data no fuso de São Paulo mesmo quando UTC já virou o dia", () => {
+    jest.useFakeTimers().setSystemTime(new Date("2026-08-14T01:30:00.000Z"));
+    const { service } = build([]);
+    const internal = service as never as Record<string, (payment: any) => boolean>;
+    try {
+      // 01:30 UTC ainda é 13/08 em São Paulo. Uma cobrança de 13/08 vence
+      // hoje; a de 12/08 já venceu. `toISOString()` inverteria essa leitura.
+      expect(internal.isAsaasPaymentOverdue({ status: "PENDING", dueDate: "2026-08-13" })).toBe(false);
+      expect(internal.isAsaasPaymentOverdue({ status: "PENDING", dueDate: "2026-08-12" })).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("não bloqueia por cobrança já paga com vencimento antigo", async () => {
-    const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const ontem = dataSaoPaulo(-1);
     const { service, clientSubscription } = build([{ id: "pay_1", status: "RECEIVED", value: 5, dueDate: ontem }]);
 
     await (service as never as Record<string, any>).reconcileOverdueAsaasPayments();
@@ -386,9 +411,11 @@ describe("revalidação de vencimento ao abrir o painel", () => {
         data: { status: "INADIMPLENTE" },
       }),
     );
-    expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: "INADIMPLENTE", accessRestricted: true });
-    expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 5);
+    // A consulta também procura uma renovação já paga sem webhook e confirma
+    // que a cobrança futura não é uma fatura pagável agora.
+    expect(asaas.listSubscriptionPayments).toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "INADIMPLENTE", accessRestricted: true, payableInvoice: null });
+    expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 5, expect.any(Object));
   });
 
   it("não reapresenta a mensalidade de um período ativo já pago", async () => {
@@ -419,7 +446,10 @@ describe("revalidação de vencimento ao abrir o painel", () => {
     const result = await service.companyBillingStatus("empresa-1");
 
     expect(result).toMatchObject({ status: "ATIVA", accessRestricted: false });
-    expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 0);
+    expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 0, expect.objectContaining({
+      periodStart: expect.any(Date),
+      periodEnd: subscription.currentPeriodEnd,
+    }));
     expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
   });
 
@@ -433,6 +463,7 @@ describe("revalidação de vencimento ao abrir o painel", () => {
       "processPendingPayouts",
       "reconcileExpiredSubscriptionPeriods",
       "reconcilePendingAsaasPayments",
+      "reconcilePaidAsaasRenewals",
       "reconcileOverdueAsaasPayments",
       "reconcileOrphanUsage",
       "syncVariableUsageToAsaas",
@@ -446,6 +477,7 @@ describe("revalidação de vencimento ao abrir o painel", () => {
 
     expect(internal.reconcileExpiredSubscriptionPeriods).toHaveBeenCalledTimes(1);
     expect(internal.reconcilePendingAsaasPayments).toHaveBeenCalledTimes(1);
+    expect(internal.reconcilePaidAsaasRenewals).toHaveBeenCalledTimes(1);
     expect(internal.reconcileOverdueAsaasPayments).toHaveBeenCalledTimes(1);
     expect(internal.syncVariableUsageToAsaas).toHaveBeenCalledTimes(1);
   });

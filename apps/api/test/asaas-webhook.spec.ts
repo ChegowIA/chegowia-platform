@@ -99,6 +99,25 @@ describe("webhook do Asaas", () => {
     );
   });
 
+  it("não estende o ciclo de novo quando CONFIRMED e RECEIVED chegam para o mesmo pagamento", async () => {
+    const { service, clientSubscription } = build({
+      assinatura: {
+        ...assinatura,
+        status: "ATIVA",
+        asaasPeriodPaymentId: "pay_1",
+        currentPeriodStart: new Date("2026-08-13T12:00:00.000Z"),
+        currentPeriodEnd: new Date("2026-09-13T12:00:00.000Z"),
+      },
+    });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_RECEIVED",
+    });
+
+    expect(clientSubscription.update).not.toHaveBeenCalled();
+  });
+
   it("registra a comissão pendente, respeitando a carência", async () => {
     const { service, commissionLedger } = build();
 
@@ -137,6 +156,50 @@ describe("webhook do Asaas", () => {
     expect(clientSubscription.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: "INADIMPLENTE" } }),
     );
+  });
+
+  it("devolve ao razão o consumo já quitado quando há estorno ou chargeback", async () => {
+    const { service, usageLedger } = build();
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_REFUNDED",
+    });
+
+    expect(usageLedger.updateMany).toHaveBeenCalledWith({
+      where: {
+        asaasPaymentId: "pay_1",
+        status: { in: ["SINCRONIZADO", "FATURADO"] },
+      },
+      data: { status: "PENDENTE", asaasPaymentId: null },
+    });
+  });
+
+  it("reabre o consumo na mesma fatura quando dinheiro em espécie é desfeito", async () => {
+    const { service, usageLedger } = build();
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_RECEIVED_IN_CASH_UNDONE",
+    });
+
+    expect(usageLedger.updateMany).toHaveBeenCalledWith({
+      where: { asaasPaymentId: "pay_1", status: "FATURADO" },
+      data: { status: "SINCRONIZADO" },
+    });
+  });
+
+  it("não bloqueia uma renovação mais nova por estorno de fatura antiga", async () => {
+    const { service, clientSubscription } = build({
+      assinatura: { ...assinatura, status: "ATIVA", asaasPeriodPaymentId: "pay_ciclo_novo" },
+    });
+
+    await (service as never as Record<string, any>).applyAsaasEvent({
+      ...cobrancaPaga,
+      event: "PAYMENT_REFUNDED",
+    });
+
+    expect(clientSubscription.update).not.toHaveBeenCalled();
   });
 
   it("marca inadimplência no vencimento", async () => {

@@ -48,6 +48,8 @@ const FREE_TRIAL_DAYS = 7;
  * vencimento em uma espera de quinze minutos.
  */
 const ASAAS_OVERDUE_RECHECK_INTERVAL_MS = 60_000;
+/** A baixa do consumo é rechecada rapidamente quando não houver webhook. */
+const ASAAS_USAGE_RECHECK_INTERVAL_MS = 60_000;
 /**
  * Situações em que o dinheiro já é nosso. `CONFIRMED` é pagamento reconhecido com
  * saldo ainda a liberar e `RECEIVED` é saldo disponível — para liberar acesso os
@@ -802,9 +804,38 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       return {
         status: "SEM_ASSINATURA",
         manageable: false,
+        payableInvoice: null,
         accessRestricted: enforcementEnabled,
         usage,
       };
+    }
+    // Se uma renovação foi paga mas o webhook não chegou, a revalidação do
+    // próprio painel recupera o período antes de aplicar o bloqueio local.
+    // Isso cobre recorrência, não só a fatura inicial guardada em
+    // `asaasPaymentId`.
+    const needsAsaasRenewalCheck = Boolean(
+      subscription.asaasSubscriptionId
+      && (
+        subscription.asaasPaymentId
+        || subscription.status === SubscriptionStatus.INADIMPLENTE
+        || (subscription.status === SubscriptionStatus.ATIVA
+          && subscription.currentPeriodEnd
+          && subscription.currentPeriodEnd.getTime() <= now.getTime())
+      ),
+    );
+    if (needsAsaasRenewalCheck) {
+      const renewal = await this.reconcileAsaasPaidSubscription(subscription);
+      if (renewal?.currentPeriodEnd) {
+        subscription = {
+          ...subscription,
+          status: SubscriptionStatus.ATIVA,
+          currentPeriodStart: renewal.currentPeriodStart,
+          currentPeriodEnd: renewal.currentPeriodEnd,
+          asaasPeriodPaymentId: renewal.paymentId,
+          asaasPaymentId: null,
+          canceledAt: null,
+        };
+      }
     }
     // `currentPeriodEnd` é a nossa fonte de verdade para o direito de acesso.
     // Não aguardamos webhook, cache ou uma consulta externa para fechar um
@@ -826,14 +857,22 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       (subscription.status === SubscriptionStatus.ATIVA && !paidCurrentPeriod)
       || subscription.status === SubscriptionStatus.INADIMPLENTE
     ) ? monthlyPrice : 0;
-    const usage = await this.usage.getBillingUsage(
-      companyId,
-      baseMonthlyPriceDue,
-    );
+    // Um webhook pode falhar depois de o Asaas confirmar o pagamento. A tela
+    // reconcilia a própria empresa antes de calcular o extrato, para que um
+    // lançamento quitado não fique visível até a próxima rodada do worker.
+    if (subscription.asaasSubscriptionId && this.asaas.isConfigured?.()) {
+      await this.reconcileAsaasUsagePayments(companyId, { bypassInterval: true });
+    }
+    const usagePeriod = this.subscriptionUsagePeriod(subscription);
+    const usage = usagePeriod
+      ? await this.usage.getBillingUsage(companyId, baseMonthlyPriceDue, usagePeriod)
+      : await this.usage.getBillingUsage(companyId, baseMonthlyPriceDue);
+    const payableInvoice = await this.payableAsaasInvoice(subscription);
     return {
       status: subscription.status,
       provider: subscription.asaasSubscriptionId ? "ASAAS" : subscription.stripeCustomerId ? "STRIPE" : null,
       manageable: Boolean(subscription.stripeCustomerId || subscription.asaasSubscriptionId),
+      payableInvoice,
       accessRestricted: trialExpired || (enforcementEnabled && !trialActive && subscription.status !== SubscriptionStatus.ATIVA),
       activationAvailable: trialExpired,
       trial: subscription.trialStartedAt || subscription.trialEndsAt
@@ -849,6 +888,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
               : 0,
           }
         : null,
+      currentPeriodStart: subscription.currentPeriodStart,
       currentPeriodEnd: subscription.currentPeriodEnd,
       canceledAt: subscription.canceledAt,
       plan: {
@@ -871,7 +911,16 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const subscription = await this.db().clientSubscription.findUnique({ where: { companyId } });
     // A assinatura manda no provedor, não a variável de ambiente: quem contratou
     // no Stripe continua sendo gerenciado lá mesmo depois da migração.
-    if (subscription?.asaasSubscriptionId) return this.companyPortalAsaas(subscription);
+    if (subscription?.asaasSubscriptionId) {
+      // A interface esconde o botão em dia, mas a rota também precisa ser
+      // segura contra chamada direta. Esta consulta revalida o vencimento antes
+      // de devolver qualquer link do Asaas.
+      const status = await this.companyBillingStatus(companyId);
+      if (status.status !== SubscriptionStatus.INADIMPLENTE) {
+        throw new BadRequestException("Não há fatura pendente para pagar. Sua assinatura está em dia.");
+      }
+      return this.companyPortalAsaas({ ...subscription, status: status.status });
+    }
     if (!this.stripe) throw new BadRequestException("Stripe ainda não configurado.");
     if (!subscription?.stripeCustomerId) {
       throw new BadRequestException("Esta empresa ainda não possui uma assinatura gerenciável no Stripe.");
@@ -895,14 +944,66 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * própria fatura, então é para ela que mandamos.
    */
   private async companyPortalAsaas(subscription: any) {
-    const cobrancas = await this.asaas.listSubscriptionPayments(subscription.asaasSubscriptionId);
-    const emAberto = cobrancas.find((item) => ["PENDING", "OVERDUE", "AWAITING_RISK_ANALYSIS"].includes(item.status));
-    if (!emAberto?.invoiceUrl) {
+    const emAberto = await this.payableAsaasInvoice(subscription);
+    if (!emAberto?.url) {
       throw new BadRequestException(
-        "Não há cobrança em aberto no momento. A próxima fatura fica disponível quando o ciclo virar.",
+        "Não há fatura pendente disponível para pagamento no momento.",
       );
     }
-    return { url: emAberto.invoiceUrl };
+    return { url: emAberto.url };
+  }
+
+  /**
+   * Uma fatura PENDING futura é a próxima mensalidade, não uma dívida atual.
+   * O link de pagamento só existe quando há inadimplência e a cobrança venceu
+   * ou vence hoje; assim não se oferece uma cobrança nova para quem está em dia
+   * nem se força quem já está bloqueado a esperar a virada da meia-noite.
+   */
+  private async payableAsaasInvoice(subscription: {
+    status: SubscriptionStatus;
+    asaasSubscriptionId?: string | null;
+  }) {
+    if (
+      subscription.status !== SubscriptionStatus.INADIMPLENTE
+      || !subscription.asaasSubscriptionId
+      || !this.asaas.isConfigured?.()
+    ) return null;
+    try {
+      const cobrancas = await this.asaas.listSubscriptionPayments(subscription.asaasSubscriptionId);
+      const vencida = cobrancas
+        .filter((item) => this.isAsaasPaymentPayableNow(item))
+        .sort((left, right) => String(left.dueDate ?? "").localeCompare(String(right.dueDate ?? "")))[0];
+      if (!vencida?.invoiceUrl) return null;
+      return {
+        id: vencida.id,
+        url: vencida.invoiceUrl,
+        dueDate: vencida.dueDate ?? null,
+        value: Number(vencida.value ?? 0),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Não foi possível localizar a fatura vencida da assinatura ${subscription.asaasSubscriptionId}.`,
+        this.stripeErrorForLog(error),
+      );
+      return null;
+    }
+  }
+
+  /** Janela da fatura: o ciclo contratado, não o mês do calendário. */
+  private subscriptionUsagePeriod(subscription: {
+    currentPeriodStart?: Date | string | null;
+    currentPeriodEnd?: Date | string | null;
+  }) {
+    const end = subscription.currentPeriodEnd ? new Date(subscription.currentPeriodEnd) : null;
+    if (!end || Number.isNaN(end.getTime())) return undefined;
+    let start = subscription.currentPeriodStart ? new Date(subscription.currentPeriodStart) : null;
+    if (!start || Number.isNaN(start.getTime()) || start.getTime() >= end.getTime()) {
+      // Registros legados têm apenas o fim. Inferir um mês evita um backfill
+      // mutável em produção e mantém o extrato no ciclo correto.
+      start = new Date(end);
+      start.setMonth(start.getMonth() - 1);
+    }
+    return { periodStart: start, periodEnd: end };
   }
 
   /**
@@ -913,7 +1014,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   async companyInvoices(companyId: string) {
     const subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
-      select: { asaasSubscriptionId: true, stripeCustomerId: true },
+      select: { asaasSubscriptionId: true, stripeCustomerId: true, status: true },
     });
     if (subscription?.asaasSubscriptionId) {
       const cobrancas = await this.asaas
@@ -930,6 +1031,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           dueDate: item.dueDate,
           status: item.status,
           paid: ["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"].includes(item.status),
+          // A tabela é histórico. Só a fatura que de fato regulariza uma
+          // inadimplência ganha ação de pagamento; a próxima aparece apenas
+          // como previsão para não induzir uma cobrança antecipada.
+          payable: subscription.status === SubscriptionStatus.INADIMPLENTE && this.isAsaasPaymentPayableNow(item),
           url: item.invoiceUrl ?? null,
         })),
       };
@@ -946,6 +1051,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         dueDate: item.created ? new Date(item.created * 1000).toISOString().slice(0, 10) : null,
         status: item.status ?? "",
         paid: item.status === "paid",
+        payable: item.status !== "paid",
         url: item.hosted_invoice_url ?? null,
       })),
     };
@@ -1080,7 +1186,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     const customerId = await this.ensureAsaasCustomer(subscription, admin);
     const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
-    const hoje = new Date().toISOString().slice(0, 10);
+    // `dueDate` do Asaas é data civil no Brasil, não instante UTC. Depois das
+    // 21h BRT, `toISOString()` já é amanhã e criaria uma fatura futura sem o
+    // empresário ter pedido isso.
+    const hoje = this.saoPauloCalendarDate();
 
     const created = await this.asaas.createSubscription({
       customer: customerId,
@@ -1470,10 +1579,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!subscription) return;
     const stripeCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
     const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+    let currentPeriodStart: Date | null = null;
     let currentPeriodEnd: Date | null = null;
     if (this.stripe && stripeSubscriptionId) {
       try {
-        currentPeriodEnd = this.subscriptionPeriodEnd(await this.stripe.subscriptions.retrieve(stripeSubscriptionId));
+        const remoteSubscription = await this.stripe.subscriptions.retrieve(stripeSubscriptionId);
+        currentPeriodStart = this.subscriptionPeriodStart(remoteSubscription);
+        currentPeriodEnd = this.subscriptionPeriodEnd(remoteSubscription);
       } catch (error) {
         this.logger.warn(`Não foi possível consultar o período da nova assinatura ${stripeSubscriptionId}: ${this.stripeErrorForLog(error)}`);
       }
@@ -1487,6 +1599,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           stripeCustomerId: stripeCustomerId ?? subscription.stripeCustomerId,
           stripeSubscriptionId: stripeSubscriptionId ?? subscription.stripeSubscriptionId,
           stripeCheckoutSessionId: null,
+          currentPeriodStart,
           currentPeriodEnd,
           canceledAt: null,
           // O desconto por indicação começa com a assinatura paga, não no teste.
@@ -1771,6 +1884,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.processPendingStripeEvents();
       await this.processPendingPayouts();
+      // Recupere primeiro uma renovação Asaas já paga cujo webhook se perdeu.
+      // Só depois disso a data local pode transformar o acesso em inadimplência.
+      if (this.asaas.isConfigured()) {
+        await this.reconcilePendingAsaasPayments();
+        await this.reconcilePaidAsaasRenewals();
+      }
       // O fim do período é suficiente para interromper o acesso, mesmo se o
       // provedor externo estiver fora, com webhook atrasado ou sem configuração
       // temporariamente. Cada provedor ainda concilia pagamento em seguida.
@@ -1780,7 +1899,6 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       // dois lados; deixar de conciliar uma delas porque o padrão mudou abre
       // justamente a brecha de cobrança que esta rotina existe para fechar.
       if (this.asaas.isConfigured()) {
-        await this.reconcilePendingAsaasPayments();
         await this.reconcileOverdueAsaasPayments();
         await this.reconcileOrphanUsage();
         await this.syncVariableUsageToAsaas();
@@ -1963,6 +2081,97 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+  }
+
+  /**
+   * A primeira ativação guarda `asaasPaymentId`, mas as renovações recorrentes
+   * não. Se o webhook de uma renovação falhar, ainda assim precisamos recuperar
+   * uma fatura já paga antes de manter a empresa bloqueada pelo fim do ciclo.
+   */
+  private async reconcileAsaasPaidSubscription(assinatura: {
+    companyId: string;
+    status: SubscriptionStatus;
+    asaasSubscriptionId?: string | null;
+    asaasPaymentId?: string | null;
+    asaasPeriodPaymentId?: string | null;
+    currentPeriodEnd?: Date | string | null;
+  }) {
+    if (!assinatura.asaasSubscriptionId || !this.asaas.isConfigured?.()) return null;
+    try {
+      const cobrancas = await this.asaas.listSubscriptionPayments(assinatura.asaasSubscriptionId);
+      const paga = cobrancas
+        .filter((item) => !item.deleted && ASAAS_PAID_STATUSES.includes(item.status))
+        .sort((left, right) => String(right.dueDate ?? "").localeCompare(String(left.dueDate ?? "")))[0];
+      if (!paga || !this.asaasPaymentCanRenewPeriod(assinatura, paga)) return null;
+      const activation = await this.activateFromAsaasPayment({
+        ...paga,
+        subscription: paga.subscription ?? assinatura.asaasSubscriptionId,
+      });
+      if (!activation) return null;
+      await this.markAsaasUsagePaid(paga.id);
+      this.logger.warn(
+        `Conciliação: pagamento ${paga.id} da empresa ${assinatura.companyId} renovou o ciclo sem webhook.`,
+      );
+      return activation;
+    } catch (error) {
+      this.logger.error(
+        `Não foi possível conciliar renovação Asaas da empresa ${assinatura.companyId}.`,
+        this.stripeErrorForLog(error),
+      );
+      return null;
+    }
+  }
+
+  /** Evita que uma fatura antiga paga reabra indevidamente um ciclo vencido. */
+  private asaasPaymentCanRenewPeriod(
+    assinatura: {
+      status?: SubscriptionStatus;
+      asaasPaymentId?: string | null;
+      asaasPeriodPaymentId?: string | null;
+      currentPeriodEnd?: Date | string | null;
+    },
+    cobranca: AsaasPayment,
+  ) {
+    if (assinatura.asaasPeriodPaymentId) {
+      return assinatura.asaasPeriodPaymentId !== cobranca.id || assinatura.status !== SubscriptionStatus.ATIVA;
+    }
+    if (assinatura.asaasPaymentId === cobranca.id) return true;
+    const fimDoPeriodo = assinatura.currentPeriodEnd ? new Date(assinatura.currentPeriodEnd) : null;
+    if (!fimDoPeriodo || Number.isNaN(fimDoPeriodo.getTime())) return false;
+    const vencimento = String(cobranca.dueDate ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) return false;
+    const fimLocal = this.saoPauloCalendarDate(fimDoPeriodo);
+    // A renovação paga tem vencimento do ciclo que acabou de encerrar (ou
+    // posterior em caso de pagamento antecipado), nunca anterior a ele.
+    return vencimento >= fimLocal;
+  }
+
+  /** Recupera renovações pagas sem depender de o cliente abrir a página. */
+  private async reconcilePaidAsaasRenewals() {
+    const subscriptionsModel = this.db().clientSubscription;
+    if (!subscriptionsModel?.findMany) return;
+    const subscriptions = await subscriptionsModel.findMany({
+      where: {
+        asaasSubscriptionId: { not: null },
+        OR: [
+          { status: SubscriptionStatus.INADIMPLENTE },
+          { status: SubscriptionStatus.ATIVA, currentPeriodEnd: { lt: new Date() } },
+        ],
+      },
+      select: {
+        companyId: true,
+        status: true,
+        asaasSubscriptionId: true,
+        asaasPaymentId: true,
+        asaasPeriodPaymentId: true,
+        currentPeriodEnd: true,
+      },
+      take: 25,
+    }).catch((error: unknown) => {
+      this.logger.error("Não foi possível listar renovações Asaas para conciliação.", this.stripeErrorForLog(error));
+      return [];
+    });
+    for (const assinatura of subscriptions) await this.reconcileAsaasPaidSubscription(assinatura);
   }
 
   /**
@@ -2250,33 +2459,62 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!["PENDING", "AWAITING_RISK_ANALYSIS"].includes(cobranca.status)) return false;
     const vencimento = String(cobranca.dueDate ?? "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) return false;
-    // `en-CA` formata como AAAA-MM-DD, que compara direto como texto.
-    const hoje = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const hoje = this.saoPauloCalendarDate();
     return vencimento < hoje;
+  }
+
+  /**
+   * Quando o nosso período já encerrou no meio do dia, a cobrança do próprio
+   * dia precisa poder ser paga imediatamente. Ela ainda não é "vencida" para o
+   * Asaas, mas é a única cobrança que regulariza o acesso agora.
+   */
+  private isAsaasPaymentPayableNow(cobranca: { status: string; dueDate?: string | null }) {
+    if (this.isAsaasPaymentOverdue(cobranca)) return true;
+    if (!["PENDING", "AWAITING_RISK_ANALYSIS"].includes(cobranca.status)) return false;
+    return String(cobranca.dueDate ?? "") === this.saoPauloCalendarDate();
+  }
+
+  /**
+   * `toLocaleDateString("en-CA")` não é estável entre builds do Node: alguns
+   * runtimes devolvem MM/DD/AAAA. Montamos a data pelas partes para comparar o
+   * vencimento Asaas (AAAA-MM-DD) sem depender da localidade do container.
+   */
+  private saoPauloCalendarDate(date = new Date()) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const values = Object.fromEntries(
+      parts
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+    return `${values.year}-${values.month}-${values.day}`;
   }
 
   /**
    * Consumo sincronizado cuja confirmação não chegou pelo webhook.
    *
-   * Apagar a cobrança no painel dispara `PAYMENT_DELETED`, mas com o webhook
-   * desativado esse aviso não chega — e o lançamento fica órfão: contado como
-   * cobrado, sem cobrança nenhuma atrás. Ele nunca entraria em fatura e o valor
-   * se perderia em silêncio.
-   *
-   * Além de devolver uma cobrança apagada à fila, confirma como FATURADO a que
-   * já foi paga. Isso fecha a janela em que o pagamento foi processado mas o
-   * webhook caiu depois de ativar a assinatura.
-   *
-   * Só olha lançamento parado há mais de dez minutos, para não disputar com a
-   * rotina que acabou de marcá-lo.
+   * No worker só olhamos lançamentos com pelo menos dez minutos para não
+   * disputar a rotina que acabou de somá-los à fatura. No painel, a empresa
+   * consultada pula essa espera: pagou, a baixa precisa aparecer na próxima
+   * resposta HTTP, não uma hora depois.
    */
-  private async reconcileOrphanUsage() {
+  private async reconcileAsaasUsagePayments(
+    companyId?: string,
+    options: { bypassInterval?: boolean } = {},
+  ) {
+    const ledger = this.db().usageLedger;
+    if (!ledger?.findMany || !this.asaas.isConfigured?.()) return;
     const limite = new Date(Date.now() - 10 * 60_000);
-    const candidatos = await this.db().usageLedger.findMany({
+    const candidatos = await ledger.findMany({
       where: {
+        ...(companyId ? { companyId } : {}),
         status: UsageLedgerStatus.SINCRONIZADO,
         asaasPaymentId: { not: null },
-        updatedAt: { lt: limite },
+        ...(options.bypassInterval ? {} : { updatedAt: { lt: limite } }),
       },
       select: { asaasPaymentId: true },
       distinct: ["asaasPaymentId"],
@@ -2287,11 +2525,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     });
 
     for (const item of candidatos) {
-      const paymentId = String(item.asaasPaymentId);
-      // Cobrança que segue aberta continua existindo: reconferir a cada rodada
-      // só gastaria chamada. Cobrança quitada é exceção, pois precisa encerrar
-      // o lançamento no nosso razão caso o webhook tenha falhado.
-      if (!this.deveConferir(`orfao:${paymentId}`, 60 * 60_000)) continue;
+      const paymentId = String(item.asaasPaymentId ?? "");
+      if (!paymentId) continue;
+      // A tela força a leitura atual; o worker continua limitado para não
+      // consultar a mesma cobrança a cada 5s enquanto ela está em aberto.
+      if (
+        !options.bypassInterval
+        && !this.deveConferir(`orfao:${paymentId}`, ASAAS_USAGE_RECHECK_INTERVAL_MS)
+      ) continue;
       try {
         const cobranca = await this.asaas.findPayment(paymentId);
         if (cobranca && ASAAS_PAID_STATUSES.includes(cobranca.status)) {
@@ -2310,10 +2551,18 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Compatibilidade com a rotina de fundo e com a nomenclatura operacional. */
+  private async reconcileOrphanUsage() {
+    await this.reconcileAsaasUsagePayments();
+  }
+
   /** Cobrança desfeita: o consumo volta para a fila e entra na cobrança seguinte. */
-  private async returnUsageToQueue(paymentId: string) {
+  private async returnUsageToQueue(paymentId: string, options: { includePaid?: boolean } = {}) {
+    const status = options.includePaid
+      ? { in: [UsageLedgerStatus.SINCRONIZADO, UsageLedgerStatus.FATURADO] }
+      : UsageLedgerStatus.SINCRONIZADO;
     const devolvidos = await this.db().usageLedger.updateMany({
-      where: { asaasPaymentId: paymentId, status: UsageLedgerStatus.SINCRONIZADO },
+      where: { asaasPaymentId: paymentId, status },
       data: { status: UsageLedgerStatus.PENDENTE, asaasPaymentId: null },
     }).catch((error: unknown) => {
       this.logger.error(`Não foi possível devolver à fila o consumo da cobrança ${paymentId}.`, this.stripeErrorForLog(error));
@@ -2322,6 +2571,16 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (devolvidos.count) {
       this.logger.log(`Cobrança ${paymentId} apagada: ${devolvidos.count} lançamento(s) de consumo voltaram para a fila.`);
     }
+  }
+
+  /** Dinheiro em espécie desfeito reabre a mesma fatura, sem criar duplicata. */
+  private async reopenUsageOnSameAsaasPayment(paymentId: string) {
+    await this.db().usageLedger.updateMany({
+      where: { asaasPaymentId: paymentId, status: UsageLedgerStatus.FATURADO },
+      data: { status: UsageLedgerStatus.SINCRONIZADO },
+    }).catch((error: unknown) => {
+      this.logger.error(`Não foi possível reabrir o consumo da cobrança ${paymentId}.`, this.stripeErrorForLog(error));
+    });
   }
 
   /** Cobrança paga: o consumo que entrou nela deixa de estar pendente. */
@@ -2544,8 +2803,19 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       || evento === "PAYMENT_CHARGEBACK_REQUESTED"
       || evento === "PAYMENT_RECEIVED_IN_CASH_UNDONE"
     ) {
+      // Estorno/chargeback cancela o recebimento: os itens já baixados voltam
+      // à fila para não desaparecerem. No desfazimento de dinheiro em espécie,
+      // a própria fatura é reaberta; manter o vínculo evita uma segunda cobrança.
+      if (evento === "PAYMENT_RECEIVED_IN_CASH_UNDONE") {
+        await this.reopenUsageOnSameAsaasPayment(String(cobranca.id));
+      } else {
+        await this.returnUsageToQueue(String(cobranca.id), { includePaid: true });
+      }
       await this.reverseAsaasCommission(cobranca);
-      await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE);
+      await this.markAsaasSubscriptionStatus(cobranca, SubscriptionStatus.INADIMPLENTE, {
+        onlyIfCurrentPeriodPayment: true,
+        clearCurrentPeriodPayment: true,
+      });
       return;
     }
     if (evento === "SUBSCRIPTION_DELETED" || evento === "SUBSCRIPTION_INACTIVATED") {
@@ -2582,18 +2852,42 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const assinatura = await this.subscriptionFromAsaas(cobranca);
     if (!assinatura) {
       this.logger.warn(`Cobrança ${cobranca.id} paga no Asaas sem assinatura correspondente.`);
-      return;
+      return null;
     }
 
-    const agora = new Date();
-    // Fim do período pago. Sem isso o painel mostraria período vazio e a
-    // detecção de vencimento não teria por onde filtrar.
-    const fimDoPeriodo = new Date(agora.getFullYear(), agora.getMonth() + 1, agora.getDate());
+    const paymentId = String(cobranca.id);
+    // Asaas envia PAYMENT_CONFIRMED e depois PAYMENT_RECEIVED para a mesma
+    // cobrança. Sem identificar o pagamento que concedeu o ciclo, o segundo
+    // evento deslocaria o vencimento e misturaria ciclos de faturamento.
+    if (assinatura.asaasPeriodPaymentId === paymentId) {
+      // Uma confirmação repetida de uma cobrança que já concedeu este ciclo é
+      // idempotente. Se algum evento antigo marcou inadimplência depois dela,
+      // a situação paga vence e o acesso é restaurado sem estender a vigência.
+      if (assinatura.status !== SubscriptionStatus.ATIVA) {
+        await this.db().clientSubscription.update({
+          where: { id: assinatura.id },
+          data: { status: SubscriptionStatus.ATIVA, canceledAt: null },
+        });
+      }
+      return {
+        paymentId,
+        currentPeriodStart: assinatura.currentPeriodStart ?? null,
+        currentPeriodEnd: assinatura.currentPeriodEnd ?? null,
+      };
+    }
+
+    const inicioDoPeriodo = new Date();
+    // O direito nasce na confirmação de pagamento e dura um mês-calendário.
+    // Guardar os dois limites separa consumo já quitado do consumo novo.
+    const fimDoPeriodo = new Date(inicioDoPeriodo);
+    fimDoPeriodo.setMonth(fimDoPeriodo.getMonth() + 1);
     await this.db().clientSubscription.update({
       where: { id: assinatura.id },
       data: {
         status: SubscriptionStatus.ATIVA,
+        currentPeriodStart: inicioDoPeriodo,
         currentPeriodEnd: fimDoPeriodo,
+        asaasPeriodPaymentId: paymentId,
         asaasSubscriptionId: cobranca.subscription
           ? String(cobranca.subscription)
           : assinatura.asaasSubscriptionId,
@@ -2602,19 +2896,43 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         canceledAt: null,
         // O desconto por indicação começa com a assinatura paga, não no teste.
         discountEndsAt: assinatura.resellerId && !assinatura.discountEndsAt
-          ? new Date(agora.getFullYear(), agora.getMonth() + 3, agora.getDate())
+          ? new Date(inicioDoPeriodo.getFullYear(), inicioDoPeriodo.getMonth() + 3, inicioDoPeriodo.getDate())
           : assinatura.discountEndsAt,
       },
     });
     await this.recordAsaasCommission(assinatura, cobranca);
+    return { paymentId, currentPeriodStart: inicioDoPeriodo, currentPeriodEnd: fimDoPeriodo };
   }
 
-  private async markAsaasSubscriptionStatus(cobranca: any, status: SubscriptionStatus) {
+  private async markAsaasSubscriptionStatus(
+    cobranca: any,
+    status: SubscriptionStatus,
+    options: { onlyIfCurrentPeriodPayment?: boolean; clearCurrentPeriodPayment?: boolean } = {},
+  ) {
     const assinatura = await this.subscriptionFromAsaas(cobranca);
     if (!assinatura) return;
+    const paymentId = String(cobranca.id ?? "");
+    // Um estorno atrasado de uma fatura antiga não pode derrubar o período mais
+    // novo que já foi pago. Registros legados (sem o ID) preservam o bloqueio
+    // conservador até a próxima renovação preencher o campo.
+    if (
+      options.onlyIfCurrentPeriodPayment
+      && assinatura.asaasPeriodPaymentId
+      && assinatura.asaasPeriodPaymentId !== paymentId
+    ) {
+      this.logger.warn(
+        `Estorno da cobrança ${paymentId} é de um ciclo anterior da assinatura ${assinatura.id}; acesso atual preservado.`,
+      );
+      return;
+    }
     await this.db().clientSubscription.update({
       where: { id: assinatura.id },
-      data: { status },
+      data: {
+        status,
+        ...(options.clearCurrentPeriodPayment && assinatura.asaasPeriodPaymentId === paymentId
+          ? { asaasPeriodPaymentId: null }
+          : {}),
+      },
     });
   }
 
@@ -2726,6 +3044,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       where: { stripeSubscriptionId: subscription.id },
       data: {
         status,
+        currentPeriodStart: this.subscriptionPeriodStart(subscription),
         currentPeriodEnd: this.subscriptionPeriodEnd(subscription),
         canceledAt: status === SubscriptionStatus.CANCELADA ? new Date() : null,
       },
@@ -2737,6 +3056,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       .map((item) => item.current_period_end)
       .filter((value): value is number => typeof value === "number")
       .sort((a, b) => b - a)[0];
+    return timestamp ? new Date(timestamp * 1000) : null;
+  }
+
+  private subscriptionPeriodStart(subscription: Stripe.Subscription) {
+    const timestamp = subscription.items.data
+      .map((item) => item.current_period_start)
+      .filter((value): value is number => typeof value === "number")
+      .sort((a, b) => a - b)[0];
     return timestamp ? new Date(timestamp * 1000) : null;
   }
 
