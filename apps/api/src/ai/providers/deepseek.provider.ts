@@ -1,5 +1,5 @@
 import { Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
-import { AIChatMessage, AIChatResult, AIProvider, AIToolDefinition } from "./ai-provider.interface";
+import { AIChatMessage, AIChatOptions, AIChatResult, AIProvider, AIToolDefinition } from "./ai-provider.interface";
 
 /**
  * DeepSeek expõe uma API compatível com o formato "chat completions" da OpenAI,
@@ -11,7 +11,7 @@ import { AIChatMessage, AIChatResult, AIProvider, AIToolDefinition } from "./ai-
 export class DeepSeekProvider implements AIProvider {
   private readonly logger = new Logger("DeepSeekProvider");
 
-  async chat(messages: AIChatMessage[], tools?: AIToolDefinition[]): Promise<AIChatResult> {
+  async chat(messages: AIChatMessage[], tools?: AIToolDefinition[], options?: AIChatOptions): Promise<AIChatResult> {
     const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
       throw new ServiceUnavailableException(
@@ -45,6 +45,20 @@ export class DeepSeekProvider implements AIProvider {
         function: { name: t.name, description: t.description, parameters: t.parameters },
       }));
       body.tool_choice = "auto";
+    }
+    if (options?.responseFormat === "json_object") {
+      body.response_format = { type: "json_object" };
+    }
+    if (options?.thinking === false) {
+      // O modelo usado hoje aceita este formato; mantê-lo opcional preserva
+      // compatibilidade caso a variável de ambiente aponte para outro modelo.
+      body.thinking = { type: "disabled" };
+    }
+    if (typeof options?.maxTokens === "number" && options.maxTokens > 0) {
+      body.max_tokens = Math.floor(options.maxTokens);
+    }
+    if (typeof options?.temperature === "number" && options.temperature >= 0 && options.temperature <= 2) {
+      body.temperature = options.temperature;
     }
 
     const response = await fetch(`${baseUrl}/chat/completions`, {

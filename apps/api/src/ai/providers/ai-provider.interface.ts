@@ -40,8 +40,18 @@ export interface AIChatResult {
   } | null;
 }
 
+/** Opções portáveis; provedores que não suportarem uma delas simplesmente a ignoram. */
+export interface AIChatOptions {
+  /** Força resposta JSON quando o provedor suporta saída estruturada. */
+  responseFormat?: "json_object";
+  /** Importações não precisam de cadeia de raciocínio, só da estrutura final. */
+  thinking?: boolean;
+  maxTokens?: number;
+  temperature?: number;
+}
+
 export const AI_PROVIDER = Symbol("AI_PROVIDER");
 
 export interface AIProvider {
-  chat(messages: AIChatMessage[], tools?: AIToolDefinition[]): Promise<AIChatResult>;
+  chat(messages: AIChatMessage[], tools?: AIToolDefinition[], options?: AIChatOptions): Promise<AIChatResult>;
 }

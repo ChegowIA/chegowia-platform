@@ -188,6 +188,15 @@ enum UsageLedgerStatus {
   FALHOU
 }
 
+// A planilha nunca cria produtos diretamente. Ela gera uma sessão curta de
+// revisão, vinculada à empresa e à pessoa que a enviou, antes da publicação
+// explícita no cardápio.
+enum CatalogImportStatus {
+  PENDENTE
+  APLICADO
+  EXPIRADO
+}
+
 enum TableStatus {
   LIVRE
   OCUPADA
@@ -544,6 +553,7 @@ model Company {
   deliveryAreas             DeliveryArea[]
   categories                Category[]
   products                  Product[]
+  catalogImportSessions     CatalogImportSession[]
   orders                    Order[]
   deliveries                Delivery[]
   payments                  Payment[]
@@ -1029,6 +1039,31 @@ model ProductAddon {
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([productId])
+}
+
+// Prévia efêmera de uma importação de cardápio. Guardamos apenas os itens já
+// normalizados e os avisos — não o arquivo cru enviado pelo cliente. Isso
+// reduz retenção de dados e impede que um preview antigo seja aplicado duas
+// vezes ou por outra pessoa.
+model CatalogImportSession {
+  id                 String              @id @default(cuid())
+  companyId          String
+  createdByUserId    String
+  sourceFileName     String
+  sourceSummary      Json?
+  normalizedProducts Json
+  warnings           Json?
+  aiRequestId        String?
+  status             CatalogImportStatus @default(PENDENTE)
+  expiresAt          DateTime
+  appliedAt          DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, status, expiresAt])
 }
 
 // ---------------------------------------------------------------------------

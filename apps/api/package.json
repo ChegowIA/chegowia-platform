@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@chegowia/shared": "*",
+    "@e965/xlsx": "^0.20.3",
     "@nestjs/common": "^11.1.28",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.1.28",

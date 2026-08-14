@@ -20,6 +20,7 @@ import {
 import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/badge";
 import { ProductImage } from "@/components/catalog/product-image";
+import { CatalogImportPanel } from "@/components/catalog/catalog-import-panel";
 
 interface VariationDraft {
   name: string;
@@ -93,8 +94,17 @@ export default function CardapioPage() {
   const { data: productsData, isLoading: loadingProducts } = useQuery({
     queryKey: ["products-all"],
     queryFn: async () => {
-      const { data } = await api.get<Paginated<Product>>("/catalog/products", { params: { pageSize: 100 } });
-      return data;
+      const { data: firstPage } = await api.get<Paginated<Product>>("/catalog/products", { params: { pageSize: 100 } });
+      // A importação aceita mais de uma página de itens. Buscar as páginas
+      // restantes evita que um cardápio recém-importado pareça incompleto só
+      // porque a API protege cada resposta individual com o limite de 100.
+      if (firstPage.totalPages <= 1) return firstPage;
+      const pages = await Promise.all(
+        Array.from({ length: firstPage.totalPages - 1 }, (_, index) =>
+          api.get<Paginated<Product>>("/catalog/products", { params: { page: index + 2, pageSize: 100 } }).then((response) => response.data),
+        ),
+      );
+      return { ...firstPage, items: [...firstPage.items, ...pages.flatMap((page) => page.items)] };
     },
   });
 
@@ -269,6 +279,15 @@ export default function CardapioPage() {
         <Metric label="Em destaque" value={featuredCount} tone="accent" />
         <Metric label="Categorias" value={categories?.length ?? 0} tone="slate" />
       </div>
+
+      {canEditMenu && (
+        <CatalogImportPanel
+          onComplete={() => {
+            queryClient.invalidateQueries({ queryKey: ["categories"] });
+            queryClient.invalidateQueries({ queryKey: ["products-all"] });
+          }}
+        />
+      )}
 
       {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
       {loadingCategories && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando categorias...</p>}

@@ -557,12 +557,18 @@ export class MessagingService {
       });
     });
     const value = metaValueFromGupshupV2(payload);
-    if (!value) return { ignored: true };
+    // No formato v2 o billing-event vem fora do envelope de mensagem. Ele é
+    // importante porque traz `deductions.type` e `billable` confirmados pelo
+    // próprio Gupshup; não o convertemos para uma mensagem fictícia.
+    const billingEvent = payload?.type === "billing-event" && payload?.payload
+      ? payload
+      : null;
+    if (!value && !billingEvent) return { ignored: true };
 
     if (!channel) {
       // Pode ser o número institucional da ChegowIA, que vive em tabelas
       // próprias justamente para não atravessar o isolamento dos tenants.
-      const handledByPlatform = this.platformWhatsApp
+      const handledByPlatform = value && this.platformWhatsApp
         ? await this.platformWhatsApp.handleGupshupMessagesChange(appName, value)
         : false;
       if (handledByPlatform) return { received: true };
@@ -570,8 +576,9 @@ export class MessagingService {
       return { ignored: true };
     }
 
-    await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
-      return this.processMessagesChangeForChannel(channel, value, appName);
+    await tenantContext.run({ companyId: channel.companyId, bypass: false }, async () => {
+      if (value) await this.processMessagesChangeForChannel(channel, value, appName);
+      if (billingEvent) await this.processGupshupBillingEvent(channel, billingEvent);
     });
     return { received: true };
   }
@@ -603,9 +610,14 @@ export class MessagingService {
       });
     });
     const changes: any[] = [];
+    const billingEvents: any[] = [];
     for (const entry of payload.entry ?? []) {
       for (const change of entry?.changes ?? []) {
         if (change?.field === "messages") changes.push(change.value ?? {});
+        // O evento de billing v3 é a confirmação mais precisa de tarifa do
+        // Gupshup/Meta. Alguns apps o habilitam separadamente, por isso o
+        // status continua como fallback quando ele não vier.
+        if (change?.field === "billing-event") billingEvents.push(change.value ?? {});
       }
     }
 
@@ -626,6 +638,11 @@ export class MessagingService {
     for (const value of changes) {
       await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
         return this.processMessagesChangeForChannel(channel, value, appId);
+      });
+    }
+    for (const value of billingEvents) {
+      await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
+        return this.processGupshupBillingEvent(channel, value);
       });
     }
     return { received: true };
@@ -856,13 +873,18 @@ export class MessagingService {
     const mappedStatus = mapProviderStatus(status?.status);
     const pricingCategory = status?.pricing?.category ? String(status.pricing.category) : undefined;
     const error = status?.errors?.[0];
-    const usage = pricingCategory && existing.direction === WhatsAppMessageDirection.ENVIADA
+    const usage = existing.direction === WhatsAppMessageDirection.ENVIADA
       ? await this.usage.repriceWhatsAppUsage({
           companyId: existing.companyId,
           channelId: existing.channelId,
           providerMessageId,
           pricingCategory,
-          billable: status?.pricing?.billable === false ? false : undefined,
+          billable: providerReportedBillable(status?.pricing?.billable),
+          deliveryConfirmed: mappedStatus === WhatsAppMessageStatus.FALHOU
+            ? false
+            : mappedStatus === WhatsAppMessageStatus.ENTREGUE || mappedStatus === WhatsAppMessageStatus.LIDA
+              ? true
+              : undefined,
         })
       : null;
     await this.db().whatsAppMessage.update({
@@ -924,6 +946,17 @@ export class MessagingService {
       },
     });
 
+    // O Gupshup self-serve cobra as mensagens de sessão em texto (inclusive
+    // respostas interativas), mas mídia é gratuita. Registrar no mesmo razão
+    // da empresa mantém a fatura auditável e impede estimativa no frontend.
+    const usage = isBillableGupshupIncomingMessage(message)
+      ? await this.usage.recordWhatsAppUsage({
+          companyId: channel.companyId,
+          channelId: channel.id,
+          providerMessageId,
+          pricingCategory: "service",
+        })
+      : null;
     try {
       await this.db().whatsAppMessage.create({
         data: {
@@ -935,6 +968,9 @@ export class MessagingService {
           status: WhatsAppMessageStatus.RECEBIDA,
           type: String(message?.type ?? "text"),
           body: parsed.text,
+          pricingCategory: usage ? "service" : null,
+          providerCost: usage?.providerAmount ?? 0,
+          billableAmount: usage?.billableAmount ?? 0,
           rawPayload,
         },
       });
@@ -983,6 +1019,49 @@ export class MessagingService {
 
     if (conversation.mode === WhatsAppConversationMode.HUMANO) return;
     await this.answerWithVirtualAgent(conversation, channel, parsed.text);
+  }
+
+  /**
+   * Reconciliador do callback `billing-event` v3. Não confiamos em valor vindo
+   * no webhook: a tarifa é sempre a versão ativa de UsageRate, mas a categoria
+   * e a isenção confirmadas pelo BSP definem qual tarifa deve ser aplicada.
+   */
+  private async processGupshupBillingEvent(channel: any, value: any) {
+    const root = value?.type === "billing-event" && value?.payload && typeof value.payload === "object"
+      ? value.payload
+      : value;
+    const billing = root?.billing && typeof root.billing === "object" ? root.billing : root;
+    const deductions = billing?.deductions && typeof billing.deductions === "object" ? billing.deductions : billing;
+    const references = billing?.references && typeof billing.references === "object" ? billing.references : {};
+    const providerMessageId = firstString(
+      references.id,
+      references.message_id,
+      references.messageId,
+      billing?.message_id,
+      billing?.messageId,
+      billing?.id,
+    );
+    if (!providerMessageId) return;
+    const message = await this.db().whatsAppMessage.findUnique({ where: { providerMessageId } });
+    if (!message || message.companyId !== channel.companyId || message.direction !== WhatsAppMessageDirection.ENVIADA) return;
+    const pricingCategory = firstString(deductions?.category, deductions?.type, billing?.category, billing?.type);
+    const billable = providerReportedBillable(deductions?.billable ?? billing?.billable);
+    const usage = await this.usage.repriceWhatsAppUsage({
+      companyId: message.companyId,
+      channelId: message.channelId,
+      providerMessageId,
+      pricingCategory,
+      billable,
+      deliveryConfirmed: true,
+    });
+    await this.db().whatsAppMessage.update({
+      where: { id: message.id },
+      data: {
+        pricingCategory: pricingCategory ?? undefined,
+        providerCost: usage?.providerAmount ?? undefined,
+        billableAmount: usage?.billableAmount ?? undefined,
+      },
+    });
   }
 
   private async handoffToHuman(conversation: any, channel: any, text: string) {
@@ -1488,6 +1567,33 @@ function incomingContent(message: any) {
   }
   if (message?.type === "text") return { text: String(message?.text?.body ?? "").trim() || "Mensagem sem texto", selectionId: "" };
   return { text: `Mensagem recebida: ${String(message?.type ?? "conteúdo não suportado")}.`, selectionId: "" };
+}
+
+/** Mensagens de mídia não têm tarifa de sessão no plano self-serve do Gupshup. */
+function isBillableGupshupIncomingMessage(message: any) {
+  switch (String(message?.type ?? "").toLowerCase()) {
+    case "text":
+    case "interactive":
+    case "button":
+    case "list":
+    case "quick_reply":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function providerReportedBillable(value: unknown): boolean | undefined {
+  if (value === false || String(value).toLowerCase() === "false") return false;
+  if (value === true || String(value).toLowerCase() === "true") return true;
+  return undefined;
+}
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
 }
 
 function selectionFromIncoming(parsed: { text: string; selectionId: string }) {

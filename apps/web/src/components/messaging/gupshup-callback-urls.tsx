@@ -44,6 +44,11 @@ export function GupshupCallbackUrls() {
         recommended
       />
       <Row label="Se o formato for o nativo do Gupshup" url={data.callbackUrls.gupshup} />
+      <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+        Para a cobrança ficar conciliada, ative os eventos de mensagem e o <strong>billing-event</strong> nesse
+        mesmo webhook. O sistema usa a confirmação de categoria/isenção do Gupshup e preserva a taxa do provedor
+        quando a Meta não cobra uma mensagem de utilidade.
+      </p>
     </div>
   );
 }

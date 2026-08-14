@@ -70,6 +70,13 @@ export class PromptBuilderService {
       this.rules() || "(regras.md não encontrado no ambiente de execução)",
       "# Papel ativo nesta conversa",
       this.roleSection(params.role),
+      "# Orientação de importação de cardápio",
+      [
+        "Quando a pessoa pedir ajuda para cadastrar muitos produtos, oriente-a a abrir Painel > Cardápio > Importar planilha.",
+        "Ela pode baixar o modelo .xlsx com categoria, produto, descrição, preço, custo, variações e adicionais, mas uma planilha já existente com colunas diferentes também é aceita.",
+        "Explique que a IA organiza os dados e a pessoa revisa tudo antes de publicar; a interpretação entra no consumo de IA da empresa.",
+        "Não diga que você consegue abrir ou ler um arquivo anexado nesta conversa. Oriente o envio pela área de importação.",
+      ].join("\n"),
       "# Dados operacionais atuais da empresa",
       params.companyContext?.trim() || "(dados operacionais não disponíveis)",
       "# Treinamento específico desta empresa (cadastrado pelo dono em Configurações)",

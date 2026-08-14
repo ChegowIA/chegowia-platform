@@ -178,23 +178,54 @@ export class UsageService {
     channelId: string;
     providerMessageId: string;
     pricingCategory?: string | null;
+    /** false somente quando o BSP confirmou que a mensagem não foi entregue. */
+    deliveryConfirmed?: boolean;
+    /**
+     * A Meta pode isentar uma template utility dentro da janela de serviço,
+     * mas o Gupshup ainda tarifa o transporte da mensagem. Portanto `false`
+     * remove só a parcela Meta e usa a taxa WHATSAPP_SERVICO como base.
+     */
     billable?: boolean;
   }) {
     const externalReference = `whatsapp:${params.providerMessageId}`;
     const existing = await this.db().usageLedger.findUnique({ where: { externalReference } });
-    if (!existing) return this.recordWhatsAppUsage(params);
-    const metric = metricForWhatsAppCategory(params.pricingCategory);
-    if (existing.metric === metric || existing.status !== UsageLedgerStatus.PENDENTE) return existing;
+    const metric = params.billable === false
+      ? UsageMetric.WHATSAPP_SERVICO
+      : metricForWhatsAppCategory(params.pricingCategory);
+    // O status pode chegar antes de `persistOutbound` terminar. Nesse caso
+    // criamos um marcador zerado com a mesma referência: quando a persistência
+    // tardia tentar registrar o envio, a idempotência encontra esse marcador e
+    // não ressuscita uma cobrança de mensagem que o BSP já recusou.
+    if (!existing) {
+      const created = await this.recordWhatsAppUsage({
+        ...params,
+        pricingCategory: params.billable === false ? "service" : params.pricingCategory,
+      });
+      if (!created || params.deliveryConfirmed !== false) return created;
+      return this.db().usageLedger.update({
+        where: { id: created.id },
+        data: { providerAmount: 0, billableAmount: 0 },
+      });
+    }
+    // Uma linha já sincronizada/faturada é um documento histórico; nunca deve
+    // ser reprecificada por callback tardio.
+    if (existing.status !== UsageLedgerStatus.PENDENTE) return existing;
     const rate = await this.db().usageRate.findUnique({ where: { metric } });
     const unitSize = Number(rate?.unitSize ?? 1);
     const providerUnitCost = rate?.isActive ? Number(rate.providerUnitCost) : 0;
     const markupPercent = rate?.isActive ? Number(rate.markupPercent) : 0;
-    const providerAmount = params.billable === false
+    const providerAmount = params.deliveryConfirmed === false
       ? 0
       : roundMoneyPrecision((Number(existing.quantity) / Math.max(unitSize, 0.000001)) * providerUnitCost);
-    const billableAmount = params.billable === false
+    const billableAmount = params.deliveryConfirmed === false
       ? 0
       : roundMoneyPrecision(providerAmount * (1 + markupPercent / 100));
+    if (
+      existing.metric === metric
+      && Number(existing.providerAmount) === providerAmount
+      && Number(existing.billableAmount) === billableAmount
+      && existing.usageRateId === (rate?.id ?? null)
+    ) return existing;
     return this.db().usageLedger.update({
       where: { id: existing.id },
       data: {
@@ -548,6 +579,7 @@ function metricForWhatsAppCategory(category?: string | null): UsageMetric {
     case "utility":
       return UsageMetric.WHATSAPP_TEMPLATE_UTILIDADE;
     case "marketing":
+    case "marketing_lite":
       return UsageMetric.WHATSAPP_TEMPLATE_MARKETING;
     case "authentication":
       return UsageMetric.WHATSAPP_TEMPLATE_AUTENTICACAO;
