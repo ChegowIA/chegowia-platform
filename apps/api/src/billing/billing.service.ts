@@ -1034,6 +1034,26 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const usage = usagePeriod
       ? await this.usage.getBillingUsage(companyId, baseMonthlyPriceDue, usagePeriod)
       : await this.usage.getBillingUsage(companyId, baseMonthlyPriceDue);
+    /**
+     * A mensalidade do período em curso não pode reaparecer como dívida depois
+     * de paga. Ainda assim, esconder o preço do próximo ciclo fazia a tela
+     * parecer que a próxima fatura teria somente IA/WhatsApp. Expomos uma
+     * previsão separada da dívida atual: ela nunca libera link de pagamento e
+     * não altera o valor já emitido no Asaas/Stripe.
+     */
+    const rawUpcomingVariableAmount = Number(usage?.variableOutstandingCharged ?? 0);
+    const upcomingVariableAmount = Number.isFinite(rawUpcomingVariableAmount)
+      ? Math.max(0, rawUpcomingVariableAmount)
+      : 0;
+    const upcomingMonthlyPrice = roundBillingAmount(monthlyPrice);
+    const nextBillingEstimate = paidCurrentPeriod && !subscription.canceledAt
+      ? {
+          dueDate: subscription.currentPeriodEnd,
+          monthlyPrice: upcomingMonthlyPrice,
+          variableAmount: roundBillingAmount(upcomingVariableAmount),
+          estimatedTotal: roundBillingAmount(upcomingMonthlyPrice + upcomingVariableAmount),
+        }
+      : null;
     const payableInvoice = await this.payableAsaasInvoice(subscription);
     return {
       status: subscription.status,
@@ -1058,6 +1078,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       currentPeriodStart: subscription.currentPeriodStart,
       currentPeriodEnd: subscription.currentPeriodEnd,
       canceledAt: subscription.canceledAt,
+      nextBillingEstimate,
       plan: {
         name: subscription.plan.name,
         monthlyPrice,
@@ -3795,6 +3816,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
 function roundPublicPrice(value: number) {
   return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000;
+}
+
+/** Valores que chegam à fatura sempre usam centavos, não precisão de token. */
+function roundBillingAmount(value: number) {
+  const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
+  return Math.round((safe + Number.EPSILON) * 100) / 100;
 }
 
 function publicUsageDescription(metric: string) {

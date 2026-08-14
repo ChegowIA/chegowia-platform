@@ -11,7 +11,7 @@ describe("fatura atual da empresa no Asaas", () => {
     process.env = { ...ORIGINAL_ENV };
   });
 
-  function build(status: "ATIVA" | "INADIMPLENTE", payments: any[]) {
+  function build(status: "ATIVA" | "INADIMPLENTE", payments: any[], usageSummary: Record<string, number> = { estimatedTotal: 0 }) {
     const now = new Date();
     const currentPeriodEnd = new Date(now);
     currentPeriodEnd.setDate(currentPeriodEnd.getDate() + (status === "ATIVA" ? 10 : -1));
@@ -38,7 +38,7 @@ describe("fatura atual da empresa no Asaas", () => {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       update: jest.fn().mockResolvedValue({}),
     };
-    const usage = { getBillingUsage: jest.fn().mockResolvedValue({ estimatedTotal: 0 }) };
+    const usage = { getBillingUsage: jest.fn().mockResolvedValue(usageSummary) };
     const asaas = {
       isConfigured: jest.fn().mockReturnValue(true),
       listSubscriptionPayments: jest.fn().mockResolvedValue(payments),
@@ -59,6 +59,24 @@ describe("fatura atual da empresa no Asaas", () => {
     expect(status).toMatchObject({ status: "ATIVA", payableInvoice: null });
     expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
     await expect(service.companyPortal("empresa-1")).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("mostra a próxima mensalidade somada ao consumo sem reapresentá-la como dívida atual", async () => {
+    const { service } = build("ATIVA", [], {
+      estimatedTotal: 0.08,
+      variableOutstandingCharged: 0.08,
+    });
+
+    const status = await service.companyBillingStatus("empresa-1");
+
+    expect(status).toMatchObject({
+      status: "ATIVA",
+      nextBillingEstimate: {
+        monthlyPrice: 5,
+        variableAmount: 0.08,
+        estimatedTotal: 5.08,
+      },
+    });
   });
 
   it("oferece exclusivamente a fatura vencida quando há inadimplência", async () => {

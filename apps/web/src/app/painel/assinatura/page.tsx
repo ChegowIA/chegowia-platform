@@ -82,6 +82,12 @@ type BillingData = {
   accessRestricted?: boolean;
   activationAvailable?: boolean;
   currentPeriodEnd?: string | null;
+  nextBillingEstimate?: {
+    dueDate?: string | null;
+    monthlyPrice: number;
+    variableAmount: number;
+    estimatedTotal: number;
+  } | null;
   plan?: { name: string; monthlyPrice: number; currency: string };
   trial?: Trial | null;
   referral?: { code: string; resellerName: string; discountEndsAt?: string | null } | null;
@@ -193,7 +199,11 @@ export default function SubscriptionPage() {
   const trial = data?.trial;
   const currentTrial = Boolean(trial?.current);
   const trialExpired = Boolean(currentTrial && (trial?.expired || data?.activationAvailable));
-  const base = usage?.baseMonthlyPrice ?? Number(data?.plan?.monthlyPrice ?? 159.9);
+  // Quando o ciclo vigente já foi pago, `usage.baseMonthlyPrice` é (e deve
+  // continuar sendo) zero: ele representa a dívida atual. Para não esconder a
+  // próxima mensalidade, a API entrega a previsão separadamente.
+  const nextBilling = currentTrial ? null : data?.nextBillingEstimate;
+  const base = nextBilling?.monthlyPrice ?? usage?.baseMonthlyPrice ?? Number(data?.plan?.monthlyPrice ?? 159.9);
   const ia = usage?.sources?.find((source) => source.source === "IA");
   const whatsapp = usage?.sources?.find((source) => source.source === "WHATSAPP");
   const previous = usage?.previous;
@@ -209,7 +219,7 @@ export default function SubscriptionPage() {
   const consumoDoTeste = covered?.chargeableOnActivationCharged ?? 0;
   const estimated = currentTrial
     ? Number(data?.plan?.monthlyPrice ?? 159.9) + consumoDoTeste
-    : usage?.estimatedTotal ?? base;
+    : nextBilling?.estimatedTotal ?? usage?.estimatedTotal ?? base;
   const valorPorFonte = (fonte?: UsageSource) =>
     (fonte?.billableAmount ?? 0) + (currentTrial ? fonte?.trialCoveredAmount ?? 0 : 0);
 
@@ -235,17 +245,21 @@ export default function SubscriptionPage() {
               <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500 dark:text-slate-400">{meta.detail}</p>
             </div>
             <div className="text-left sm:text-right">
-              <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Se você assinar, paga" : "Você deve até agora"}</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{currentTrial ? "Se você assinar, paga" : nextBilling ? "Próxima fatura estimada" : "Você deve até agora"}</p>
               <p className="mt-1 text-3xl font-black">{formatCurrency(estimated)}</p>
-              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Consumo do teste; nada é cobrado se você não assinar" : estimated > 0 ? "Mensalidade + consumo ainda não quitado" : "Nenhum valor pendente neste período"}</p>
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">{currentTrial ? "Consumo do teste; nada é cobrado se você não assinar" : nextBilling ? `${nextBilling.dueDate ? `Vencimento previsto em ${formatDate(nextBilling.dueDate)}` : "Próximo ciclo"} · mensalidade + consumo registrado` : estimated > 0 ? "Mensalidade + consumo ainda não quitado" : "Nenhum valor pendente neste período"}</p>
               {!currentTrial && jaNaFatura > 0 && <p className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">Desse valor, {formatUsageCurrency(jaNaFatura)} de consumo já está incluído em uma fatura emitida.</p>}
               {!currentTrial && jaQuitado > 0 && <p className="mt-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">{formatUsageCurrency(jaQuitado)} de consumo já foi quitado na fatura anterior.</p>}
-              {!currentTrial && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
+              {!currentTrial && !nextBilling && previous ? <div className="mt-2 flex sm:justify-end"><Delta current={estimated} previous={previous.estimatedTotal} suffix="vs. mês anterior" /></div> : null}
             </div>
           </div>
 
           {currentTrial && trial && <TrialNotice trial={trial} planPrice={Number(data?.plan?.monthlyPrice ?? 159.9)} />}
           {data?.currentPeriodEnd && <p className="mt-5 text-xs text-slate-500 dark:text-slate-400">Período atual até {formatDate(data.currentPeriodEnd)}.</p>}
+          {nextBilling && <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-100">
+            <p className="font-black">O período atual já está quitado.</p>
+            <p className="mt-1">A próxima fatura reúne {formatCurrency(nextBilling.monthlyPrice)} da mensalidade e {formatUsageCurrency(nextBilling.variableAmount)} de consumo registrado até agora, totalizando {formatCurrency(nextBilling.estimatedTotal)}. Novos usos podem atualizar somente a parcela de consumo até a cobrança ser consolidada.</p>
+          </div>}
           {data?.referral && <div className="mt-5 rounded-2xl bg-brand-50 p-4 text-sm text-brand-900 dark:bg-brand-950/30 dark:text-brand-200"><strong>Código {data.referral.code}</strong> vinculado por {data.referral.resellerName}.{data.referral.discountEndsAt && ` Desconto inicial até ${formatDate(data.referral.discountEndsAt)}.`}</div>}
 
           {trialExpired ? <div className="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/25">
@@ -280,7 +294,7 @@ export default function SubscriptionPage() {
         </div> : null}
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Amount label="Mensalidade" value={currentTrial ? Number(data?.plan?.monthlyPrice ?? 159.9) : base} hint={currentTrial ? "Cobrada só na ativação" : "Plano contratado"} tone="bg-slate-50 text-slate-900 dark:bg-slate-800/60 dark:text-slate-100" />
+          <Amount label="Mensalidade" value={currentTrial ? Number(data?.plan?.monthlyPrice ?? 159.9) : base} hint={currentTrial ? "Cobrada só na ativação" : nextBilling ? "Próximo ciclo do plano" : base > 0 ? "Mensalidade pendente" : "Ciclo atual já quitado"} tone="bg-slate-50 text-slate-900 dark:bg-slate-800/60 dark:text-slate-100" />
           <Amount
             label="Inteligência artificial"
             value={valorPorFonte(ia)}
@@ -298,9 +312,9 @@ export default function SubscriptionPage() {
             delta={!currentTrial && previous ? { current: whatsapp?.billableAmount ?? 0, previous: previous.sources?.find((s) => s.source === "WHATSAPP")?.billableAmount ?? 0 } : undefined}
           />
           <Amount
-            label={currentTrial ? "Total se assinar" : "Total estimado"}
+            label={currentTrial ? "Total se assinar" : nextBilling ? "Próxima fatura" : "Total estimado"}
             value={estimated}
-            hint={currentTrial ? "Cobrado só se você assinar" : (usage?.variableTotal ?? 0) > 0 && (usage?.variableTotalCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : "Mensalidade + consumo, em uma fatura só"}
+            hint={currentTrial ? "Cobrado só se você assinar" : nextBilling ? "Mensalidade + consumo, em uma fatura só" : (usage?.variableTotal ?? 0) > 0 && (usage?.variableTotalCharged ?? 0) === 0 ? "Consumo abaixo de R$ 0,01 acumula" : "Mensalidade + consumo, em uma fatura só"}
             tone="bg-emerald-50 text-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200"
           />
         </div>
@@ -324,7 +338,7 @@ export default function SubscriptionPage() {
 
         {!currentTrial && previous && (previous.variableTotal > 0 || (usage?.variableTotal ?? 0) > 0) ? <div className="mt-4 flex flex-wrap items-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300"><span className="font-bold">Mês anterior:</span><span>{formatUsageCurrency(previous.variableTotal)} de consumo variável</span><Delta current={usage?.variableTotal ?? 0} previous={previous.variableTotal} /></div> : null}
 
-        <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{currentTrial ? "Cada evento guarda a tarifa vigente no momento em que aconteceu, para você acompanhar o uso real. Se você assinar, esse consumo entra na fatura de ativação junto com a mensalidade, em uma cobrança só. Se não assinar, nada é cobrado." : covered?.entries ? "O histórico marca o que veio do período de teste. Esse consumo entrou na fatura de ativação, junto com a mensalidade." : (viaAsaas ? "O custo variável nunca vira uma cobrança separada: ele é somado à próxima mensalidade, em uma fatura só. Enquanto não houver mensalidade em aberto, o valor acumula. Cada evento guarda a tarifa vigente no momento em que aconteceu." : "O custo variável é consolidado por métrica e enviado como item da próxima fatura Stripe. Cada evento guarda a tarifa vigente no momento em que aconteceu.")}</p>
+        <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{currentTrial ? "Cada evento guarda a tarifa vigente no momento em que aconteceu, para você acompanhar o uso real. Se você assinar, esse consumo entra na fatura de ativação junto com a mensalidade, em uma cobrança só. Se não assinar, nada é cobrado." : nextBilling ? "O período atual já está pago. A previsão soma a mensalidade do próximo ciclo ao consumo registrado até agora; até a cobrança ser consolidada, somente novos usos podem alterar a parcela variável." : covered?.entries ? "O histórico marca o que veio do período de teste. Esse consumo entrou na fatura de ativação, junto com a mensalidade." : (viaAsaas ? "O custo variável nunca vira uma cobrança separada: ele é somado à próxima mensalidade, em uma fatura só. Enquanto não houver mensalidade em aberto, o valor acumula. Cada evento guarda a tarifa vigente no momento em que aconteceu." : "O custo variável é consolidado por métrica e enviado como item da próxima fatura Stripe. Cada evento guarda a tarifa vigente no momento em que aconteceu.")}</p>
       </section>
 
       {data?.manageable ? <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">

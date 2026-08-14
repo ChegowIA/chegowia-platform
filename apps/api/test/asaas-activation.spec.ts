@@ -418,7 +418,7 @@ describe("revalidação de vencimento ao abrir o painel", () => {
     expect(usage.getBillingUsage).toHaveBeenCalledWith("empresa-1", 5, expect.any(Object));
   });
 
-  it("não reapresenta a mensalidade de um período ativo já pago", async () => {
+  it("mantém a mensalidade quitada fora da dívida atual e expõe a previsão do próximo ciclo", async () => {
     const subscription = {
       id: "sub-1",
       companyId: "empresa-1",
@@ -450,6 +450,12 @@ describe("revalidação de vencimento ao abrir o painel", () => {
       periodStart: expect.any(Date),
       periodEnd: subscription.currentPeriodEnd,
     }));
+    expect(result.nextBillingEstimate).toMatchObject({
+      monthlyPrice: 5,
+      variableAmount: 0,
+      estimatedTotal: 5,
+      dueDate: subscription.currentPeriodEnd,
+    });
     expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
   });
 
