@@ -17,6 +17,14 @@ import { useLogin, useLogout, useRegisterCustomer, useVerifyMfa } from "@/lib/us
 
 type Mode = "login" | "cadastro";
 
+/** Só aceitamos retornos internos; isso evita transformar /acesso em open redirect. */
+function safeContinuePath() {
+  if (typeof window === "undefined") return null;
+  const value = new URLSearchParams(window.location.search).get("continuar");
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return null;
+  return value;
+}
+
 export default function AccessPage() {
   const [mode, setMode] = useState<Mode>("login");
   const [step, setStep] = useState<1 | 2>(1);
@@ -53,6 +61,7 @@ export default function AccessPage() {
   useEffect(() => {
     if (!hydrated || sessionLoading) return;
     const params = new URLSearchParams(window.location.search);
+    const continueTo = safeContinuePath();
     if (params.get("modo") === "cadastro" || params.has("novo")) setMode("cadastro");
     const mustSwitch = params.has("trocar-conta");
     if (mustSwitch && user) {
@@ -64,7 +73,7 @@ export default function AccessPage() {
       return;
     }
     if (user) {
-      router.replace(homePathForRole(user.role));
+      router.replace(continueTo ?? homePathForRole(user.role));
       return;
     }
     setReady(true);
@@ -93,6 +102,11 @@ export default function AccessPage() {
       const data = await login.mutateAsync({ email, password });
       if (data.mfaRequired) {
         setMfaChallenge({ id: data.challengeId, emailHint: data.emailHint });
+        return;
+      }
+      const continueTo = safeContinuePath();
+      if (continueTo) {
+        router.replace(continueTo);
         return;
       }
       // Conta multiacesso escolhe o contexto antes de cair no painel.
@@ -131,6 +145,11 @@ export default function AccessPage() {
         challengeId: mfaChallenge.id,
         code: mfaCode,
       });
+      const continueTo = safeContinuePath();
+      if (continueTo) {
+        router.replace(continueTo);
+        return;
+      }
       if (data.multiContext) {
         setContextPicker(true);
         return;

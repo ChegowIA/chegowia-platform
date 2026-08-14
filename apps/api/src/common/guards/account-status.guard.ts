@@ -57,6 +57,7 @@ export class AccountStatusGuard implements CanActivate {
     });
     if (!user?.isActive) throw new UnauthorizedException("Sua sessão não é mais válida.");
 
+    let auditedSupportAccess = false;
     if (identity.assumed) {
       /**
        * Token de contexto assumido: por definição o papel do token difere do
@@ -68,6 +69,30 @@ export class AccountStatusGuard implements CanActivate {
       const allowed = (process.env.MULTI_CONTEXT_LOGIN_EMAIL ?? "").trim().toLowerCase();
       if (user.role !== Role.SUPER_ADMIN || !allowed || email !== allowed) {
         throw new UnauthorizedException("Sua sessão não é mais válida.");
+      }
+
+      if (identity.assumedAccessId) {
+        // A exceção de suporte é deliberadamente mais estreita que o
+        // multiacesso comum: só um atalho consumido, não revogado, não
+        // encerrado e ainda dentro da janela curta pode abrir uma empresa
+        // inativa ou com cobrança pendente.
+        if (identity.role !== Role.ADMIN || !identity.companyId) {
+          throw new UnauthorizedException("Sua sessão de suporte não é mais válida.");
+        }
+        const access = await (this.prisma as any).superAdminCompanyAccess?.findFirst?.({
+          where: {
+            id: identity.assumedAccessId,
+            superAdminId: user.id,
+            companyId: identity.companyId,
+            consumedAt: { not: null },
+            revokedAt: null,
+            closedAt: null,
+            sessionExpiresAt: { gt: new Date() },
+          },
+          select: { id: true },
+        });
+        if (!access) throw new UnauthorizedException("Sua sessão de suporte expirou.");
+        auditedSupportAccess = true;
       }
     } else if (user.role !== identity.role || user.companyId !== identity.companyId) {
       throw new UnauthorizedException("Sua sessão não é mais válida.");
@@ -95,7 +120,8 @@ export class AccountStatusGuard implements CanActivate {
           subscription: { select: { status: true, trialEndsAt: true, currentPeriodEnd: true } },
         },
       });
-      if (!company?.isActive) throw new ForbiddenException("Empresa inativa.");
+      if (!company) throw new ForbiddenException("Empresa não encontrada.");
+      if (!company.isActive && !auditedSupportAccess) throw new ForbiddenException("Empresa inativa.");
       const enforce = process.env.BILLING_ENFORCEMENT === "true"
         || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
       const trialActive = company.subscription?.status === SubscriptionStatus.EM_TESTE
@@ -112,6 +138,7 @@ export class AccountStatusGuard implements CanActivate {
         || trialActive;
       if (
         !allowInactiveSubscription
+        && !auditedSupportAccess
         && (trialExpired || (enforce && !subscriptionAllowsAccess))
       ) {
         throw new ForbiddenException(

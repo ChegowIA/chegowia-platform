@@ -15,6 +15,8 @@ export interface JwtPayload {
    * comparação estrita com o papel do banco falharia por definição.
    */
   assumed?: true;
+  /** ID auditável do atalho de suporte que abriu este contexto, quando houver. */
+  assumedAccessId?: string;
 }
 
 export interface AuthenticatedRequest extends Request {

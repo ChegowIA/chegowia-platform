@@ -1,15 +1,18 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res } from "@nestjs/common";
+import { Body, Controller, Get, Header, HttpCode, HttpStatus, Param, Post, Req, Res } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import type { Request, Response } from "express";
 import { Public } from "../common/decorators/public.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
+import { Roles } from "../common/decorators/roles.decorator";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { SwitchContextDto } from "./dto/switch-context.dto";
+import { ConsumeCompanyAccessLinkDto } from "./dto/consume-company-access-link.dto";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { Role } from "@prisma/client";
 import {
   ForgotPasswordDto,
   ResendVerificationDto,
@@ -76,6 +79,39 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.switchContext(user, dto.companyId ?? null, dto.role);
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
+  }
+
+  /**
+   * Cria o atalho efêmero de suporte para uma empresa. O segredo cru volta uma
+   * única vez e vai no fragmento (`#`) da URL, que não é enviado ao servidor.
+   */
+  @AllowInactiveSubscription()
+  @Roles(Role.SUPER_ADMIN)
+  @Post("super-admin/company-access-links/:companyId")
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.CREATED)
+  createCompanyAccessLink(@CurrentUser() user: JwtPayload, @Param("companyId") companyId: string) {
+    return this.authService.createCompanyAdminAccessLink(user, companyId);
+  }
+
+  /**
+   * Consome o atalho já autenticado. Não recebe @Roles: o JWT pode estar em uma
+   * visão ADMIN assumida, mas a origem real é validada pelo serviço no banco.
+   */
+  @AllowInactiveSubscription()
+  @Post("super-admin/company-access/consume")
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async consumeCompanyAccessLink(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ConsumeCompanyAccessLinkDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.consumeCompanyAdminAccessLink(user, dto.token);
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
     return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
   }
@@ -180,7 +216,7 @@ export class AuthController {
   /** O painel bloqueado ainda precisa saber quem está logado para se desenhar. */
   @AllowInactiveSubscription()
   @Get("me")
-  async me(@CurrentUser("sub") userId: string) {
-    return this.authService.me(userId);
+  async me(@CurrentUser() user: JwtPayload) {
+    return this.authService.me(user);
   }
 }

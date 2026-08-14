@@ -17,6 +17,7 @@ import { AdminAssistantBubble } from "@/components/ai/admin-assistant-bubble";
 import { KitchenAssistant } from "@/components/ai/kitchen-assistant";
 import { MobileDock } from "@/components/layout/mobile-dock";
 import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
+import { SuperAdminImpersonationBanner } from "@/components/auth/super-admin-impersonation-banner";
 
 interface NavItem {
   href: string;
@@ -156,8 +157,14 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
    * efeito roda depois da pintura, então sozinho ele deixa a página proibida
    * aparecer por um quadro antes de sair.
    */
+  const isAuditedSupportAccess = Boolean(
+    user?.actorRole === Role.SUPER_ADMIN && user.impersonation?.supportAccess,
+  );
   const billingLocked =
-    user?.role === Role.ADMIN && Boolean(billingStatus?.accessRestricted) && pathname !== "/painel/assinatura";
+    user?.role === Role.ADMIN
+    && !isAuditedSupportAccess
+    && Boolean(billingStatus?.accessRestricted)
+    && pathname !== "/painel/assinatura";
 
   useEffect(()=>{
     if(billingLocked){
@@ -263,6 +270,7 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main className="w-full min-w-0 max-w-full overflow-x-clip px-3 pb-28 pt-[77px] sm:px-6 sm:pt-[85px] md:pb-6 lg:px-8 lg:pt-[93px]">
+          <SuperAdminImpersonationBanner />
           {children}
         </main>
       </div>

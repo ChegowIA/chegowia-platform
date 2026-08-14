@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { FormField, Input, Select } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { Badge } from "@/components/ui/badge";
+import { SuperAdminCompanyAccessButton } from "@/components/auth/super-admin-company-access-button";
 
 interface CompanyForm {
   name: string;
@@ -204,9 +205,12 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
             </span>
           </div>
         </div>
-        <Button variant={company.isActive ? "danger" : "outline"} isLoading={toggleStatus.isPending} onClick={() => toggleStatus.mutate()}>
-          {company.isActive ? "Desativar empresa" : "Ativar empresa"}
-        </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <SuperAdminCompanyAccessButton companyId={company.id} />
+          <Button variant={company.isActive ? "danger" : "outline"} isLoading={toggleStatus.isPending} onClick={() => toggleStatus.mutate()}>
+            {company.isActive ? "Desativar empresa" : "Ativar empresa"}
+          </Button>
+        </div>
       </div>
 
       <Card>

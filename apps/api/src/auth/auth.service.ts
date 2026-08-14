@@ -31,12 +31,19 @@ interface IssuedTokens {
 interface AssumedContext {
   role: Role;
   companyId: string | null;
+  companyName?: string | null;
+  /** Presente somente quando a sessão nasceu de um atalho de suporte auditado. */
+  accessId?: string | null;
+  /** Limite curto da sessão de suporte; contextos manuais mantêm a regra normal. */
+  expiresAt?: Date | null;
 }
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
 const MFA_TTL_MS = 10 * 60 * 1000;
+const SUPER_ADMIN_ACCESS_LINK_TTL_MS = 10 * 60 * 1000;
+const SUPER_ADMIN_ASSUMED_SESSION_TTL_MS = 60 * 60 * 1000;
 const EMPLOYEE_ROLES: Role[] = [Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM];
 
 @Injectable()
@@ -61,7 +68,14 @@ export class AuthService {
     if (assumed) {
       // `sub` continua sendo o usuário real: é o que permite auditar quem agiu
       // dentro da empresa assumida.
-      return { sub: user.id, email: user.email, role: assumed.role, companyId: assumed.companyId, assumed: true };
+      return {
+        sub: user.id,
+        email: user.email,
+        role: assumed.role,
+        companyId: assumed.companyId,
+        assumed: true,
+        ...(assumed.accessId ? { assumedAccessId: assumed.accessId } : {}),
+      };
     }
     return { sub: user.id, email: user.email, role: user.role, companyId: user.companyId };
   }
@@ -79,7 +93,10 @@ export class AuthService {
 
     const secret = randomBytes(32).toString("hex");
     const tokenHash = await bcrypt.hash(secret, 10);
-    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+    const defaultExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+    const expiresAt = assumed?.expiresAt && assumed.expiresAt < defaultExpiresAt
+      ? assumed.expiresAt
+      : defaultExpiresAt;
 
     const record = await this.db().refreshToken.create({
       data: {
@@ -88,6 +105,7 @@ export class AuthService {
         expiresAt,
         assumedRole: assumed?.role ?? null,
         assumedCompanyId: assumed?.companyId ?? null,
+        assumedAccessId: assumed?.accessId ?? null,
       },
     });
 
@@ -217,13 +235,11 @@ export class AuthService {
    * contra o banco e o ambiente — nunca contra o que veio do navegador.
    */
   async switchContext(identity: JwtPayload, companyId: string | null, role?: Role) {
-    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
-    if (!user || !user.isActive || !this.isMultiContextUser(user)) {
-      throw new ForbiddenException("Esta conta não pode trocar de contexto.");
-    }
+    const user = await this.multiContextActor(identity);
 
     // Sem empresa e sem papel: voltar à plataforma.
     if (!companyId && (!role || role === Role.SUPER_ADMIN)) {
+      await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
       const tokens = await this.issueTokens(user);
       this.logger.warn(`Contexto de plataforma retomado por ${user.email}.`);
       return { ...tokens, user: await this.publicUser(user), assumed: null };
@@ -235,13 +251,14 @@ export class AuthService {
       if (role !== Role.REVENDEDOR && role !== Role.CLIENTE) {
         throw new BadRequestException("Escolha uma empresa para este tipo de acesso.");
       }
+      await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
       const assumed: AssumedContext = { role, companyId: null };
       const tokens = await this.issueTokens(user, assumed);
       this.logger.warn(`Contexto assumido: ${user.email} entrou como ${role}.`);
       return {
         ...tokens,
-        user: { ...(await this.publicUser(user)), role, companyId: null },
-        assumed: { companyId: null, companyName: null, role },
+        user: await this.publicSessionUser(user, assumed),
+        assumed: this.assumedMetadata(assumed),
       };
     }
 
@@ -258,7 +275,8 @@ export class AuthService {
       throw new NotFoundException("Empresa não encontrada ou inativa.");
     }
 
-    const assumed: AssumedContext = { role: chosenRole, companyId: company.id };
+    await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
+    const assumed: AssumedContext = { role: chosenRole, companyId: company.id, companyName: company.name };
     const tokens = await this.issueTokens(user, assumed);
     // Assumir uma empresa é ação sensível: fica no log com quem, onde e quando.
     this.logger.warn(
@@ -266,8 +284,150 @@ export class AuthService {
     );
     return {
       ...tokens,
-      user: { ...(await this.publicUser(user)), role: chosenRole, companyId: company.id },
-      assumed: { companyId: company.id, companyName: company.name, role: chosenRole },
+      user: await this.publicSessionUser(user, assumed),
+      assumed: this.assumedMetadata(assumed),
+    };
+  }
+
+  /**
+   * Gera um atalho de suporte de uso único. Ele é exclusivo do superadmin que
+   * o gerou, dura pouco e o token cru nunca vai ao banco nem ao caminho HTTP:
+   * fica somente depois de `#` na URL do navegador.
+   */
+  async createCompanyAdminAccessLink(identity: JwtPayload, companyId: string) {
+    // A criação só é válida a partir da visão original da plataforma. Isso
+    // impede uma sessão já assumida de encadear novos atalhos de suporte.
+    if (identity.assumed || identity.role !== Role.SUPER_ADMIN || identity.companyId) {
+      throw new ForbiddenException("Volte à plataforma para gerar um atalho de suporte.");
+    }
+    const user = await this.multiContextActor(identity);
+    const company = await this.db().company.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!company) throw new NotFoundException("Empresa não encontrada.");
+
+    const now = new Date();
+    // Um único atalho pendente por superadmin/empresa evita que um link antigo
+    // esquecido em histórico ou área de transferência continue aproveitável.
+    await this.db().superAdminCompanyAccess.updateMany({
+      where: {
+        companyId: company.id,
+        superAdminId: user.id,
+        consumedAt: null,
+        revokedAt: null,
+        linkExpiresAt: { gt: now },
+      },
+      data: { revokedAt: now },
+    });
+
+    const token = randomBytes(32).toString("base64url");
+    const linkExpiresAt = new Date(now.getTime() + SUPER_ADMIN_ACCESS_LINK_TTL_MS);
+    await this.db().superAdminCompanyAccess.create({
+      data: {
+        companyId: company.id,
+        superAdminId: user.id,
+        tokenHash: this.hashUrlToken(token),
+        linkExpiresAt,
+      },
+    });
+
+    this.logger.warn(
+      `Atalho de suporte gerado por ${user.email} para a empresa ${company.name} (${company.id}).`,
+    );
+    return {
+      company: { id: company.id, name: company.name, isActive: company.isActive },
+      accessUrl: `${this.appUrl()}/acesso/suporte#${token}`,
+      expiresAt: linkExpiresAt,
+    };
+  }
+
+  /**
+   * Troca para a visão ADMIN sem perder a identidade do superadmin. O claim
+   * `sub` continua apontando para a conta de plataforma e o accessId liga cada
+   * ação à auditoria persistida do atalho consumido.
+   */
+  async consumeCompanyAdminAccessLink(identity: JwtPayload, token: string) {
+    const user = await this.multiContextActor(identity);
+    const now = new Date();
+    const access = await this.db().superAdminCompanyAccess.findUnique({
+      where: { tokenHash: this.hashUrlToken(token) },
+      include: { company: { select: { id: true, name: true, isActive: true } } },
+    });
+    if (
+      !access
+      || access.superAdminId !== user.id
+      || access.consumedAt
+      || access.revokedAt
+      || access.linkExpiresAt <= now
+      || !access.company
+    ) {
+      throw new ForbiddenException("Este atalho de suporte não é válido ou expirou.");
+    }
+
+    const sessionExpiresAt = new Date(now.getTime() + SUPER_ADMIN_ASSUMED_SESSION_TTL_MS);
+    // Claim condicional: duas abas, refresh duplo ou replay do link jamais
+    // conseguem abrir duas sessões para o mesmo segredo.
+    const claimed = await this.db().superAdminCompanyAccess.updateMany({
+      where: {
+        id: access.id,
+        superAdminId: user.id,
+        consumedAt: null,
+        revokedAt: null,
+        linkExpiresAt: { gt: now },
+      },
+      data: { consumedAt: now, sessionExpiresAt },
+    });
+    if (claimed.count !== 1) {
+      throw new ForbiddenException("Este atalho de suporte não é válido ou expirou.");
+    }
+
+    await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
+    const assumed: AssumedContext = {
+      role: Role.ADMIN,
+      companyId: access.company.id,
+      companyName: access.company.name,
+      accessId: access.id,
+      expiresAt: sessionExpiresAt,
+    };
+    const tokens = await this.issueTokens(user, assumed);
+    this.logger.warn(
+      `Acesso de suporte iniciado: ${user.email} entrou como ADMIN da empresa ${access.company.name} (${access.company.id}).`,
+    );
+    return {
+      ...tokens,
+      user: await this.publicSessionUser(user, assumed),
+      assumed: this.assumedMetadata(assumed),
+    };
+  }
+
+  private async multiContextActor(identity: JwtPayload) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || !user.isActive || !this.isMultiContextUser(user)) {
+      throw new ForbiddenException("Esta conta não pode trocar de contexto.");
+    }
+    return user;
+  }
+
+  private async closeSuperAdminCompanyAccess(accessId: string | undefined, superAdminId: string) {
+    if (!accessId || !this.db().superAdminCompanyAccess?.updateMany) return;
+    await this.db().superAdminCompanyAccess.updateMany({
+      where: {
+        id: accessId,
+        superAdminId,
+        consumedAt: { not: null },
+        closedAt: null,
+      },
+      data: { closedAt: new Date() },
+    }).catch(() => undefined);
+  }
+
+  private assumedMetadata(assumed: AssumedContext) {
+    return {
+      companyId: assumed.companyId,
+      companyName: assumed.companyName ?? null,
+      role: assumed.role,
+      supportAccess: Boolean(assumed.accessId),
     };
   }
 
@@ -504,30 +664,71 @@ export class AuthService {
      * é reconferida: se a conta perdeu o direito, a sessão volta ao papel real em
      * vez de continuar assumindo.
      */
-    const assumed: AssumedContext | null = record.assumedRole && this.isMultiContextUser(user)
-      ? { role: record.assumedRole, companyId: record.assumedCompanyId ?? null }
-      : null;
+    let assumed: AssumedContext | null = null;
+    if (record.assumedRole && this.isMultiContextUser(user)) {
+      if (record.assumedAccessId) {
+        // Uma sessão aberta por atalho não pode ser renovada para além da sua
+        // janela. Também é aqui que logout/retorno à plataforma derruba abas
+        // antigas que ainda tenham um refresh cookie válido.
+        const access = await this.db().superAdminCompanyAccess?.findFirst?.({
+          where: {
+            id: record.assumedAccessId,
+            superAdminId: user.id,
+            consumedAt: { not: null },
+            revokedAt: null,
+            closedAt: null,
+            sessionExpiresAt: { gt: new Date() },
+          },
+          include: { company: { select: { id: true, name: true } } },
+        });
+        if (access?.company && access.sessionExpiresAt) {
+          assumed = {
+            role: record.assumedRole,
+            companyId: record.assumedCompanyId ?? access.company.id,
+            companyName: access.company.name,
+            accessId: access.id,
+            expiresAt: access.sessionExpiresAt,
+          };
+        } else {
+          await this.closeSuperAdminCompanyAccess(record.assumedAccessId, user.id);
+        }
+      } else {
+        assumed = { role: record.assumedRole, companyId: record.assumedCompanyId ?? null };
+      }
+    }
 
     const tokens = await this.issueTokens(user, assumed);
-    const publicUser = await this.publicUser(user);
     return {
       ...tokens,
-      user: assumed ? { ...publicUser, role: assumed.role, companyId: assumed.companyId } : publicUser,
+      user: await this.publicSessionUser(user, assumed),
     };
   }
 
   async logout(cookieValue: string | undefined) {
     if (!cookieValue || !cookieValue.includes(".")) return;
     const [tokenId] = cookieValue.split(".");
+    const record = await this.db().refreshToken
+      .findUnique({ where: { id: tokenId }, select: { userId: true, assumedAccessId: true } })
+      .catch(() => null);
     await this.db().refreshToken
       .update({ where: { id: tokenId }, data: { revokedAt: new Date() } })
       .catch(() => undefined);
+    if (record?.assumedAccessId) {
+      await this.closeSuperAdminCompanyAccess(record.assumedAccessId, record.userId);
+    }
   }
 
-  async me(userId: string) {
-    const user = await this.db().user.findUnique({ where: { id: userId } });
+  async me(identity: JwtPayload) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
     if (!user || !user.isActive) throw new UnauthorizedException();
-    return this.publicUser(user);
+    const assumed: AssumedContext | null = identity.assumed
+      ? {
+        role: identity.role,
+        companyId: identity.companyId,
+        accessId: identity.assumedAccessId ?? null,
+      }
+      : null;
+    return this.publicSessionUser(user, assumed);
   }
 
   private async createUrlToken(userId: string, type: AccountTokenType, ttlMs: number) {
@@ -577,6 +778,38 @@ export class AuthService {
   private maskEmail(email: string) {
     const [name, domain] = email.split("@");
     return `${name.slice(0, 2)}***@${domain}`;
+  }
+
+  /** URL pública do web app; nunca use a URL da API para levar o navegador. */
+  private appUrl() {
+    return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+  }
+
+  /**
+   * A resposta de sessão mostra o papel assumido para o painel, mas preserva
+   * explicitamente quem é o ator real. O front usa isso apenas para informar a
+   * pessoa; a API continua confiando exclusivamente nos claims e no banco.
+   */
+  private async publicSessionUser(user: any, assumed?: AssumedContext | null) {
+    const publicUser = await this.publicUser(user);
+    if (!assumed) return publicUser;
+
+    let companyName = assumed.companyName ?? null;
+    if (assumed.companyId && !companyName) {
+      const company = await this.db().company.findUnique({
+        where: { id: assumed.companyId },
+        select: { name: true },
+      }).catch(() => null);
+      companyName = company?.name ?? null;
+    }
+
+    return {
+      ...publicUser,
+      role: assumed.role,
+      companyId: assumed.companyId,
+      actorRole: user.role,
+      impersonation: this.assumedMetadata({ ...assumed, companyName }),
+    };
   }
 
   private async publicUser(user: any) {

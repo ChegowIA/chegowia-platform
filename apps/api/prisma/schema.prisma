@@ -383,49 +383,78 @@ model User {
 
   company Company? @relation(fields: [companyId], references: [id])
 
-  refreshTokens    RefreshToken[]
-  accountTokens    AccountToken[]
-  employeeProfile  EmployeeProfile?
-  customerProfiles CustomerProfile[]
-  addresses        Address[]
+  refreshTokens             RefreshToken[]
+  accountTokens             AccountToken[]
+  superAdminCompanyAccesses SuperAdminCompanyAccess[] @relation("SuperAdminCompanyAccessActor")
+  employeeProfile           EmployeeProfile?
+  customerProfiles          CustomerProfile[]
+  addresses                 Address[]
 
-  ordersAsCustomer              Order[]                @relation("OrderCustomer")
-  orderStatusChanges            OrderStatusHistory[]   @relation("OrderStatusChangedBy")
-  deliveriesAsMotoboy           Delivery[]             @relation("DeliveryMotoboy")
-  aiConversations               AIConversation[]       @relation("AIConversationUser")
-  aiActionsConfirmed            AIActionLog[]          @relation("AIActionConfirmedBy")
-  whatsappConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignedTo")
-  whatsappMessagesSent          WhatsAppMessage[]      @relation("WhatsAppMessageSentBy")
-  tableSessionsOpened           TableSession[]         @relation("TableSessionOpenedBy")
-  tableSessionsAttending        TableSession[]         @relation("TableSessionAttendant")
-  tableSessionsClosed           TableSession[]         @relation("TableSessionClosedBy")
-  diningOrdersCreated           DiningOrder[]          @relation("DiningOrderCreatedBy")
+  ordersAsCustomer              Order[]                       @relation("OrderCustomer")
+  orderStatusChanges            OrderStatusHistory[]          @relation("OrderStatusChangedBy")
+  deliveriesAsMotoboy           Delivery[]                    @relation("DeliveryMotoboy")
+  aiConversations               AIConversation[]              @relation("AIConversationUser")
+  aiActionsConfirmed            AIActionLog[]                 @relation("AIActionConfirmedBy")
+  whatsappConversationsAssigned WhatsAppConversation[]        @relation("WhatsAppConversationAssignedTo")
+  whatsappMessagesSent          WhatsAppMessage[]             @relation("WhatsAppMessageSentBy")
+  tableSessionsOpened           TableSession[]                @relation("TableSessionOpenedBy")
+  tableSessionsAttending        TableSession[]                @relation("TableSessionAttendant")
+  tableSessionsClosed           TableSession[]                @relation("TableSessionClosedBy")
+  diningOrdersCreated           DiningOrder[]                 @relation("DiningOrderCreatedBy")
   resellerProfile               ResellerProfile?
-  resellerApplicationsReviewed  ResellerApplication[]  @relation("ResellerApplicationReviewedBy")
-  leadsClaimed                  SalesLead[]            @relation("SalesLeadClaimedBy")
-  platformSupportConversations PlatformSupportConversation[] @relation("PlatformSupportUser")
-  platformSupportAssigned      PlatformSupportConversation[] @relation("PlatformSupportAssignedSuperAdmin")
-  platformSupportMessages      PlatformSupportMessage[]      @relation("PlatformSupportMessageAuthor")
+  resellerApplicationsReviewed  ResellerApplication[]         @relation("ResellerApplicationReviewedBy")
+  leadsClaimed                  SalesLead[]                   @relation("SalesLeadClaimedBy")
+  platformSupportConversations  PlatformSupportConversation[] @relation("PlatformSupportUser")
+  platformSupportAssigned       PlatformSupportConversation[] @relation("PlatformSupportAssignedSuperAdmin")
+  platformSupportMessages       PlatformSupportMessage[]      @relation("PlatformSupportMessageAuthor")
 
   @@index([companyId])
 }
 
 model RefreshToken {
-  id        String    @id @default(cuid())
-  userId    String
-  tokenHash String
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  id               String    @id @default(cuid())
+  userId           String
+  tokenHash        String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
   // Contexto assumido pelo superadmin multiacesso. Fica aqui para que renovar a
   // sessão não devolva silenciosamente o usuário ao papel de plataforma —
   // trocar de contexto seria desfeito a cada refresh.
   assumedRole      Role?
   assumedCompanyId String?
+  // Sessões de suporte por atalho carregam o ID auditável que as originou.
+  // Não é uma FK de propósito: o histórico do atalho não pode ser apagado por
+  // uma rotação normal de refresh token.
+  assumedAccessId  String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([assumedAccessId])
+}
+
+// Atalho efêmero e auditável para o superadmin abrir a visão ADMIN de uma
+// empresa. O segredo cru só existe no fragmento da URL no navegador; o banco
+// guarda apenas o SHA-256. Depois de consumido, o mesmo registro vira a trilha
+// de auditoria da sessão de suporte.
+model SuperAdminCompanyAccess {
+  id               String    @id @default(cuid())
+  companyId        String
+  superAdminId     String
+  tokenHash        String    @unique
+  linkExpiresAt    DateTime
+  sessionExpiresAt DateTime?
+  consumedAt       DateTime?
+  revokedAt        DateTime?
+  closedAt         DateTime?
+  createdAt        DateTime  @default(now())
+
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  superAdmin User    @relation("SuperAdminCompanyAccessActor", fields: [superAdminId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([superAdminId, sessionExpiresAt])
 }
 
 model AccountToken {
@@ -481,34 +510,35 @@ model Company {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  settings              CompanySettings?
-  users                 User[]
-  deliveryAreas         DeliveryArea[]
-  categories            Category[]
-  products              Product[]
-  orders                Order[]
-  deliveries            Delivery[]
-  payments              Payment[]
-  employeeProfiles      EmployeeProfile[]
-  customerProfiles      CustomerProfile[]
-  promotions            Promotion[]
-  messagingChannels     MessagingChannel[]
-  whatsappConversations WhatsAppConversation[]
-  whatsappMessages      WhatsAppMessage[]
-  whatsappOrderDrafts   WhatsAppOrderDraft[]
-  usageLedgers          UsageLedger[]
-  aiConversations       AIConversation[]
-  aiActionLogs          AIActionLog[]
-  restaurantTables      RestaurantTable[]
-  tableSessions         TableSession[]
-  diningOrders          DiningOrder[]
-  subscription          ClientSubscription?
-  clientApplication     ClientApplication?
-  fiscalProfile         CompanyFiscalProfile?
-  fiscalCertificates    FiscalCertificate[]
-  fiscalDocuments       FiscalDocument[]
-  cashRegisters         CashRegister[]
-  cashSessions          CashSession[]
+  settings                  CompanySettings?
+  users                     User[]
+  deliveryAreas             DeliveryArea[]
+  categories                Category[]
+  products                  Product[]
+  orders                    Order[]
+  deliveries                Delivery[]
+  payments                  Payment[]
+  employeeProfiles          EmployeeProfile[]
+  customerProfiles          CustomerProfile[]
+  promotions                Promotion[]
+  messagingChannels         MessagingChannel[]
+  whatsappConversations     WhatsAppConversation[]
+  whatsappMessages          WhatsAppMessage[]
+  whatsappOrderDrafts       WhatsAppOrderDraft[]
+  usageLedgers              UsageLedger[]
+  aiConversations           AIConversation[]
+  aiActionLogs              AIActionLog[]
+  restaurantTables          RestaurantTable[]
+  tableSessions             TableSession[]
+  diningOrders              DiningOrder[]
+  subscription              ClientSubscription?
+  clientApplication         ClientApplication?
+  fiscalProfile             CompanyFiscalProfile?
+  fiscalCertificates        FiscalCertificate[]
+  fiscalDocuments           FiscalDocument[]
+  cashRegisters             CashRegister[]
+  cashSessions              CashSession[]
+  superAdminCompanyAccesses SuperAdminCompanyAccess[]
 
   @@index([city, state])
   @@index([isActive, isTestOnly, city, state])
@@ -632,12 +662,12 @@ model FiscalDocument {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
-  company Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  order   Order?                @relation(fields: [orderId], references: [id])
+  company      Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order        Order?                @relation(fields: [orderId], references: [id])
   // FK composta: documento de uma empresa não pode apontar para a comanda de
   // outra, mesmo que uma escrita externa ao serviço erre os IDs.
-  tableSession TableSession?    @relation("FiscalDocumentTableSession", fields: [tableSessionId, companyId], references: [id, companyId], onDelete: Restrict)
-  events  FiscalDocumentEvent[]
+  tableSession TableSession?         @relation("FiscalDocumentTableSession", fields: [tableSessionId, companyId], references: [id, companyId], onDelete: Restrict)
+  events       FiscalDocumentEvent[]
 
   @@unique([companyId, environment, series, number])
   @@unique([tableSessionId, companyId])
@@ -977,17 +1007,17 @@ model ProductAddon {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id            String @id @default(cuid())
-  companyId     String
+  id                     String      @id @default(cuid())
+  companyId              String
   // Pedidos pelo site sempre têm conta. Pedidos do WhatsApp não exigem login,
   // então guardam nome/telefone no próprio documento sem criar credenciais
   // artificiais para o consumidor.
-  customerId    String?
-  customerName  String?
-  customerPhone String? @db.VarChar(20)
-  source        OrderSource @default(SITE)
+  customerId             String?
+  customerName           String?
+  customerPhone          String?     @db.VarChar(20)
+  source                 OrderSource @default(SITE)
   whatsappConversationId String?
-  whatsappOrderDraftId   String? @unique
+  whatsappOrderDraftId   String?     @unique
 
   addressId            String?
   deliveryStreet       String
@@ -1013,9 +1043,9 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company  Company  @relation(fields: [companyId], references: [id])
-  customer User?    @relation("OrderCustomer", fields: [customerId], references: [id])
-  address  Address? @relation(fields: [addressId], references: [id])
+  company              Company               @relation(fields: [companyId], references: [id])
+  customer             User?                 @relation("OrderCustomer", fields: [customerId], references: [id])
+  address              Address?              @relation(fields: [addressId], references: [id])
   // FKs compostas: mesmo uma escrita externa não consegue ligar um pedido à
   // conversa ou ao rascunho de outra empresa.
   whatsappConversation WhatsAppConversation? @relation("WhatsAppConversationOrders", fields: [whatsappConversationId, companyId], references: [id, companyId], onDelete: Restrict)
@@ -1027,11 +1057,11 @@ model Order {
   payment        Payment?
   FiscalDocument FiscalDocument?
 
+  @@unique([whatsappOrderDraftId, companyId])
   @@index([companyId, status])
   @@index([customerId])
   @@index([companyId, customerPhone])
   @@index([whatsappConversationId, companyId])
-  @@unique([whatsappOrderDraftId, companyId])
   // Os relatórios filtram por faixa de createdAt dentro da empresa; sem este
   // índice a consulta varria todos os pedidos da empresa para depois descartar.
   @@index([companyId, createdAt])
@@ -1102,46 +1132,46 @@ model RestaurantTable {
 }
 
 model TableSession {
-  id             String             @id @default(cuid())
-  companyId      String
-  tableId        String
-  status         TableSessionStatus @default(ABERTA)
-  customerName   String?
-  customerPhone  String?
+  id               String             @id @default(cuid())
+  companyId        String
+  tableId          String
+  status           TableSessionStatus @default(ABERTA)
+  customerName     String?
+  customerPhone    String?
   // Preenchidos no fechamento pela equipe e usados pela NFC-e da própria
   // comanda. A emissão nunca supõe uma forma de pagamento.
-  customerDocument String?          @db.VarChar(14)
-  paymentMethod   PaymentMethod?
-  paidAt          DateTime?
-  guestCount     Int                @default(1)
-  notes          String?            @db.Text
+  customerDocument String?            @db.VarChar(14)
+  paymentMethod    PaymentMethod?
+  paidAt           DateTime?
+  guestCount       Int                @default(1)
+  notes            String?            @db.Text
   // Quando a própria pessoa abre a mesa pelo QR não há um usuário interno
   // responsável ainda. O atendente é assumido depois por alguém da equipe.
-  openedByUserId String?
-  attendantUserId String?
-  closedByUserId String?
-  openedFromQr   Boolean            @default(false)
-  openedAt       DateTime           @default(now())
-  closedAt       DateTime?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  openedByUserId   String?
+  attendantUserId  String?
+  closedByUserId   String?
+  openedFromQr     Boolean            @default(false)
+  openedAt         DateTime           @default(now())
+  closedAt         DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
-  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   // A empresa faz parte da FK: uma sessão nunca pode ser ligada a uma mesa de
   // outra empresa, mesmo em uma escrita acidental fora do service.
-  table    RestaurantTable @relation(fields: [tableId, companyId], references: [id, companyId], onDelete: Restrict)
+  table          RestaurantTable @relation(fields: [tableId, companyId], references: [id, companyId], onDelete: Restrict)
   // Mantém a regra histórica da auditoria: não remove um usuário que abriu
   // uma comanda sem antes tratar o vínculo explicitamente.
-  openedBy User?           @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id], onDelete: Restrict)
-  attendant User?          @relation("TableSessionAttendant", fields: [attendantUserId], references: [id])
-  closedBy User?           @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
-  orders   DiningOrder[]
+  openedBy       User?           @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id], onDelete: Restrict)
+  attendant      User?           @relation("TableSessionAttendant", fields: [attendantUserId], references: [id])
+  closedBy       User?           @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
+  orders         DiningOrder[]
   fiscalDocument FiscalDocument? @relation("FiscalDocumentTableSession")
 
+  @@unique([id, companyId])
   @@index([companyId, status])
   @@index([tableId, status])
   @@index([tableId, companyId])
-  @@unique([id, companyId])
   @@index([companyId, attendantUserId, status])
 }
 
@@ -1314,24 +1344,24 @@ model ResellerApplication {
 }
 
 model ResellerProfile {
-  id                 String   @id @default(cuid())
-  userId             String   @unique
-  applicationId      String?  @unique
-  code               String   @unique
-  commissionRate     Decimal  @default(0.30) @db.Decimal(5, 4)
-  stripeAccountId    String?  @unique
-  stripeOnboardingOk Boolean  @default(false)
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  applicationId        String?  @unique
+  code                 String   @unique
+  commissionRate       Decimal  @default(0.30) @db.Decimal(5, 4)
+  stripeAccountId      String?  @unique
+  stripeOnboardingOk   Boolean  @default(false)
   // Subconta Asaas do revendedor. O walletId endereça as transferências; a
   // chave de API é devolvida uma única vez na criação, então é guardada cifrada
   // — sem ela não há como consultar o saldo da subconta depois.
-  asaasWalletId      String?  @unique
-  asaasAccountId     String?  @unique
-  asaasApiKeyEncrypted String? @db.Text
-  asaasOnboardingOk  Boolean  @default(false)
-  isActive           Boolean  @default(true)
-  approvedAt         DateTime @default(now())
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  asaasWalletId        String?  @unique
+  asaasAccountId       String?  @unique
+  asaasApiKeyEncrypted String?  @db.Text
+  asaasOnboardingOk    Boolean  @default(false)
+  isActive             Boolean  @default(true)
+  approvedAt           DateTime @default(now())
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   application        ResellerApplication? @relation(fields: [applicationId], references: [id])
@@ -1385,10 +1415,10 @@ model ClientApplication {
   // Mantém a origem da candidatura caso o provisionamento ocorra depois (por
   // revisão humana ou webhook legado), quando o request/IP original já não
   // existe mais.
-  isTestOnly                 Boolean           @default(false)
+  isTestOnly                  Boolean           @default(false)
   // Preserva o valor de homologação mesmo se a aprovação acontecer depois
   // de o modo temporário ser desligado.
-  monthlyPriceSnapshot       Decimal?          @db.Decimal(10, 2)
+  monthlyPriceSnapshot        Decimal?          @db.Decimal(10, 2)
   status                      ApplicationStatus @default(EM_ANALISE_IA)
   aiScore                     Int?
   aiFeedback                  String?           @db.Text
@@ -1452,35 +1482,35 @@ model ClientSubscription {
 }
 
 model CommissionLedger {
-  id               String           @id @default(cuid())
-  resellerId       String
-  subscriptionId   String
-  stripeInvoiceId  String?          @unique
-  asaasPaymentId   String?          @unique
+  id                     String           @id @default(cuid())
+  resellerId             String
+  subscriptionId         String
+  stripeInvoiceId        String?          @unique
+  asaasPaymentId         String?          @unique
   // Referência interna para ajustes financeiros. Diferente dos IDs dos
   // provedores, ela permite registrar uma recuperação de estorno sem fingir
   // que o ajuste é uma nova cobrança Asaas/Stripe.
-  externalReference String?         @unique
-  grossAmount      Decimal          @db.Decimal(10, 2)
-  commissionRate   Decimal          @db.Decimal(5, 4)
-  commissionAmount Decimal          @db.Decimal(10, 2)
-  currency         String           @default("brl")
-  status           CommissionStatus @default(DISPONIVEL)
+  externalReference      String?          @unique
+  grossAmount            Decimal          @db.Decimal(10, 2)
+  commissionRate         Decimal          @db.Decimal(5, 4)
+  commissionAmount       Decimal          @db.Decimal(10, 2)
+  currency               String           @default("brl")
+  status                 CommissionStatus @default(DISPONIVEL)
   // `settledAt` só é preenchido quando o dinheiro entrou no saldo da conta
   // raiz. `PAYMENT_CONFIRMED` libera o produto, mas ainda não autoriza saque.
-  settledAt        DateTime?
-  availableAt      DateTime?
+  settledAt              DateTime?
+  availableAt            DateTime?
   // A tela diferencia compensação, reserva e contestação sem expor jargão do
   // provedor. O motivo não altera o histórico financeiro, apenas explica por
   // que uma comissão ainda não está disponível.
-  holdReason       String?          @db.VarChar(191)
+  holdReason             String?          @db.VarChar(191)
   availabilityNotifiedAt DateTime?
-  paidAt           DateTime?
-  stripeTransferId String?
-  asaasTransferId  String?
-  payoutBatchId    String?
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  paidAt                 DateTime?
+  stripeTransferId       String?
+  asaasTransferId        String?
+  payoutBatchId          String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
 
   reseller     ResellerProfile    @relation(fields: [resellerId], references: [id])
   subscription ClientSubscription @relation(fields: [subscriptionId], references: [id])
@@ -1646,31 +1676,31 @@ model AIActionLog {
 // ---------------------------------------------------------------------------
 
 model MessagingChannel {
-  id                           String                 @id @default(cuid())
-  companyId                    String
-  type                         MessagingChannelType   @default(WHATSAPP)
-  status                       MessagingChannelStatus @default(ATIVO)
-  provider                     WhatsAppProvider       @default(GUPSHUP)
-  config                       Json
+  id                       String                 @id @default(cuid())
+  companyId                String
+  type                     MessagingChannelType   @default(WHATSAPP)
+  status                   MessagingChannelStatus @default(ATIVO)
+  provider                 WhatsAppProvider       @default(GUPSHUP)
+  config                   Json
   // Credenciais Gupshup. O app token vale 24h e é renovado sob demanda; guardá-lo
   // cifrado evita ida à Partner API a cada mensagem sem expor a credencial.
-  gupshupAppId                 String?                @unique
+  gupshupAppId             String?                @unique
   // O callback v2 do self-serve identifica o app pelo nome, então ele também
   // precisa ser único para resolver o canal sem ambiguidade.
-  gupshupAppName               String?                @unique
-  gupshupAppTokenEncrypted     String?                @db.Text
-  gupshupAppTokenExpiresAt     DateTime?
+  gupshupAppName           String?                @unique
+  gupshupAppTokenEncrypted String?                @db.Text
+  gupshupAppTokenExpiresAt DateTime?
   // Momento em que o empresário pediu o WhatsApp. No self-serve o aplicativo é
   // criado à mão pelo superadmin, então é este campo que sinaliza que há
   // trabalho esperando por ele.
-  accessRequestedAt            DateTime?
-  automationEnabled            Boolean                @default(true)
-  welcomeMessage               String?                @db.Text
-  connectedAt                  DateTime?
-  lastWebhookAt                DateTime?
-  lastError                    String?                @db.Text
-  createdAt                    DateTime               @default(now())
-  updatedAt                    DateTime               @updatedAt
+  accessRequestedAt        DateTime?
+  automationEnabled        Boolean                @default(true)
+  welcomeMessage           String?                @db.Text
+  connectedAt              DateTime?
+  lastWebhookAt            DateTime?
+  lastError                String?                @db.Text
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
 
   company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
   conversations WhatsAppConversation[]
@@ -1701,13 +1731,13 @@ model WhatsAppConversation {
   createdAt        DateTime                   @default(now())
   updatedAt        DateTime                   @updatedAt
 
-  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  channel        MessagingChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  aiConversation AIConversation?   @relation(fields: [aiConversationId], references: [id], onDelete: SetNull)
-  assignedTo     User?             @relation("WhatsAppConversationAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  company        Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel        MessagingChannel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  aiConversation AIConversation?      @relation(fields: [aiConversationId], references: [id], onDelete: SetNull)
+  assignedTo     User?                @relation("WhatsAppConversationAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
   messages       WhatsAppMessage[]
   orderDrafts    WhatsAppOrderDraft[]
-  orders         Order[]           @relation("WhatsAppConversationOrders")
+  orders         Order[]              @relation("WhatsAppConversationOrders")
 
   @@unique([channelId, customerPhone])
   // Serve de destino para FKs compostas que materializam o isolamento de
@@ -1718,44 +1748,44 @@ model WhatsAppConversation {
 }
 
 model WhatsAppOrderDraft {
-  id             String                    @id @default(cuid())
-  companyId      String
-  conversationId String
+  id                      String                   @id @default(cuid())
+  companyId               String
+  conversationId          String
   // Chave única só enquanto o carrinho está aberto. Ao concluir/cancelar ela
   // vira nula, preservando o histórico e permitindo o próximo pedido do mesmo
   // número sem reutilizar o rascunho que já gerou uma venda.
-  activeKey      String?                   @unique
-  status         WhatsAppOrderDraftStatus  @default(MONTANDO)
+  activeKey               String?                  @unique
+  status                  WhatsAppOrderDraftStatus @default(MONTANDO)
   // Linhas escolhidas pelo cliente (IDs e quantidades), nunca preços vindos
   // do modelo. Os preços são sempre re-resolvidos no servidor antes de criar.
-  cart           Json?
-  customerName   String?
-  addressStreet       String?
-  addressNumber       String?
-  addressComplement   String?
-  addressNeighborhood String?
-  addressCity         String?
-  addressState        String? @db.VarChar(2)
-  addressZipCode      String? @db.VarChar(8)
-  addressReference    String?
-  addressLatitude     Decimal? @db.Decimal(10, 7)
-  addressLongitude    Decimal? @db.Decimal(10, 7)
-  paymentMethod       PaymentMethod?
-  notes               String? @db.Text
+  cart                    Json?
+  customerName            String?
+  addressStreet           String?
+  addressNumber           String?
+  addressComplement       String?
+  addressNeighborhood     String?
+  addressCity             String?
+  addressState            String?                  @db.VarChar(2)
+  addressZipCode          String?                  @db.VarChar(8)
+  addressReference        String?
+  addressLatitude         Decimal?                 @db.Decimal(10, 7)
+  addressLongitude        Decimal?                 @db.Decimal(10, 7)
+  paymentMethod           PaymentMethod?
+  notes                   String?                  @db.Text
   // Foto calculada pelo servidor (itens, rota, frete e total) apresentada ao
   // cliente antes de ele confirmar. O hash impede confirmar valor alterado.
-  quoteSnapshot       Json?
-  quoteFingerprint    String? @db.VarChar(64)
+  quoteSnapshot           Json?
+  quoteFingerprint        String?                  @db.VarChar(64)
   confirmationRequestedAt DateTime?
-  confirmedAt         DateTime?
-  completedAt         DateTime?
-  lastError           String? @db.Text
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  confirmedAt             DateTime?
+  completedAt             DateTime?
+  lastError               String?                  @db.Text
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
 
-  company      Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  conversation WhatsAppConversation  @relation(fields: [conversationId, companyId], references: [id, companyId], onDelete: Cascade)
-  order        Order?                @relation("WhatsAppOrderDraftOrder")
+  company      Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversation WhatsAppConversation @relation(fields: [conversationId, companyId], references: [id, companyId], onDelete: Cascade)
+  order        Order?               @relation("WhatsAppOrderDraftOrder")
 
   @@unique([id, companyId])
   @@index([companyId, status, updatedAt])
@@ -1841,7 +1871,7 @@ model PlatformWhatsAppConversation {
   createdAt        DateTime                   @default(now())
   updatedAt        DateTime                   @updatedAt
 
-  channel  PlatformWhatsAppChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel  PlatformWhatsAppChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
   messages PlatformWhatsAppMessage[]
 
   @@unique([channelId, customerPhone])
@@ -1881,27 +1911,27 @@ model PlatformWhatsAppMessage {
 // pelo navegador nem precisa consultar ou expor dados de outro tenant.
 
 model PlatformSupportConversation {
-  id                         String                          @id @default(cuid())
-  userId                     String
+  id                     String                            @id @default(cuid())
+  userId                 String
   // Enquanto o atendimento está aberto, activeKey recebe o userId e garante
   // uma única conversa ativa por pessoa. Ao encerrar, ela vira null, permitindo
   // que o mesmo usuário abra um novo atendimento posteriormente.
-  activeKey                  String?                         @unique
-  userName                   String
-  userEmail                  String
-  userRole                   Role
-  companyIdSnapshot          String?
-  companyNameSnapshot        String?
-  mode                       PlatformSupportConversationMode @default(IA)
-  status                     PlatformSupportConversationStatus @default(ABERTA)
-  lastMessageText            String?                         @db.Text
-  lastMessageAt              DateTime                        @default(now())
-  humanRequestedAt           DateTime?
-  humanHandoffNotifiedAt     DateTime?
-  assignedSuperAdminId       String?
-  closedAt                   DateTime?
-  createdAt                  DateTime                        @default(now())
-  updatedAt                  DateTime                        @updatedAt
+  activeKey              String?                           @unique
+  userName               String
+  userEmail              String
+  userRole               Role
+  companyIdSnapshot      String?
+  companyNameSnapshot    String?
+  mode                   PlatformSupportConversationMode   @default(IA)
+  status                 PlatformSupportConversationStatus @default(ABERTA)
+  lastMessageText        String?                           @db.Text
+  lastMessageAt          DateTime                          @default(now())
+  humanRequestedAt       DateTime?
+  humanHandoffNotifiedAt DateTime?
+  assignedSuperAdminId   String?
+  closedAt               DateTime?
+  createdAt              DateTime                          @default(now())
+  updatedAt              DateTime                          @updatedAt
 
   user               User                     @relation("PlatformSupportUser", fields: [userId], references: [id], onDelete: Cascade)
   assignedSuperAdmin User?                    @relation("PlatformSupportAssignedSuperAdmin", fields: [assignedSuperAdminId], references: [id], onDelete: SetNull)
@@ -1932,24 +1962,24 @@ model PlatformSupportMessage {
 // de cliente e, por isso, não reutiliza UsageLedger (que obrigatoriamente tem
 // companyId). Guardamos a tarifa calculada no instante do uso para auditoria.
 model PlatformUsageLedger {
-  id                String      @id @default(cuid())
+  id                    String      @id @default(cuid())
   // O custo institucional pode nascer no WhatsApp comercial ou no suporte
   // autenticado. Cada linha referencia exatamente um deles.
-  channelId         String?
+  channelId             String?
   supportConversationId String?
-  usageRateId       String?
-  source            UsageSource
-  metric            UsageMetric
-  quantity          Decimal     @db.Decimal(18, 6)
-  providerAmount    Decimal     @default(0) @db.Decimal(16, 6)
-  currency          String      @default("brl")
-  externalReference String?     @unique
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  usageRateId           String?
+  source                UsageSource
+  metric                UsageMetric
+  quantity              Decimal     @db.Decimal(18, 6)
+  providerAmount        Decimal     @default(0) @db.Decimal(16, 6)
+  currency              String      @default("brl")
+  externalReference     String?     @unique
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
 
-  channel             PlatformWhatsAppChannel?  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel             PlatformWhatsAppChannel?     @relation(fields: [channelId], references: [id], onDelete: Cascade)
   supportConversation PlatformSupportConversation? @relation(fields: [supportConversationId], references: [id], onDelete: Cascade)
-  usageRate           UsageRate?                 @relation(fields: [usageRateId], references: [id], onDelete: SetNull)
+  usageRate           UsageRate?                   @relation(fields: [usageRateId], references: [id], onDelete: SetNull)
 
   @@index([channelId, createdAt])
   @@index([supportConversationId, createdAt])

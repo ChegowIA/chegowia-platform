@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table } from "@/components/ui/table";
+import { SuperAdminCompanyAccessButton } from "@/components/auth/super-admin-company-access-button";
 
 export default function SuperAdminCompaniesPage() {
   const [search, setSearch] = useState("");
@@ -93,14 +94,17 @@ export default function SuperAdminCompaniesPage() {
                 {
                   header: "Ações",
                   render: (row: Company) => (
-                    <Button
-                      size="sm"
-                      variant={row.isActive ? "danger" : "outline"}
-                      isLoading={toggleStatus.isPending && toggleStatus.variables?.id === row.id}
-                      onClick={() => toggleStatus.mutate(row)}
-                    >
-                      {row.isActive ? "Desativar" : "Ativar"}
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <SuperAdminCompanyAccessButton companyId={row.id} compact />
+                      <Button
+                        size="sm"
+                        variant={row.isActive ? "danger" : "outline"}
+                        isLoading={toggleStatus.isPending && toggleStatus.variables?.id === row.id}
+                        onClick={() => toggleStatus.mutate(row)}
+                      >
+                        {row.isActive ? "Desativar" : "Ativar"}
+                      </Button>
+                    </div>
                   ),
                 },
               ]}
