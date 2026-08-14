@@ -17,8 +17,11 @@ export interface AuthUser {
   impersonation?: {
     companyId: string | null;
     companyName: string | null;
+    resellerId: string | null;
+    resellerName: string | null;
     role: Role;
     supportAccess: boolean;
+    kind: "COMPANY" | "RESELLER" | null;
   };
 }
 

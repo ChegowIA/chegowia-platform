@@ -59,16 +59,21 @@ describe("papéis do login multiacesso", () => {
     },
   );
 
-  it.each([Role.REVENDEDOR, Role.CLIENTE])("assume %s sem empresa", async (role) => {
+  it("assume CLIENTE sem empresa", async () => {
     const { service, jwtService } = buildService();
 
-    const result = await service.switchContext(identity, null, role);
+    const result = await service.switchContext(identity, null, Role.CLIENTE);
 
     expect(jwtService.sign).toHaveBeenCalledWith(
-      expect.objectContaining({ role, companyId: null, assumed: true }),
+      expect.objectContaining({ role: Role.CLIENTE, companyId: null, assumed: true }),
       expect.anything(),
     );
     expect(result.user.companyId).toBeNull();
+  });
+
+  it("exige escolher um revendedor concreto em vez de abrir uma carteira genérica", async () => {
+    const { service } = buildService();
+    await expect(service.switchContext(identity, null, Role.REVENDEDOR)).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it("recusa papel de empresa sem informar empresa", async () => {
@@ -100,7 +105,7 @@ describe("papéis do login multiacesso", () => {
 
     const empresa = result.contexts.find((context: any) => context.kind === "COMPANY");
     expect(empresa?.roles).toEqual([Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM]);
-    expect(result.contexts.some((context: any) => context.role === Role.REVENDEDOR)).toBe(true);
+    expect(result.contexts.some((context: any) => context.role === Role.REVENDEDOR)).toBe(false);
     expect(result.contexts.some((context: any) => context.role === Role.CLIENTE)).toBe(true);
   });
 

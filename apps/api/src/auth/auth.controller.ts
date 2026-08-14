@@ -116,6 +116,33 @@ export class AuthController {
     return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
   }
 
+  /** Atalho efêmero, auditado e somente leitura para a central de um parceiro. */
+  @AllowInactiveSubscription()
+  @Roles(Role.SUPER_ADMIN)
+  @Post("super-admin/reseller-access-links/:resellerId")
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.CREATED)
+  createResellerAccessLink(@CurrentUser() user: JwtPayload, @Param("resellerId") resellerId: string) {
+    return this.authService.createResellerAccessLink(user, resellerId);
+  }
+
+  /** Consome o atalho de parceiro sem perder a identidade do superadmin. */
+  @AllowInactiveSubscription()
+  @Post("super-admin/reseller-access/consume")
+  @Header("Cache-Control", "no-store")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async consumeResellerAccessLink(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ConsumeCompanyAccessLinkDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.consumeResellerAccessLink(user, dto.token);
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
+  }
+
   @Public()
   @Post("register")
   @Throttle({ default: { limit: 3, ttl: 60 * 60_000 } })

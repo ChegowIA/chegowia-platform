@@ -1,6 +1,8 @@
 import { Role } from "@prisma/client";
 import type { Request } from "express";
 
+export type SuperAdminSupportAccessKind = "COMPANY" | "RESELLER";
+
 export interface JwtPayload {
   sub: string;
   email: string;
@@ -17,6 +19,12 @@ export interface JwtPayload {
   assumed?: true;
   /** ID auditável do atalho de suporte que abriu este contexto, quando houver. */
   assumedAccessId?: string;
+  /** Qual registro de auditoria valida a sessão assumida. */
+  assumedAccessKind?: SuperAdminSupportAccessKind;
+  /** Usuário efetivo apenas na visão de revendedor; `sub` continua sendo o ator real. */
+  assumedUserId?: string;
+  /** Perfil de revendedor efetivo apenas na visão de suporte de parceiro. */
+  assumedResellerId?: string;
 }
 
 export interface AuthenticatedRequest extends Request {

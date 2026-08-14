@@ -76,21 +76,51 @@ export class AccountStatusGuard implements CanActivate {
         // multiacesso comum: só um atalho consumido, não revogado, não
         // encerrado e ainda dentro da janela curta pode abrir uma empresa
         // inativa ou com cobrança pendente.
-        if (identity.role !== Role.ADMIN || !identity.companyId) {
+        const accessKind = identity.assumedAccessKind ?? "COMPANY";
+        let access: unknown;
+        if (accessKind === "COMPANY") {
+          if (identity.role !== Role.ADMIN || !identity.companyId) {
+            throw new UnauthorizedException("Sua sessão de suporte não é mais válida.");
+          }
+          access = await (this.prisma as any).superAdminCompanyAccess?.findFirst?.({
+            where: {
+              id: identity.assumedAccessId,
+              superAdminId: user.id,
+              companyId: identity.companyId,
+              consumedAt: { not: null },
+              revokedAt: null,
+              closedAt: null,
+              sessionExpiresAt: { gt: new Date() },
+            },
+            select: { id: true },
+          });
+        } else if (accessKind === "RESELLER") {
+          // A visão de parceiro não usa companyId. O usuário efetivo é o do
+          // perfil alvo, mas `sub` continua sendo o superadmin para auditoria.
+          if (
+            identity.role !== Role.REVENDEDOR
+            || identity.companyId
+            || !identity.assumedUserId
+            || !identity.assumedResellerId
+          ) {
+            throw new UnauthorizedException("Sua sessão de suporte não é mais válida.");
+          }
+          access = await (this.prisma as any).superAdminResellerAccess?.findFirst?.({
+            where: {
+              id: identity.assumedAccessId,
+              resellerId: identity.assumedResellerId,
+              superAdminId: user.id,
+              consumedAt: { not: null },
+              revokedAt: null,
+              closedAt: null,
+              sessionExpiresAt: { gt: new Date() },
+              reseller: { userId: identity.assumedUserId },
+            },
+            select: { id: true },
+          });
+        } else {
           throw new UnauthorizedException("Sua sessão de suporte não é mais válida.");
         }
-        const access = await (this.prisma as any).superAdminCompanyAccess?.findFirst?.({
-          where: {
-            id: identity.assumedAccessId,
-            superAdminId: user.id,
-            companyId: identity.companyId,
-            consumedAt: { not: null },
-            revokedAt: null,
-            closedAt: null,
-            sessionExpiresAt: { gt: new Date() },
-          },
-          select: { id: true },
-        });
         if (!access) throw new UnauthorizedException("Sua sessão de suporte expirou.");
         auditedSupportAccess = true;
       }

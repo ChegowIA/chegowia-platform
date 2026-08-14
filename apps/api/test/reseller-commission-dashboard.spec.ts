@@ -34,10 +34,10 @@ describe("extrato profissional da comissão do revendedor", () => {
       },
       clientSubscription: { count: jest.fn().mockResolvedValue(2) },
       resellerProspect: { count: jest.fn().mockResolvedValue(3) },
-      salesLead: { count: jest.fn().mockResolvedValue(1) },
+      salesLead: { count: jest.fn().mockResolvedValue(1), findMany: jest.fn().mockResolvedValue([]) },
     };
     const service = new ResellersService(prisma as never, {} as never, {} as never, {} as never, {} as never);
-    return { service };
+    return { service, prisma };
   }
 
   it("separa saldo sacável, compensação e ajuste sem prometer saque antes do crédito", async () => {
@@ -55,5 +55,24 @@ describe("extrato profissional da comissão do revendedor", () => {
       code: "AJUSTE",
       label: "Ajuste de estorno",
     });
+  });
+
+  it("na visão de suporte calcula o extrato sem alterar o saldo do parceiro", async () => {
+    const { service, prisma } = build();
+
+    await service.dashboard("user-1", true, true);
+
+    expect(prisma.commissionLedger.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("na visão de suporte não consulta a fila coletiva de leads", async () => {
+    const { service, prisma } = build();
+
+    await service.availableLeads("user-1", true, true);
+
+    expect(prisma.salesLead.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.salesLead.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { resellerId: "rev-1" },
+    }));
   });
 });

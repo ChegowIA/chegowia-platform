@@ -4,12 +4,15 @@ import { SkipThrottle, Throttle } from "@nestjs/throttler";
 import { Role } from "@prisma/client";
 import type { Request } from "express";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { CurrentResellerUser } from "../common/decorators/current-reseller-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { BlockResellerSupportWrite } from "../common/decorators/block-reseller-support-write.decorator";
 import { BillingService } from "./billing.service";
 import { ClientApplicationDto } from "./dto/client-application.dto";
 import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
 import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 
 @ApiTags("billing")
 @Controller("billing")
@@ -60,8 +63,9 @@ export class BillingController {
 
   @Roles(Role.REVENDEDOR)
   @Post("reseller/payment-links")
+  @BlockResellerSupportWrite()
   resellerPaymentLink(
-    @CurrentUser("sub") userId: string,
+    @CurrentResellerUser() userId: string,
     @Body() dto: ClientApplicationDto,
   ) {
     return this.billing.createForReseller(userId, dto);
@@ -74,17 +78,25 @@ export class BillingController {
    */
   @Roles(Role.REVENDEDOR)
   @Post("reseller/connect")
-  connect(@CurrentUser("sub") userId: string, @Body() dto?: AsaasSubaccountDto) {
+  @BlockResellerSupportWrite()
+  connect(@CurrentResellerUser() userId: string, @Body() dto?: AsaasSubaccountDto) {
     return this.billing.connectOnboarding(userId, dto);
   }
 
   @Roles(Role.REVENDEDOR)
   @Get("reseller/connect/status")
-  connectStatus(@CurrentUser("sub") userId: string) { return this.billing.connectStatus(userId); }
+  connectStatus(@CurrentResellerUser() userId: string, @CurrentUser() identity: JwtPayload) {
+    return this.billing.connectStatus(userId, this.isResellerSupportView(identity));
+  }
 
   @Roles(Role.REVENDEDOR)
   @Post("reseller/payout")
-  payout(@CurrentUser("sub") userId: string) { return this.billing.requestPayout(userId); }
+  @BlockResellerSupportWrite()
+  payout(@CurrentResellerUser() userId: string) { return this.billing.requestPayout(userId); }
+
+  private isResellerSupportView(identity: JwtPayload) {
+    return Boolean(identity.assumed && identity.assumedAccessId && identity.assumedAccessKind === "RESELLER");
+  }
 
   @Roles(Role.ADMIN)
   @AllowInactiveSubscription()

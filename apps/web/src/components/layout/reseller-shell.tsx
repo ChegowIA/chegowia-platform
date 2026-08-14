@@ -10,6 +10,8 @@ import { LiveLeadOffer } from "@/components/resellers/live-lead-offer";
 import { MobileDock } from "@/components/layout/mobile-dock";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { ResellerAssistant } from "@/components/ai/reseller-assistant";
+import { SuperAdminResellerImpersonationBanner } from "@/components/auth/super-admin-reseller-impersonation-banner";
+import { Role } from "@chegowia/shared";
 
 const ITEMS = [
   { href: "/revendedor/dashboard", label: "Visão geral" },
@@ -22,15 +24,22 @@ export function ResellerShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const logout = useLogout();
+  const isSupportView = Boolean(
+    user?.actorRole === Role.SUPER_ADMIN
+      && user.role === Role.REVENDEDOR
+      && user.impersonation?.supportAccess
+      && user.impersonation.kind === "RESELLER",
+  );
+  const displayName = isSupportView ? user?.impersonation?.resellerName : user?.name;
   return (
     <div className="app-shell flex min-h-screen bg-[#f5f6f8] text-slate-950 dark:bg-[#080d18] dark:text-slate-100">
       <aside className="sticky top-0 hidden h-dvh self-start w-64 shrink-0 flex-col overflow-y-auto bg-slate-950 text-white md:flex">
         <div className="p-4 pt-5">
           <Link href="/revendedor/dashboard" className="inline-flex"><BrandLogo light className="h-9 w-40" /></Link>
           <div className="mt-5 rounded-2xl border border-white/10 bg-white/[.05] p-3">
-            <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-400">Parceiro ChegowIA</p>
-            <p className="mt-1 truncate text-sm font-bold">{user?.name}</p>
-            <p className="mt-2 text-[11px] text-emerald-300">● Central comercial online</p>
+            <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-400">{isSupportView ? "Suporte auditado" : "Parceiro ChegowIA"}</p>
+            <p className="mt-1 truncate text-sm font-bold">{displayName}</p>
+            <p className={`mt-2 text-[11px] ${isSupportView ? "text-violet-300" : "text-emerald-300"}`}>{isSupportView ? "● Visualização somente leitura" : "● Central comercial online"}</p>
           </div>
         </div>
         <nav className="flex-1 space-y-1 px-3">
@@ -56,11 +65,11 @@ export function ResellerShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         </header>
-        <main className="min-w-0 overflow-x-hidden px-3 pb-28 pt-4 sm:p-6 md:pb-6 lg:p-8">{children}</main>
+        <main className="min-w-0 overflow-x-hidden px-3 pb-28 pt-4 sm:p-6 md:pb-6 lg:p-8"><SuperAdminResellerImpersonationBanner />{children}</main>
       </div>
       <MobileDock items={ITEMS} pathname={pathname} />
-      <LiveLeadOffer />
-      <ResellerAssistant />
+      {!isSupportView && <LiveLeadOffer />}
+      {!isSupportView && <ResellerAssistant />}
     </div>
   );
 }

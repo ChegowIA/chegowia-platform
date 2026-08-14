@@ -157,3 +157,63 @@ describe("revalidação periódica do socket", () => {
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 });
+
+describe("socket da visão auditada de revendedor", () => {
+  const allowed = "contato@chegowia.com.br";
+
+  afterEach(() => {
+    delete process.env.MULTI_CONTEXT_LOGIN_EMAIL;
+  });
+
+  it("aceita o suporte vinculado ao alvo, mas não entra na fila coletiva de leads", async () => {
+    process.env.MULTI_CONTEXT_LOGIN_EMAIL = allowed;
+    const payload = {
+      sub: "super-1",
+      email: allowed,
+      role: Role.REVENDEDOR,
+      companyId: null,
+      assumed: true as const,
+      assumedAccessId: "access-1",
+      assumedAccessKind: "RESELLER" as const,
+      assumedUserId: "reseller-user-1",
+      assumedResellerId: "reseller-1",
+    };
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "super-1",
+          isActive: true,
+          emailVerifiedAt: new Date(),
+          role: Role.SUPER_ADMIN,
+          email: allowed,
+          companyId: null,
+          company: null,
+          resellerProfile: null,
+        }),
+      },
+      superAdminResellerAccess: { findFirst: jest.fn().mockResolvedValue({ id: "access-1" }) },
+    };
+    const gateway = new RealtimeGateway({ verify: jest.fn().mockReturnValue(payload) } as never, prisma as never);
+    const client = {
+      handshake: { auth: { token: "token" } },
+      data: {},
+      join: jest.fn(),
+      on: jest.fn(),
+      disconnect: jest.fn(),
+    };
+
+    await gateway.handleConnection(client as never);
+
+    expect(prisma.superAdminResellerAccess.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: "access-1",
+        resellerId: "reseller-1",
+        superAdminId: "super-1",
+        reseller: { userId: "reseller-user-1" },
+      }),
+    }));
+    expect(client.join).toHaveBeenCalledWith("user:super-1");
+    expect(client.join).not.toHaveBeenCalledWith("resellers");
+    expect(client.disconnect).not.toHaveBeenCalled();
+  });
+});

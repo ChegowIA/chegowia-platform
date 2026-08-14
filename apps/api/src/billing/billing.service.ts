@@ -547,7 +547,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return sealSecret(apiKey, key);
   }
 
-  async connectStatus(userId: string) {
+  async connectStatus(userId: string, readOnly = false) {
     if (this.billingProvider() === "ASAAS") {
       const reseller = await this.db().resellerProfile.findUnique({ where: { userId } });
       if (!reseller) throw new NotFoundException("Revendedor não encontrado.");
@@ -569,10 +569,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       const account = await this.stripe.accounts.retrieve(reseller.stripeAccountId);
       const ready = this.isStripeAccountReady(account);
-      await this.db().resellerProfile.update({
-        where: { id: reseller.id },
-        data: { stripeOnboardingOk: ready },
-      });
+      // A visão auditada de suporte pode consultar o estado, mas não deve
+      // alterar nem sincronizar a conta financeira de outro usuário.
+      if (!readOnly) {
+        await this.db().resellerProfile.update({
+          where: { id: reseller.id },
+          data: { stripeOnboardingOk: ready },
+        });
+      }
       return {
         configured: true,
         ready,
@@ -581,13 +585,15 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       };
     } catch (error) {
       if (this.isMissingStripeResource(error)) {
-        await this.db().resellerProfile.update({
-          where: { id: reseller.id },
-          data: {
-            stripeAccountId: null,
-            stripeOnboardingOk: false,
-          },
-        });
+        if (!readOnly) {
+          await this.db().resellerProfile.update({
+            where: { id: reseller.id },
+            data: {
+              stripeAccountId: null,
+              stripeOnboardingOk: false,
+            },
+          });
+        }
         return {
           configured: true,
           ready: false,

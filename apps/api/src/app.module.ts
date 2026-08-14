@@ -26,6 +26,7 @@ import { ResellersModule } from "./resellers/resellers.module";
 import { BillingModule } from "./billing/billing.module";
 import { MailModule } from "./common/mail/mail.module";
 import { AccountStatusGuard } from "./common/guards/account-status.guard";
+import { BlockResellerSupportWriteGuard } from "./common/guards/block-reseller-support-write.guard";
 import { HealthModule } from "./health/health.module";
 import { validateEnvironment } from "./common/config/environment.validation";
 import { LocalStorageModule } from "./common/storage/local-storage.module";
@@ -81,6 +82,7 @@ import { PlatformSupportModule } from "./platform-support/platform-support.modul
     { provide: APP_GUARD, useClass: AccountStatusGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: APP_GUARD, useClass: BlockResellerSupportWriteGuard },
     // Antes do de log e do de tenant: mede a requisição inteira, incluindo o
     // tempo gasto pelos próprios interceptors.
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },

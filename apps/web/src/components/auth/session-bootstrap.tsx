@@ -12,8 +12,10 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
   const accessToken = useAuthStore((state) => state.accessToken);
   const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
+  const user = useAuthStore((state) => state.user);
   const setSession = useAuthStore((state) => state.setSession);
   const setSessionLoading = useAuthStore((state) => state.setSessionLoading);
+  const isAuditedSupportView = Boolean(user?.impersonation?.supportAccess);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -82,9 +84,11 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
       <NonCriticalBoundary name="acompanhamento de pedido">
         <CustomerOrderTracker />
       </NonCriticalBoundary>
-      <NonCriticalBoundary name="suporte" fallback={<PlatformSupportFallback />}>
-        <PlatformSupportBubble />
-      </NonCriticalBoundary>
+      {!isAuditedSupportView && (
+        <NonCriticalBoundary name="suporte" fallback={<PlatformSupportFallback />}>
+          <PlatformSupportBubble />
+        </NonCriticalBoundary>
+      )}
     </>
   );
 }

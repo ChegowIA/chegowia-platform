@@ -11,6 +11,7 @@ import { CreateProspectDto } from "./dto/create-prospect.dto";
 import { ResellerApplicationDto } from "./dto/reseller-application.dto";
 import { LocalStorageService } from "../common/storage/local-storage.service";
 import { AuthService } from "../auth/auth.service";
+import { PaginationQueryDto, paginate } from "../common/dto/pagination-query.dto";
 
 @Injectable()
 export class ResellersService {
@@ -161,6 +162,39 @@ export class ResellersService {
     });
   }
 
+  /** Diretório de parceiros já aprovados, usado só pela central da plataforma. */
+  async listProfiles(query: PaginationQueryDto) {
+    const search = query.search?.trim();
+    const where: Prisma.ResellerProfileWhereInput = search
+      ? {
+          OR: [
+            { code: { contains: search } },
+            { user: { is: { name: { contains: search } } } },
+            { user: { is: { email: { contains: search } } } },
+          ],
+        }
+      : {};
+    const [items, total] = await Promise.all([
+      this.db().resellerProfile.findMany({
+        where,
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          code: true,
+          isActive: true,
+          approvedAt: true,
+          createdAt: true,
+          user: { select: { id: true, name: true, email: true, isActive: true, createdAt: true } },
+          _count: { select: { subscriptions: true, commissions: true, prospects: true, leads: true } },
+        },
+      }),
+      this.db().resellerProfile.count({ where }),
+    ]);
+    return paginate(items, total, query.page, query.pageSize);
+  }
+
   async resume(id: string) {
     const application = await this.db().resellerApplication.findUnique({ where: { id }, select: { resumeUrl: true } });
     if (!application?.resumeUrl) throw new NotFoundException("Currículo não encontrado.");
@@ -236,33 +270,64 @@ export class ResellersService {
     return reseller;
   }
 
-  async dashboard(userId: string) {
-    const reseller = await this.profile(userId);
-    await this.db().commissionLedger.updateMany({
-      where: {
-        resellerId: reseller.id,
-        status: CommissionStatus.PENDENTE,
-        availableAt: { lte: new Date() },
-      },
-      data: { status: CommissionStatus.DISPONIVEL },
-    });
+  async dashboard(userId: string, includeInactive = false, readOnly = false) {
+    const reseller = await this.profile(userId, includeInactive);
+    // A leitura do suporte não pode liberar comissão nem alterar o extrato de
+    // outra pessoa. A rotina continua ocorrendo normalmente nas sessões do
+    // próprio parceiro e nos processos financeiros de fundo.
+    if (!readOnly) {
+      await this.db().commissionLedger.updateMany({
+        where: {
+          resellerId: reseller.id,
+          status: CommissionStatus.PENDENTE,
+          availableAt: { lte: new Date() },
+        },
+        data: { status: CommissionStatus.DISPONIVEL },
+      });
+    }
     const [commissions, activeSubscriptions, prospects, leads] = await Promise.all([
-      this.db().commissionLedger.findMany({ where: { resellerId: reseller.id }, orderBy: { createdAt: "desc" }, include: { subscription: { include: { company: true, plan: true } } }, take: 50 }),
+      this.db().commissionLedger.findMany({
+        where: { resellerId: reseller.id },
+        orderBy: { createdAt: "desc" },
+        // O painel só precisa dos nomes. Nunca devolva configuração de
+        // empresa, IDs de provedor ou segredos por meio do extrato.
+        include: {
+          subscription: {
+            select: {
+              company: { select: { name: true } },
+              plan: { select: { name: true } },
+            },
+          },
+        },
+        take: 50,
+      }),
       this.db().clientSubscription.count({ where: { resellerId: reseller.id, status: "ATIVA" } }),
       this.db().resellerProspect.count({ where: { resellerId: reseller.id } }),
       this.db().salesLead.count({ where: { resellerId: reseller.id, status: LeadStatus.EM_ATENDIMENTO } }),
     ]);
+    // Sem gravar no banco, a visão de suporte ainda reflete valores que já
+    // venceram a janela de reserva. Assim a inspeção não mostra um saldo
+    // artificialmente defasado só por ser read-only.
+    const visibleSource = readOnly
+      ? commissions.map((item: any) => (
+          item.status === CommissionStatus.PENDENTE
+          && item.availableAt
+          && new Date(item.availableAt).getTime() <= Date.now()
+            ? { ...item, status: CommissionStatus.DISPONIVEL }
+            : item
+        ))
+      : commissions;
     const total = (items: any[]) => items.reduce((sum: number, item: any) => sum + Number(item.commissionAmount), 0);
-    const available = total(commissions.filter((item: any) => item.status === CommissionStatus.DISPONIVEL));
-    const paid = total(commissions.filter((item: any) => item.status === CommissionStatus.PAGA));
-    const pendingSettlement = total(commissions.filter((item: any) => {
+    const available = total(visibleSource.filter((item: any) => item.status === CommissionStatus.DISPONIVEL));
+    const paid = total(visibleSource.filter((item: any) => item.status === CommissionStatus.PAGA));
+    const pendingSettlement = total(visibleSource.filter((item: any) => {
       const lifecycle = this.commissionLifecycle(item);
       return lifecycle.code === "EM_COMPENSACAO";
     }));
-    const underReview = total(commissions.filter((item: any) => this.commissionLifecycle(item).code === "EM_ANALISE"));
-    const safetyHold = total(commissions.filter((item: any) => this.commissionLifecycle(item).code === "RESERVA"));
-    const processing = total(commissions.filter((item: any) => item.status === CommissionStatus.PROCESSANDO));
-    const visibleCommissions = commissions.map((item: any) => ({
+    const underReview = total(visibleSource.filter((item: any) => this.commissionLifecycle(item).code === "EM_ANALISE"));
+    const safetyHold = total(visibleSource.filter((item: any) => this.commissionLifecycle(item).code === "RESERVA"));
+    const processing = total(visibleSource.filter((item: any) => item.status === CommissionStatus.PROCESSANDO));
+    const visibleCommissions = visibleSource.map((item: any) => ({
       ...item,
       lifecycle: this.commissionLifecycle(item),
       // Transparência: a base é a mensalidade do plano, e não o total de uma
@@ -287,8 +352,8 @@ export class ResellersService {
     };
   }
 
-  async listProspects(userId: string) {
-    const reseller = await this.profile(userId);
+  async listProspects(userId: string, includeInactive = false) {
+    const reseller = await this.profile(userId, includeInactive);
     return this.db().resellerProspect.findMany({ where: { resellerId: reseller.id }, orderBy: { updatedAt: "desc" } });
   }
 
@@ -297,16 +362,18 @@ export class ResellersService {
     return this.db().resellerProspect.create({ data: { resellerId: reseller.id, ...dto, stage: dto.stage || "NOVO" } });
   }
 
-  async availableLeads(userId: string) {
-    const reseller = await this.profile(userId);
-    const [available, mine] = await Promise.all([
-      this.db().salesLead.findMany({
-        where: { status: LeadStatus.DISPONIVEL },
-        orderBy: { createdAt: "desc" },
-        select: { id: true, name: true, companyName: true, city: true, state: true, message: true, status: true, createdAt: true },
-      }),
-      this.db().salesLead.findMany({ where: { resellerId: reseller.id }, orderBy: { createdAt: "desc" } }),
-    ]);
+  async availableLeads(userId: string, includeInactive = false, onlyOwned = false) {
+    const reseller = await this.profile(userId, includeInactive);
+    const mine = await this.db().salesLead.findMany({
+      where: { resellerId: reseller.id },
+      orderBy: { createdAt: "desc" },
+    });
+    if (onlyOwned) return mine;
+    const available = await this.db().salesLead.findMany({
+      where: { status: LeadStatus.DISPONIVEL },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, companyName: true, city: true, state: true, message: true, status: true, createdAt: true },
+    });
     return [...available, ...mine];
   }
 
@@ -440,9 +507,26 @@ export class ResellersService {
     return `Estou aqui para apoiar suas vendas. Posso resumir sua carteira, explicar saldo e comissão, ajudar com uma abordagem ou organizar os próximos contatos.`;
   }
 
-  private async profile(userId: string) {
-    const profile = await this.db().resellerProfile.findUnique({ where: { userId }, include: { user: { select: { name: true, email: true } } } });
-    if (!profile || !profile.isActive) throw new NotFoundException("Perfil de revendedor não encontrado ou inativo.");
+  private async profile(userId: string, includeInactive = false) {
+    // Este objeto volta no dashboard. Seleção explícita impede que a chave
+    // cifrada da subconta Asaas (e outros identificadores financeiros) escape
+    // para o navegador, inclusive na visão do superadmin.
+    const profile = await this.db().resellerProfile.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        userId: true,
+        code: true,
+        commissionRate: true,
+        isActive: true,
+        approvedAt: true,
+        createdAt: true,
+        user: { select: { name: true, email: true, isActive: true } },
+      },
+    });
+    if (!profile || (!includeInactive && !profile.isActive)) {
+      throw new NotFoundException("Perfil de revendedor não encontrado ou inativo.");
+    }
     return profile;
   }
 

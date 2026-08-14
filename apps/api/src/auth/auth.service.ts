@@ -15,7 +15,7 @@ import { AccountTokenType, Role } from "@prisma/client";
 import { PermissionKey } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
-import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { JwtPayload, SuperAdminSupportAccessKind } from "../common/interfaces/jwt-payload.interface";
 import { MailService } from "../common/mail/mail.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
@@ -34,6 +34,11 @@ interface AssumedContext {
   companyName?: string | null;
   /** Presente somente quando a sessão nasceu de um atalho de suporte auditado. */
   accessId?: string | null;
+  accessKind?: SuperAdminSupportAccessKind | null;
+  /** Só é preenchido para visualizar a conta concreta de um revendedor. */
+  subjectUserId?: string | null;
+  resellerId?: string | null;
+  resellerName?: string | null;
   /** Limite curto da sessão de suporte; contextos manuais mantêm a regra normal. */
   expiresAt?: Date | null;
 }
@@ -74,7 +79,14 @@ export class AuthService {
         role: assumed.role,
         companyId: assumed.companyId,
         assumed: true,
-        ...(assumed.accessId ? { assumedAccessId: assumed.accessId } : {}),
+        ...(assumed.accessId
+          ? {
+            assumedAccessId: assumed.accessId,
+            assumedAccessKind: assumed.accessKind ?? "COMPANY",
+            ...(assumed.subjectUserId ? { assumedUserId: assumed.subjectUserId } : {}),
+            ...(assumed.resellerId ? { assumedResellerId: assumed.resellerId } : {}),
+          }
+          : {}),
       };
     }
     return { sub: user.id, email: user.email, role: user.role, companyId: user.companyId };
@@ -106,6 +118,9 @@ export class AuthService {
         assumedRole: assumed?.role ?? null,
         assumedCompanyId: assumed?.companyId ?? null,
         assumedAccessId: assumed?.accessId ?? null,
+        assumedAccessKind: assumed?.accessKind ?? null,
+        assumedUserId: assumed?.subjectUserId ?? null,
+        assumedResellerId: assumed?.resellerId ?? null,
       },
     });
 
@@ -198,9 +213,9 @@ export class AuthService {
 
   /**
    * Contextos que este usuário pode assumir: a plataforma, cada papel dentro de
-   * cada empresa ativa, e os papéis que existem fora de empresa (revendedor e
-   * cliente). É o que permite ver o sistema exatamente como cada pessoa vê, sem
-   * manter uma conta de teste por papel.
+   * cada empresa ativa e a visão pública de cliente. Revendedor não aparece
+   * aqui porque não existe uma carteira genérica: a central de parceiros abre
+   * sempre um perfil concreto, auditado e read-only.
    */
   async availableContexts(identity: JwtPayload) {
     const user = await this.db().user.findUnique({ where: { id: identity.sub } });
@@ -224,7 +239,6 @@ export class AuthService {
           slug: company.slug,
           roles: AuthService.COMPANY_ROLES,
         })),
-        { kind: "STANDALONE" as const, role: Role.REVENDEDOR, companyId: null, label: "Revendedor" },
         { kind: "STANDALONE" as const, role: Role.CLIENTE, companyId: null, label: "Cliente" },
       ],
     };
@@ -239,7 +253,7 @@ export class AuthService {
 
     // Sem empresa e sem papel: voltar à plataforma.
     if (!companyId && (!role || role === Role.SUPER_ADMIN)) {
-      await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
+      await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
       const tokens = await this.issueTokens(user);
       this.logger.warn(`Contexto de plataforma retomado por ${user.email}.`);
       return { ...tokens, user: await this.publicUser(user), assumed: null };
@@ -248,10 +262,13 @@ export class AuthService {
     // Papéis que existem fora de empresa. Aceitá-los com companyId seria
     // incoerente: nenhuma rota deles usa tenant.
     if (!companyId) {
-      if (role !== Role.REVENDEDOR && role !== Role.CLIENTE) {
+      if (role === Role.REVENDEDOR) {
+        throw new BadRequestException("Abra a visão de um revendedor específico pela central de parceiros.");
+      }
+      if (role !== Role.CLIENTE) {
         throw new BadRequestException("Escolha uma empresa para este tipo de acesso.");
       }
-      await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
+      await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
       const assumed: AssumedContext = { role, companyId: null };
       const tokens = await this.issueTokens(user, assumed);
       this.logger.warn(`Contexto assumido: ${user.email} entrou como ${role}.`);
@@ -275,7 +292,7 @@ export class AuthService {
       throw new NotFoundException("Empresa não encontrada ou inativa.");
     }
 
-    await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
+    await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
     const assumed: AssumedContext = { role: chosenRole, companyId: company.id, companyName: company.name };
     const tokens = await this.issueTokens(user, assumed);
     // Assumir uma empresa é ação sensível: fica no log com quem, onde e quando.
@@ -382,17 +399,143 @@ export class AuthService {
       throw new ForbiddenException("Este atalho de suporte não é válido ou expirou.");
     }
 
-    await this.closeSuperAdminCompanyAccess(identity.assumedAccessId, user.id);
+    await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
     const assumed: AssumedContext = {
       role: Role.ADMIN,
       companyId: access.company.id,
       companyName: access.company.name,
       accessId: access.id,
+      accessKind: "COMPANY",
       expiresAt: sessionExpiresAt,
     };
     const tokens = await this.issueTokens(user, assumed);
     this.logger.warn(
       `Acesso de suporte iniciado: ${user.email} entrou como ADMIN da empresa ${access.company.name} (${access.company.id}).`,
+    );
+    return {
+      ...tokens,
+      user: await this.publicSessionUser(user, assumed),
+      assumed: this.assumedMetadata(assumed),
+    };
+  }
+
+  /**
+   * Gera o atalho temporário para abrir a central de um parceiro específico.
+   * O acesso do superadmin é de suporte e somente leitura; nunca vira uma
+   * credencial permanente do revendedor nem permite agir financeiramente por ele.
+   */
+  async createResellerAccessLink(identity: JwtPayload, resellerId: string) {
+    if (identity.assumed || identity.role !== Role.SUPER_ADMIN || identity.companyId) {
+      throw new ForbiddenException("Volte à plataforma para gerar um atalho de suporte.");
+    }
+    const user = await this.multiContextActor(identity);
+    const reseller = await this.db().resellerProfile.findUnique({
+      where: { id: resellerId },
+      select: {
+        id: true,
+        code: true,
+        isActive: true,
+        user: { select: { id: true, name: true, email: true, isActive: true } },
+      },
+    });
+    if (!reseller?.user) throw new NotFoundException("Revendedor não encontrado.");
+
+    const now = new Date();
+    await this.db().superAdminResellerAccess.updateMany({
+      where: {
+        resellerId: reseller.id,
+        superAdminId: user.id,
+        consumedAt: null,
+        revokedAt: null,
+        linkExpiresAt: { gt: now },
+      },
+      data: { revokedAt: now },
+    });
+
+    const token = randomBytes(32).toString("base64url");
+    const linkExpiresAt = new Date(now.getTime() + SUPER_ADMIN_ACCESS_LINK_TTL_MS);
+    await this.db().superAdminResellerAccess.create({
+      data: {
+        resellerId: reseller.id,
+        superAdminId: user.id,
+        tokenHash: this.hashUrlToken(token),
+        linkExpiresAt,
+      },
+    });
+
+    this.logger.warn(
+      `Atalho de suporte gerado por ${user.email} para o revendedor ${reseller.user.name} (${reseller.id}).`,
+    );
+    return {
+      reseller: {
+        id: reseller.id,
+        code: reseller.code,
+        name: reseller.user.name,
+        email: reseller.user.email,
+        isActive: reseller.isActive && reseller.user.isActive,
+      },
+      accessUrl: `${this.appUrl()}/acesso/suporte/revendedor#${token}`,
+      expiresAt: linkExpiresAt,
+    };
+  }
+
+  /** Consome uma vez o atalho e assume a carteira concreta do revendedor. */
+  async consumeResellerAccessLink(identity: JwtPayload, token: string) {
+    const user = await this.multiContextActor(identity);
+    const now = new Date();
+    const access = await this.db().superAdminResellerAccess.findUnique({
+      where: { tokenHash: this.hashUrlToken(token) },
+      include: {
+        reseller: {
+          select: {
+            id: true,
+            code: true,
+            isActive: true,
+            user: { select: { id: true, name: true, email: true, isActive: true } },
+          },
+        },
+      },
+    });
+    if (
+      !access
+      || access.superAdminId !== user.id
+      || access.consumedAt
+      || access.revokedAt
+      || access.linkExpiresAt <= now
+      || !access.reseller?.user
+    ) {
+      throw new ForbiddenException("Este atalho de suporte não é válido ou expirou.");
+    }
+
+    const sessionExpiresAt = new Date(now.getTime() + SUPER_ADMIN_ASSUMED_SESSION_TTL_MS);
+    const claimed = await this.db().superAdminResellerAccess.updateMany({
+      where: {
+        id: access.id,
+        superAdminId: user.id,
+        consumedAt: null,
+        revokedAt: null,
+        linkExpiresAt: { gt: now },
+      },
+      data: { consumedAt: now, sessionExpiresAt },
+    });
+    if (claimed.count !== 1) {
+      throw new ForbiddenException("Este atalho de suporte não é válido ou expirou.");
+    }
+
+    await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
+    const assumed: AssumedContext = {
+      role: Role.REVENDEDOR,
+      companyId: null,
+      accessId: access.id,
+      accessKind: "RESELLER",
+      subjectUserId: access.reseller.user.id,
+      resellerId: access.reseller.id,
+      resellerName: access.reseller.user.name,
+      expiresAt: sessionExpiresAt,
+    };
+    const tokens = await this.issueTokens(user, assumed);
+    this.logger.warn(
+      `Acesso de suporte iniciado: ${user.email} abriu a visão do revendedor ${access.reseller.user.name} (${access.reseller.id}).`,
     );
     return {
       ...tokens,
@@ -409,9 +552,19 @@ export class AuthService {
     return user;
   }
 
-  private async closeSuperAdminCompanyAccess(accessId: string | undefined, superAdminId: string) {
-    if (!accessId || !this.db().superAdminCompanyAccess?.updateMany) return;
-    await this.db().superAdminCompanyAccess.updateMany({
+  private async closeSuperAdminSupportAccess(
+    accessId: string | undefined,
+    superAdminId: string,
+    accessKind?: SuperAdminSupportAccessKind,
+  ) {
+    if (!accessId) return;
+    // Tokens emitidos antes do suporte de revendedor não possuem tipo; como só
+    // existia acesso de empresa, compatibilidade segura é tratá-los como COMPANY.
+    const repository = accessKind === "RESELLER"
+      ? this.db().superAdminResellerAccess
+      : this.db().superAdminCompanyAccess;
+    if (!repository?.updateMany) return;
+    await repository.updateMany({
       where: {
         id: accessId,
         superAdminId,
@@ -426,8 +579,11 @@ export class AuthService {
     return {
       companyId: assumed.companyId,
       companyName: assumed.companyName ?? null,
+      resellerId: assumed.resellerId ?? null,
+      resellerName: assumed.resellerName ?? null,
       role: assumed.role,
       supportAccess: Boolean(assumed.accessId),
+      kind: assumed.accessId ? assumed.accessKind ?? "COMPANY" : null,
     };
   }
 
@@ -670,29 +826,71 @@ export class AuthService {
         // Uma sessão aberta por atalho não pode ser renovada para além da sua
         // janela. Também é aqui que logout/retorno à plataforma derruba abas
         // antigas que ainda tenham um refresh cookie válido.
-        const access = await this.db().superAdminCompanyAccess?.findFirst?.({
-          where: {
-            id: record.assumedAccessId,
-            superAdminId: user.id,
-            consumedAt: { not: null },
-            revokedAt: null,
-            closedAt: null,
-            sessionExpiresAt: { gt: new Date() },
-          },
-          include: { company: { select: { id: true, name: true } } },
-        });
-        if (access?.company && access.sessionExpiresAt) {
-          assumed = {
-            role: record.assumedRole,
-            companyId: record.assumedCompanyId ?? access.company.id,
-            companyName: access.company.name,
-            accessId: access.id,
-            expiresAt: access.sessionExpiresAt,
-          };
-        } else {
-          await this.closeSuperAdminCompanyAccess(record.assumedAccessId, user.id);
+        // O banco pode conter registros emitidos antes da coluna existir. Só
+        // reconhecemos explicitamente RESELLER; qualquer outro valor legado
+        // continua no caminho mais restrito e já existente de COMPANY.
+        const accessKind: SuperAdminSupportAccessKind = record.assumedAccessKind === "RESELLER"
+          ? "RESELLER"
+          : "COMPANY";
+        if (accessKind === "COMPANY" && record.assumedRole === Role.ADMIN) {
+          const access = await this.db().superAdminCompanyAccess?.findFirst?.({
+            where: {
+              id: record.assumedAccessId,
+              superAdminId: user.id,
+              consumedAt: { not: null },
+              revokedAt: null,
+              closedAt: null,
+              sessionExpiresAt: { gt: new Date() },
+            },
+            include: { company: { select: { id: true, name: true } } },
+          });
+          if (access?.company && access.sessionExpiresAt) {
+            assumed = {
+              role: Role.ADMIN,
+              companyId: record.assumedCompanyId ?? access.company.id,
+              companyName: access.company.name,
+              accessId: access.id,
+              accessKind: "COMPANY",
+              expiresAt: access.sessionExpiresAt,
+            };
+          }
+        } else if (
+          accessKind === "RESELLER"
+          && record.assumedRole === Role.REVENDEDOR
+          && !record.assumedCompanyId
+          && record.assumedUserId
+          && record.assumedResellerId
+        ) {
+          const access = await this.db().superAdminResellerAccess?.findFirst?.({
+            where: {
+              id: record.assumedAccessId,
+              resellerId: record.assumedResellerId,
+              superAdminId: user.id,
+              consumedAt: { not: null },
+              revokedAt: null,
+              closedAt: null,
+              sessionExpiresAt: { gt: new Date() },
+              reseller: { userId: record.assumedUserId },
+            },
+            include: { reseller: { select: { id: true, userId: true, user: { select: { name: true } } } } },
+          });
+          if (access?.reseller?.user && access.sessionExpiresAt) {
+            assumed = {
+              role: Role.REVENDEDOR,
+              companyId: null,
+              accessId: access.id,
+              accessKind: "RESELLER",
+              subjectUserId: access.reseller.userId,
+              resellerId: access.reseller.id,
+              resellerName: access.reseller.user.name,
+              expiresAt: access.sessionExpiresAt,
+            };
+          }
         }
-      } else {
+        if (!assumed) {
+          await this.closeSuperAdminSupportAccess(record.assumedAccessId, user.id, accessKind);
+        }
+      } else if (record.assumedRole !== Role.REVENDEDOR) {
         assumed = { role: record.assumedRole, companyId: record.assumedCompanyId ?? null };
       }
     }
@@ -708,13 +906,16 @@ export class AuthService {
     if (!cookieValue || !cookieValue.includes(".")) return;
     const [tokenId] = cookieValue.split(".");
     const record = await this.db().refreshToken
-      .findUnique({ where: { id: tokenId }, select: { userId: true, assumedAccessId: true } })
+      .findUnique({
+        where: { id: tokenId },
+        select: { userId: true, assumedAccessId: true, assumedAccessKind: true },
+      })
       .catch(() => null);
     await this.db().refreshToken
       .update({ where: { id: tokenId }, data: { revokedAt: new Date() } })
       .catch(() => undefined);
     if (record?.assumedAccessId) {
-      await this.closeSuperAdminCompanyAccess(record.assumedAccessId, record.userId);
+      await this.closeSuperAdminSupportAccess(record.assumedAccessId, record.userId, record.assumedAccessKind);
     }
   }
 
@@ -726,6 +927,9 @@ export class AuthService {
         role: identity.role,
         companyId: identity.companyId,
         accessId: identity.assumedAccessId ?? null,
+        accessKind: identity.assumedAccessKind ?? null,
+        subjectUserId: identity.assumedUserId ?? null,
+        resellerId: identity.assumedResellerId ?? null,
       }
       : null;
     return this.publicSessionUser(user, assumed);
@@ -803,12 +1007,21 @@ export class AuthService {
       companyName = company?.name ?? null;
     }
 
+    let resellerName = assumed.resellerName ?? null;
+    if (assumed.resellerId && !resellerName) {
+      const reseller = await this.db().resellerProfile.findUnique({
+        where: { id: assumed.resellerId },
+        select: { user: { select: { name: true } } },
+      }).catch(() => null);
+      resellerName = reseller?.user?.name ?? null;
+    }
+
     return {
       ...publicUser,
       role: assumed.role,
       companyId: assumed.companyId,
       actorRole: user.role,
-      impersonation: this.assumedMetadata({ ...assumed, companyName }),
+      impersonation: this.assumedMetadata({ ...assumed, companyName, resellerName }),
     };
   }
 

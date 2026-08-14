@@ -32,6 +32,13 @@ export class RequestLoggingInterceptor implements NestInterceptor {
             durationMs: Date.now() - startedAt,
             userId: request.user?.sub,
             companyId: request.user?.companyId,
+            // Em suporte, `userId` permanece o ator real. Estes campos ligam
+            // cada leitura à sessão auditável e, no caso de parceiro, ao alvo
+            // efetivo sem registrar nenhum token ou segredo.
+            supportAccessId: request.user?.assumedAccessId,
+            supportAccessKind: request.user?.assumedAccessKind,
+            effectiveUserId: request.user?.assumedUserId,
+            resellerId: request.user?.assumedResellerId,
           }));
         },
       }),

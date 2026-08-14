@@ -12,6 +12,7 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 const NAV_ITEMS = [
   { href: "/super-admin/dashboard", label: "Dashboard" },
   { href: "/super-admin/empresas", label: "Empresas" },
+  { href: "/super-admin/revendedores", label: "Revendedores" },
   { href: "/super-admin/aprovacoes", label: "Aprovações" },
   { href: "/super-admin/planos", label: "Planos e billing" },
   { href: "/super-admin/operacao", label: "Saúde operacional" },

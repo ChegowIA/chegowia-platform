@@ -97,41 +97,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const payload = this.jwtService.verify<JwtPayload>(token, {
         secret: process.env.JWT_ACCESS_SECRET,
       });
-      const user = await (this.prisma as any).user.findUnique({
-        where: { id: payload.sub },
-        select: {
-          isActive: true,
-          role: true,
-          companyId: true,
-          emailVerifiedAt: true,
-          company: {
-            select: {
-              isActive: true,
-              subscription: { select: { status: true, trialEndsAt: true } },
-            },
-          },
-          resellerProfile: { select: { isActive: true } },
-        },
-      });
-      if (
-        !user?.isActive
-        || !user.emailVerifiedAt
-        || user.role !== payload.role
-        || user.companyId !== payload.companyId
-      ) {
-        throw new Error("Conta inativa.");
-      }
-      if (payload.role === Role.REVENDEDOR && !user.resellerProfile?.isActive) {
-        throw new Error("Perfil de revendedor inativo.");
-      }
-      if (
-        COMPANY_ROLES.has(payload.role)
-        && !user.company?.isActive
-      ) {
-        throw new Error("Empresa inativa.");
-      }
+      const session = await this.resolveSocketSession(payload);
+      if (!session) throw new Error("Conta inativa.");
       const companyRole = COMPANY_ROLES.has(payload.role);
-      const billingAllowed = this.billingAllowsCompanyRealtime(user.company?.subscription, companyRole);
+      const billingAllowed = this.billingAllowsCompanyRealtime(session.company?.subscription, companyRole);
       const socketData = client.data as { user: JwtPayload; companyAccessPaused?: boolean };
       socketData.user = payload;
       socketData.companyAccessPaused = companyRole && Boolean(payload.companyId) && !billingAllowed;
@@ -148,7 +117,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       // O inbox institucional não pertence a uma empresa. Só SUPER_ADMIN entra
       // nesta sala, que jamais usa os tópicos company:{id}:*.
       if (payload.role === Role.SUPER_ADMIN) client.join("super-admins");
-      if (payload.role === Role.REVENDEDOR) client.join("resellers");
+      // A visão de um parceiro específico não participa da sala coletiva:
+      // suporte não deve receber oportunidades de outros revendedores nem
+      // disputar um lead enquanto investiga dados de uma conta real.
+      if (payload.role === Role.REVENDEDOR && !payload.assumed && !session.resellerSupport) client.join("resellers");
       // O handshake é a única autorização do socket; sem prazo, um tablet de
       // salão aberto o dia todo seguiria conectado com credencial vencida.
       this.scheduleRevalidation(client);
@@ -192,26 +164,10 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const socketData = client.data as { user?: JwtPayload; companyAccessPaused?: boolean };
       const payload = socketData.user;
       if (!payload) return;
-      const user = await (this.prisma as any).user
-        .findUnique({
-          where: { id: payload.sub },
-          select: {
-            isActive: true,
-            role: true,
-            companyId: true,
-            emailVerifiedAt: true,
-            company: { select: { isActive: true, subscription: { select: { status: true, trialEndsAt: true } } } },
-          },
-        })
-        .catch(() => null);
+      const session = await this.resolveSocketSession(payload).catch(() => null);
       const companyRole = COMPANY_ROLES.has(payload.role);
-      const billingAllowed = this.billingAllowsCompanyRealtime(user?.company?.subscription, companyRole);
-      const identidadeValida = user?.isActive
-        && user.emailVerifiedAt
-        && user.role === payload.role
-        && user.companyId === payload.companyId
-        && (!companyRole || user.company?.isActive);
-      if (!identidadeValida) {
+      const billingAllowed = this.billingAllowsCompanyRealtime(session?.company?.subscription, companyRole);
+      if (!session) {
         client.emit("session.revoked", { reason: "acesso revalidado e negado" });
         client.disconnect(true);
         return;
@@ -239,6 +195,110 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     }, REVALIDATION_INTERVAL_MS);
     timer.unref?.();
     client.on("disconnect", () => clearInterval(timer));
+  }
+
+  /**
+   * REST e websocket precisam interpretar da mesma forma uma sessão assumida.
+   * Em especial, `sub` continua sendo o superadmin, portanto compará-lo ao
+   * papel assumido bloquearia o suporte — ou, pior, faria o socket entrar em
+   * salas erradas. A origem é revalidada no banco no handshake e a cada ciclo.
+   */
+  private async resolveSocketSession(payload: JwtPayload): Promise<{
+    company: { isActive: boolean; subscription: { status: SubscriptionStatus; trialEndsAt: Date | null } | null } | null;
+    resellerSupport: boolean;
+  } | null> {
+    const db = this.prisma as any;
+    const user = await db.user.findUnique({
+      where: { id: payload.sub },
+      select: {
+        id: true,
+        isActive: true,
+        role: true,
+        email: true,
+        companyId: true,
+        emailVerifiedAt: true,
+        company: {
+          select: {
+            isActive: true,
+            subscription: { select: { status: true, trialEndsAt: true } },
+          },
+        },
+        resellerProfile: { select: { isActive: true } },
+      },
+    }).catch(() => null);
+    if (!user?.isActive || !user.emailVerifiedAt) return null;
+
+    if (!payload.assumed) {
+      if (user.role !== payload.role || user.companyId !== payload.companyId) return null;
+      if (payload.role === Role.REVENDEDOR && !user.resellerProfile?.isActive) return null;
+      if (COMPANY_ROLES.has(payload.role) && !user.company?.isActive) return null;
+      return { company: user.company ?? null, resellerSupport: false };
+    }
+
+    const allowedEmail = (process.env.MULTI_CONTEXT_LOGIN_EMAIL ?? "").trim().toLowerCase();
+    if (
+      user.role !== Role.SUPER_ADMIN
+      || !allowedEmail
+      || user.email.trim().toLowerCase() !== allowedEmail
+    ) return null;
+
+    // Contextos manuais existentes seguem válidos; eles não ganham nenhuma das
+    // exceções de suporte e ainda exigem que a empresa alvo esteja ativa.
+    if (!payload.assumedAccessId) {
+      const company = payload.companyId
+        ? await db.company?.findUnique?.({
+            where: { id: payload.companyId },
+            select: { isActive: true, subscription: { select: { status: true, trialEndsAt: true } } },
+          }).catch(() => null)
+        : null;
+      if (COMPANY_ROLES.has(payload.role) && !company?.isActive) return null;
+      return { company, resellerSupport: false };
+    }
+
+    if ((payload.assumedAccessKind ?? "COMPANY") === "COMPANY") {
+      if (payload.role !== Role.ADMIN || !payload.companyId) return null;
+      const access = await db.superAdminCompanyAccess?.findFirst?.({
+        where: {
+          id: payload.assumedAccessId,
+          superAdminId: user.id,
+          companyId: payload.companyId,
+          consumedAt: { not: null },
+          revokedAt: null,
+          closedAt: null,
+          sessionExpiresAt: { gt: new Date() },
+        },
+        select: {
+          id: true,
+          company: { select: { isActive: true, subscription: { select: { status: true, trialEndsAt: true } } } },
+        },
+      });
+      return access?.company ? { company: access.company, resellerSupport: false } : null;
+    }
+
+    if ((payload.assumedAccessKind ?? "COMPANY") === "RESELLER") {
+      if (
+        payload.role !== Role.REVENDEDOR
+        || payload.companyId
+        || !payload.assumedUserId
+        || !payload.assumedResellerId
+      ) return null;
+      const access = await db.superAdminResellerAccess?.findFirst?.({
+        where: {
+          id: payload.assumedAccessId,
+          resellerId: payload.assumedResellerId,
+          superAdminId: user.id,
+          consumedAt: { not: null },
+          revokedAt: null,
+          closedAt: null,
+          sessionExpiresAt: { gt: new Date() },
+          reseller: { userId: payload.assumedUserId },
+        },
+        select: { id: true },
+      });
+      return access ? { company: null, resellerSupport: true } : null;
+    }
+
+    return null;
   }
 
   private topicRoom(companyId: string, topic: RealtimeTopic) {

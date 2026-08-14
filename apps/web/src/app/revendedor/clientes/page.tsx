@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LeadStatus } from "@chegowia/shared";
+import { LeadStatus, Role } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
+import { useAuthStore } from "@/lib/auth-store";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Textarea } from "@/components/ui/input";
@@ -21,6 +22,13 @@ const LEAD_STAGES = [
 
 export default function ClientesPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const isSupportView = Boolean(
+    user?.actorRole === Role.SUPER_ADMIN
+      && user.role === Role.REVENDEDOR
+      && user.impersonation?.supportAccess
+      && user.impersonation.kind === "RESELLER",
+  );
   const [prospectOpen, setProspectOpen] = useState(false);
   const [saleOpen, setSaleOpen] = useState(false);
   const [activeStage, setActiveStage] = useState<LeadStatus>(LeadStatus.EM_ATENDIMENTO);
@@ -93,10 +101,14 @@ export default function ClientesPage() {
             <h1 className="mt-2 text-3xl font-black">Clientes e oportunidades</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">Todo lead aceito entra aqui. Acompanhe o contato, inicie o teste gratuito e acompanhe a ativação quando o cliente decidir continuar.</p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setProspectOpen(true)}>+ Contato manual</Button>
-            <Button onClick={() => openSale()}>Nova venda direta</Button>
-          </div>
+          {isSupportView ? (
+            <span className="rounded-full border border-violet-300/40 bg-violet-400/10 px-3 py-2 text-xs font-black text-violet-200">Visualização somente leitura</span>
+          ) : (
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setProspectOpen(true)}>+ Contato manual</Button>
+              <Button onClick={() => openSale()}>Nova venda direta</Button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -129,6 +141,7 @@ export default function ClientesPage() {
               lead={lead}
               stage={LEAD_STAGES.find((stage) => stage.key === lead.status)!}
               loading={moveLead.isPending}
+              readOnly={isSupportView}
               onProposal={() => openSale(lead)}
               onLost={() => moveLead.mutate({ id: lead.id, status: LeadStatus.PERDIDO })}
               onReopen={() => moveLead.mutate({ id: lead.id, status: LeadStatus.EM_ATENDIMENTO })}
@@ -143,18 +156,22 @@ export default function ClientesPage() {
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{prospects.map((item: any) => <div key={item.id} className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800/60"><div className="flex justify-between gap-2"><p className="font-black">{item.name}</p><span className="text-[10px] font-black uppercase text-brand-700 dark:text-brand-300">{item.stage}</span></div><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.companyName || "Empresa não informada"}</p><p className="mt-3 text-xs text-slate-400">{item.phone || item.email || "Sem contato"}</p></div>)}{!prospects.length && <p className="col-span-full py-7 text-center text-sm text-slate-400">Nenhum contato manual cadastrado.</p>}</div>
       </section>
 
-      <Modal open={prospectOpen} onClose={() => setProspectOpen(false)} title="Novo possível cliente">
-        <div className="space-y-4"><Field label="Nome" k="name" state={prospect} set={setProspect} /><Field label="Empresa" k="companyName" state={prospect} set={setProspect} /><div className="grid gap-4 sm:grid-cols-2"><Field label="Telefone" k="phone" state={prospect} set={setProspect} mask="phone" /><Field label="E-mail" k="email" state={prospect} set={setProspect} type="email" /></div><FormField label="Anotações"><Textarea value={prospect.notes} onChange={(event) => setProspect({ ...prospect, notes: event.target.value })} /></FormField>{addProspect.error && <ErrorMessage error={addProspect.error} />}<Button className="w-full" isLoading={addProspect.isPending} onClick={() => addProspect.mutate()}>Salvar contato</Button></div>
-      </Modal>
+      {!isSupportView && (
+        <>
+          <Modal open={prospectOpen} onClose={() => setProspectOpen(false)} title="Novo possível cliente">
+            <div className="space-y-4"><Field label="Nome" k="name" state={prospect} set={setProspect} /><Field label="Empresa" k="companyName" state={prospect} set={setProspect} /><div className="grid gap-4 sm:grid-cols-2"><Field label="Telefone" k="phone" state={prospect} set={setProspect} mask="phone" /><Field label="E-mail" k="email" state={prospect} set={setProspect} type="email" /></div><FormField label="Anotações"><Textarea value={prospect.notes} onChange={(event) => setProspect({ ...prospect, notes: event.target.value })} /></FormField>{addProspect.error && <ErrorMessage error={addProspect.error} />}<Button className="w-full" isLoading={addProspect.isPending} onClick={() => addProspect.mutate()}>Salvar contato</Button></div>
+          </Modal>
 
-      <SaleModal open={saleOpen} close={() => setSaleOpen(false)} sale={sale} setSale={setSale} result={result} mutation={createLink} />
+          <SaleModal open={saleOpen} close={() => setSaleOpen(false)} sale={sale} setSale={setSale} result={result} mutation={createLink} />
+        </>
+      )}
     </div>
   );
 }
 
-function LeadCard({ lead, stage, loading, onProposal, onLost, onReopen }: any) {
+function LeadCard({ lead, stage, loading, readOnly, onProposal, onLost, onReopen }: any) {
   const whatsapp = lead.phone?.replace(/\D/g, "");
-  return <article className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:bg-slate-900 dark:border-slate-800"><div className={`h-1.5 ${stage.dot}`} /><div className="p-5"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-lg font-black">{lead.name}</h3><p className="truncate text-xs text-slate-500 dark:text-slate-400">{lead.companyName || "Empresa não informada"} · {lead.city || "Cidade não informada"}{lead.state ? `/${lead.state}` : ""}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${stage.surface}`}>{stage.label}</span></div><p className="mt-4 line-clamp-3 rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-600 dark:bg-slate-800/60 dark:text-slate-400">{lead.message}</p><div className="mt-3 text-xs text-slate-400"><p>{lead.email}</p><p>{lead.phone}</p><p className="mt-1">Assumido em {formatDateTime(lead.claimedAt || lead.createdAt)}</p></div><div className="mt-4 flex flex-wrap gap-2">{whatsapp && <a href={`https://wa.me/${whatsapp}`} target="_blank" rel="noreferrer" className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-slate-950 dark:text-slate-100">WhatsApp</a>}<a href={`mailto:${lead.email}`} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 dark:border-slate-800 dark:text-slate-400">E-mail</a>{lead.status === LeadStatus.EM_ATENDIMENTO && <><Button size="sm" onClick={onProposal}>Iniciar teste</Button><Button size="sm" variant="ghost" disabled={loading} onClick={onLost}>Não avançou</Button></>}{lead.status === LeadStatus.PROPOSTA && <><Button size="sm" onClick={onProposal}>Ver teste enviado</Button><Button size="sm" variant="ghost" disabled={loading} onClick={onLost}>Marcar perdido</Button></>}{lead.status === LeadStatus.PERDIDO && <Button size="sm" variant="outline" disabled={loading} onClick={onReopen}>Retomar contato</Button>}</div></div></article>;
+  return <article className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg dark:bg-slate-900 dark:border-slate-800"><div className={`h-1.5 ${stage.dot}`} /><div className="p-5"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-lg font-black">{lead.name}</h3><p className="truncate text-xs text-slate-500 dark:text-slate-400">{lead.companyName || "Empresa não informada"} · {lead.city || "Cidade não informada"}{lead.state ? `/${lead.state}` : ""}</p></div><span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${stage.surface}`}>{stage.label}</span></div><p className="mt-4 line-clamp-3 rounded-2xl bg-slate-50 p-3 text-sm leading-6 text-slate-600 dark:bg-slate-800/60 dark:text-slate-400">{lead.message}</p><div className="mt-3 text-xs text-slate-400"><p>{lead.email}</p><p>{lead.phone}</p><p className="mt-1">Assumido em {formatDateTime(lead.claimedAt || lead.createdAt)}</p></div>{readOnly ? <p className="mt-4 rounded-xl bg-violet-50 px-3 py-2 text-xs font-bold text-violet-800 dark:bg-violet-950/30 dark:text-violet-200">Ações comerciais bloqueadas na visão de suporte.</p> : <div className="mt-4 flex flex-wrap gap-2">{whatsapp && <a href={`https://wa.me/${whatsapp}`} target="_blank" rel="noreferrer" className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-black text-slate-950 dark:text-slate-100">WhatsApp</a>}<a href={`mailto:${lead.email}`} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 dark:border-slate-800 dark:text-slate-400">E-mail</a>{lead.status === LeadStatus.EM_ATENDIMENTO && <><Button size="sm" onClick={onProposal}>Iniciar teste</Button><Button size="sm" variant="ghost" disabled={loading} onClick={onLost}>Não avançou</Button></>}{lead.status === LeadStatus.PROPOSTA && <><Button size="sm" onClick={onProposal}>Ver teste enviado</Button><Button size="sm" variant="ghost" disabled={loading} onClick={onLost}>Marcar perdido</Button></>}{lead.status === LeadStatus.PERDIDO && <Button size="sm" variant="outline" disabled={loading} onClick={onReopen}>Retomar contato</Button>}</div>}</div></article>;
 }
 
 function SaleModal({ open, close, sale, setSale, result, mutation }: any) {

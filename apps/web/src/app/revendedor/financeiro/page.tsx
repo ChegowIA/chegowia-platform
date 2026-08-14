@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Role } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
+import { useAuthStore } from "@/lib/auth-store";
 import { formatCurrency } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FormField, Input } from "@/components/ui/input";
@@ -12,6 +14,13 @@ const CONTA_VAZIA: ContaForm = { postalCode: "", address: "", addressNumber: "",
 
 export default function FinanceiroPage() {
   const queryClient=useQueryClient();
+  const user=useAuthStore((state)=>state.user);
+  const isSupportView=Boolean(
+    user?.actorRole===Role.SUPER_ADMIN
+      && user.role===Role.REVENDEDOR
+      && user.impersonation?.supportAccess
+      && user.impersonation.kind==="RESELLER",
+  );
   const [form,setForm]=useState<ContaForm>(CONTA_VAZIA);
   const [abrirForm,setAbrirForm]=useState(false);
   const [payoutNotice,setPayoutNotice]=useState<string | null>(null);
@@ -63,7 +72,7 @@ export default function FinanceiroPage() {
     <section className="rounded-3xl border border-slate-200 bg-white p-6 dark:bg-slate-900 dark:border-slate-800">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start"><div><h2 className="text-xl font-black">Conta de recebimento</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">{asaas?"Abrimos uma conta Asaas no seu nome para receber as comissões. Os dados de identificação ficam sob custódia do Asaas, instituição de pagamento autorizada — o ChegowIA não guarda dados bancários.":"Complete o onboarding seguro do Stripe Connect. Dados bancários e verificações ficam sob custódia do Stripe, não do ChegowIA."}</p></div>{checkingStatus&&<span className="text-xs font-bold text-slate-400">Verificando…</span>}</div>
       <div className={`mt-5 rounded-2xl border p-4 ${current.tone}`}><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-white/70 font-black dark:bg-slate-900/70">{connectStatus?.ready?"✓":"!"}</span><div><p className="font-black">{current.title}</p><p className="mt-0.5 text-xs leading-5 opacity-80">{current.detail}</p></div></div>{connectStatus?.requirementsDue?.length>0&&<p className="mt-3 text-xs font-bold">{connectStatus.requirementsDue.length} pendência(s) precisam ser concluídas no ambiente seguro do Stripe.</p>}</div>
-      {mostrarForm
+      {isSupportView ? <div className="mt-5 rounded-2xl border border-violet-200 bg-violet-50 p-4 text-sm leading-6 text-violet-900 dark:border-violet-900/60 dark:bg-violet-950/25 dark:text-violet-200"><p className="font-black">Ações financeiras bloqueadas</p><p className="mt-1 text-xs">Você pode conferir o status e os saldos desta conta, mas não pode configurar recebimentos, abrir uma conta Asaas/Stripe nem solicitar um repasse em nome do revendedor.</p></div> : mostrarForm
         ? <form onSubmit={enviarConta} className="mt-5 grid gap-4 rounded-2xl border border-slate-200 p-4 sm:grid-cols-2 dark:border-slate-800">
             <FormField label="CEP"><Input value={form.postalCode} onChange={set("postalCode")} inputMode="numeric" maxLength={9} placeholder="74000000" required /></FormField>
             <FormField label="Bairro"><Input value={form.province} onChange={set("province")} placeholder="Setor Central" required /></FormField>

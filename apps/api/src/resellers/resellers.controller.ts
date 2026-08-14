@@ -4,8 +4,12 @@ import { ApplicationStatus, Role } from "@prisma/client";
 import { ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { CurrentResellerUser } from "../common/decorators/current-reseller-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { Roles } from "../common/decorators/roles.decorator";
+import { BlockResellerSupportWrite } from "../common/decorators/block-reseller-support-write.decorator";
+import { PaginationQueryDto } from "../common/dto/pagination-query.dto";
+import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { CreateLeadDto } from "./dto/create-lead.dto";
 import { CreateProspectDto } from "./dto/create-prospect.dto";
 import { ResellerApplicationDto } from "./dto/reseller-application.dto";
@@ -60,47 +64,71 @@ export class ResellersController {
     return this.service.humanReview(id, dto.approve, dto.notes, reviewerId);
   }
 
+  /**
+   * Diretório operacional separado das candidaturas. Inclui perfis inativos
+   * para que o suporte possa diagnosticar contas reais que já não entram no
+   * fluxo comercial normal.
+   */
+  @Roles(Role.SUPER_ADMIN)
+  @Get("admin/profiles")
+  profiles(@Query() query: PaginationQueryDto) {
+    return this.service.listProfiles(query);
+  }
+
   @Roles(Role.REVENDEDOR)
   @Get("me/dashboard")
-  dashboard(@CurrentUser("sub") userId: string) {
-    return this.service.dashboard(userId);
+  dashboard(@CurrentResellerUser() userId: string, @CurrentUser() identity: JwtPayload) {
+    const supportView = this.isSupportView(identity);
+    return this.service.dashboard(userId, supportView, supportView);
   }
 
   @Roles(Role.REVENDEDOR)
   @Get("me/prospects")
-  prospects(@CurrentUser("sub") userId: string) {
-    return this.service.listProspects(userId);
+  prospects(@CurrentResellerUser() userId: string, @CurrentUser() identity: JwtPayload) {
+    return this.service.listProspects(userId, this.isSupportView(identity));
   }
 
   @Roles(Role.REVENDEDOR)
   @Post("me/prospects")
-  createProspect(@CurrentUser("sub") userId: string, @Body() dto: CreateProspectDto) {
+  @BlockResellerSupportWrite()
+  createProspect(@CurrentResellerUser() userId: string, @Body() dto: CreateProspectDto) {
     return this.service.createProspect(userId, dto);
   }
 
   @Roles(Role.REVENDEDOR)
   @Get("me/leads")
-  leads(@CurrentUser("sub") userId: string) {
-    return this.service.availableLeads(userId);
+  leads(@CurrentResellerUser() userId: string, @CurrentUser() identity: JwtPayload) {
+    const supportView = this.isSupportView(identity);
+    // A visão de suporte mostra apenas a carteira do parceiro escolhido. Ela
+    // não deve virar uma janela para a fila global de oportunidades nem entrar
+    // na disputa ao vivo entre revendedores.
+    return this.service.availableLeads(userId, supportView, supportView);
   }
 
   @Roles(Role.REVENDEDOR)
   @Post("me/leads/:id/claim")
-  claim(@CurrentUser("sub") userId: string, @Param("id") id: string) {
+  @BlockResellerSupportWrite()
+  claim(@CurrentResellerUser() userId: string, @Param("id") id: string) {
     return this.service.claimLead(userId, id);
   }
 
   @Roles(Role.REVENDEDOR)
   @Post("me/leads/:id/status")
-  updateLeadStatus(@CurrentUser("sub") userId: string, @Param("id") id: string, @Body() dto: UpdateLeadStatusDto) {
+  @BlockResellerSupportWrite()
+  updateLeadStatus(@CurrentResellerUser() userId: string, @Param("id") id: string, @Body() dto: UpdateLeadStatusDto) {
     return this.service.updateLeadStatus(userId, id, dto.status);
   }
 
   @Roles(Role.REVENDEDOR)
   @Post("me/assistant")
+  @BlockResellerSupportWrite()
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
-  assistant(@CurrentUser("sub") userId: string, @Body() dto: ResellerAssistantDto) {
+  assistant(@CurrentResellerUser() userId: string, @Body() dto: ResellerAssistantDto) {
     return this.service.assistant(userId, dto.message);
+  }
+
+  private isSupportView(identity: JwtPayload) {
+    return Boolean(identity.assumed && identity.assumedAccessId && identity.assumedAccessKind === "RESELLER");
   }
 
   @Public()

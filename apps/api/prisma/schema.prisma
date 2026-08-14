@@ -383,12 +383,13 @@ model User {
 
   company Company? @relation(fields: [companyId], references: [id])
 
-  refreshTokens             RefreshToken[]
-  accountTokens             AccountToken[]
-  superAdminCompanyAccesses SuperAdminCompanyAccess[] @relation("SuperAdminCompanyAccessActor")
-  employeeProfile           EmployeeProfile?
-  customerProfiles          CustomerProfile[]
-  addresses                 Address[]
+  refreshTokens              RefreshToken[]
+  accountTokens              AccountToken[]
+  superAdminCompanyAccesses  SuperAdminCompanyAccess[]  @relation("SuperAdminCompanyAccessActor")
+  superAdminResellerAccesses SuperAdminResellerAccess[] @relation("SuperAdminResellerAccessActor")
+  employeeProfile            EmployeeProfile?
+  customerProfiles           CustomerProfile[]
+  addresses                  Address[]
 
   ordersAsCustomer              Order[]                       @relation("OrderCustomer")
   orderStatusChanges            OrderStatusHistory[]          @relation("OrderStatusChangedBy")
@@ -412,26 +413,32 @@ model User {
 }
 
 model RefreshToken {
-  id               String    @id @default(cuid())
-  userId           String
-  tokenHash        String
-  expiresAt        DateTime
-  revokedAt        DateTime?
-  createdAt        DateTime  @default(now())
+  id                String    @id @default(cuid())
+  userId            String
+  tokenHash         String
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  createdAt         DateTime  @default(now())
   // Contexto assumido pelo superadmin multiacesso. Fica aqui para que renovar a
   // sessão não devolva silenciosamente o usuário ao papel de plataforma —
   // trocar de contexto seria desfeito a cada refresh.
-  assumedRole      Role?
-  assumedCompanyId String?
+  assumedRole       Role?
+  assumedCompanyId  String?
   // Sessões de suporte por atalho carregam o ID auditável que as originou.
   // Não é uma FK de propósito: o histórico do atalho não pode ser apagado por
   // uma rotação normal de refresh token.
-  assumedAccessId  String?
+  assumedAccessId   String?
+  // Tipo e sujeito do acesso auditado. São necessários para renovar uma visão
+  // de revendedor sem jamais trocar a identidade real (`userId`) da sessão.
+  assumedAccessKind String?
+  assumedUserId     String?
+  assumedResellerId String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([assumedAccessId])
+  @@index([assumedResellerId])
 }
 
 // Atalho efêmero e auditável para o superadmin abrir a visão ADMIN de uma
@@ -454,6 +461,28 @@ model SuperAdminCompanyAccess {
   superAdmin User    @relation("SuperAdminCompanyAccessActor", fields: [superAdminId], references: [id], onDelete: Cascade)
 
   @@index([companyId, createdAt])
+  @@index([superAdminId, sessionExpiresAt])
+}
+
+// Equivalente ao acesso de empresa, mas para a área de parceiros. A sessão
+// resultante é explicitamente de leitura para que suporte não mova dinheiro,
+// crie vendas ou altere a carteira comercial em nome do revendedor.
+model SuperAdminResellerAccess {
+  id               String    @id @default(cuid())
+  resellerId       String
+  superAdminId     String
+  tokenHash        String    @unique
+  linkExpiresAt    DateTime
+  sessionExpiresAt DateTime?
+  consumedAt       DateTime?
+  revokedAt        DateTime?
+  closedAt         DateTime?
+  createdAt        DateTime  @default(now())
+
+  reseller   ResellerProfile @relation(fields: [resellerId], references: [id], onDelete: Cascade)
+  superAdmin User            @relation("SuperAdminResellerAccessActor", fields: [superAdminId], references: [id], onDelete: Cascade)
+
+  @@index([resellerId, createdAt])
   @@index([superAdminId, sessionExpiresAt])
 }
 
@@ -1363,14 +1392,15 @@ model ResellerProfile {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  application        ResellerApplication? @relation(fields: [applicationId], references: [id])
-  subscriptions      ClientSubscription[]
-  commissions        CommissionLedger[]
-  prospects          ResellerProspect[]
-  leads              SalesLead[]
-  clientApplications ClientApplication[]
-  payoutBatches      PayoutBatch[]
+  user                      User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application               ResellerApplication?       @relation(fields: [applicationId], references: [id])
+  subscriptions             ClientSubscription[]
+  commissions               CommissionLedger[]
+  prospects                 ResellerProspect[]
+  leads                     SalesLead[]
+  clientApplications        ClientApplication[]
+  payoutBatches             PayoutBatch[]
+  superAdminSupportAccesses SuperAdminResellerAccess[]
 }
 
 model SoftwarePlan {
