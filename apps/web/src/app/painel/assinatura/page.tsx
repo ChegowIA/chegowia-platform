@@ -132,8 +132,17 @@ export default function SubscriptionPage() {
     mutationFn: async () => (await api.post("/billing/company/portal")).data as { url: string },
     onSuccess: (result) => abrirFatura(result.url),
   });
+  // A forma de pagamento é escolhida aqui, e não na página do Asaas, porque o
+  // valor depende dela: só o cartão carrega a taxa da operadora.
+  const [formaPagamento, setFormaPagamento] = useState<"PIX" | "BOLETO" | "CREDIT_CARD">("PIX");
+  const { data: formasPagamento } = useQuery({
+    queryKey: ["company-payment-options"],
+    queryFn: async () => (await api.get("/billing/company/payment-options")).data as {
+      options: Array<{ billingType: "PIX" | "BOLETO" | "CREDIT_CARD"; label: string; value: number; note: string }>;
+    },
+  });
   const activate = useMutation({
-    mutationFn: async () => (await api.post("/billing/company/checkout")).data as { url?: string; activated?: boolean },
+    mutationFn: async () => (await api.post("/billing/company/checkout", { billingType: formaPagamento })).data as { url?: string; activated?: boolean },
     onSuccess: (result) => {
       // A cobrança já estava paga e o acesso foi liberado na hora: não há fatura
       // para abrir, só recarregar o painel.
@@ -265,6 +274,7 @@ export default function SubscriptionPage() {
           {trialExpired ? <div className="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/25">
             <p className="text-sm font-black text-brand-950 dark:text-brand-100">Sua empresa está pausada até a ativação.</p>
             <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês, já somada a todo o consumo de IA e WhatsApp que você usou, inclusive o do teste. Se você não assinar, nada disso é cobrado.</p>
+            {formasPagamento?.options?.length ? <div className="mt-4 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" onClick={() => setFormaPagamento(opcao.billingType)} className={`rounded-2xl border p-3 text-left transition ${formaPagamento === opcao.billingType ? "border-brand-500 bg-white shadow-sm dark:border-brand-400 dark:bg-slate-900" : "border-brand-200 bg-white/60 hover:border-brand-300 dark:border-brand-900/60 dark:bg-slate-900/40"}`}><span className="block text-sm font-black text-brand-950 dark:text-brand-100">{opcao.label}</span><span className="mt-0.5 block text-lg font-black text-brand-900 dark:text-brand-200">{formatCurrency(opcao.value)}</span><span className="mt-0.5 block text-[11px] leading-4 text-brand-800/80 dark:text-brand-200/70">{opcao.note}</span></button>)}</div> : null}
             <Button className="mt-4 w-full sm:w-auto" isLoading={activate.isPending} onClick={() => activate.mutate()}>Gerar fatura e liberar tudo</Button>
             {faturaAberta && <p className="mt-3 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura abriu em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui para abrir</a>. O acesso é liberado automaticamente após o pagamento.</p>}
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}

@@ -10,6 +10,7 @@ import { Roles } from "../common/decorators/roles.decorator";
 import { BlockResellerSupportWrite } from "../common/decorators/block-reseller-support-write.decorator";
 import { BillingService } from "./billing.service";
 import { ClientApplicationDto } from "./dto/client-application.dto";
+import { CompanyCheckoutDto } from "./dto/company-checkout.dto";
 import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
 import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
@@ -130,8 +131,19 @@ export class BillingController {
   @Roles(Role.ADMIN)
   @AllowInactiveSubscription()
   @Post("company/checkout")
-  companyCheckout(@CurrentUser("companyId") companyId: string) {
-    return this.billing.companyCheckout(companyId);
+  companyCheckout(
+    @CurrentUser("companyId") companyId: string,
+    @Body() dto: CompanyCheckoutDto,
+  ) {
+    return this.billing.companyCheckout(companyId, dto?.billingType);
+  }
+
+  /** Formas de pagamento e o valor de cada uma; só o cartão carrega a taxa. */
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Get("company/payment-options")
+  companyPaymentOptions(@CurrentUser("companyId") companyId: string) {
+    return this.billing.companyPaymentOptions(companyId);
   }
 
   @Roles(Role.SUPER_ADMIN)

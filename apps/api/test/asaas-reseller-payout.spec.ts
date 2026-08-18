@@ -442,6 +442,41 @@ describe("desconto do código de indicação", () => {
     )).toBe(159.9);
   });
 
+  it("no cartão a taxa é acrescida por dentro, para o líquido bater com o plano", () => {
+    const { service } = servico();
+    const assinatura = { plan: plano, monthlyPriceSnapshot: 159.9, resellerId: null };
+
+    const valor = service.chargeValueForBillingType(assinatura, "CREDIT_CARD");
+
+    // (159,90 + 0,49) / (1 - 2,99%) = 165,33. Somar a taxa por fora daria
+    // 165,17, e o Asaas cobraria o percentual sobre o total já acrescido —
+    // a plataforma receberia menos que a mensalidade.
+    expect(valor).toBe(165.33);
+    const taxaCobradaPeloAsaas = valor * 0.0299 + 0.49;
+    expect(Math.round((valor - taxaCobradaPeloAsaas) * 100) / 100).toBe(159.9);
+  });
+
+  it("pix e boleto não carregam taxa", () => {
+    const { service } = servico();
+    const assinatura = { plan: plano, monthlyPriceSnapshot: 159.9, resellerId: null };
+
+    expect(service.chargeValueForBillingType(assinatura, "PIX")).toBe(159.9);
+    expect(service.chargeValueForBillingType(assinatura, "BOLETO")).toBe(159.9);
+    expect(service.chargeValueForBillingType(assinatura, undefined)).toBe(159.9);
+  });
+
+  it("com desconto de indicação, a taxa do cartão incide sobre o valor já descontado", () => {
+    const { service } = servico();
+
+    const valor = service.chargeValueForBillingType(
+      { plan: plano, monthlyPriceSnapshot: 159.9, resellerId: "rev-1", discountEndsAt: null },
+      "CREDIT_CARD",
+    );
+
+    // (135,92 + 0,49) / (1 - 2,99%)
+    expect(valor).toBe(140.61);
+  });
+
   it("assinatura já ajustada não é cobrada de novo pela varredura", async () => {
     const { service, asaas } = servico({ vencidas: [] });
 

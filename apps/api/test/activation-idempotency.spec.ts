@@ -16,9 +16,14 @@ describe("chave de idempotência da ativação", () => {
     join(__dirname, "..", "src", "billing", "billing.service.ts"),
     "utf8",
   );
-  // Busca exata: `async companyCheckout` também casaria com companyCheckoutAsaas,
-  // que é o caminho do outro provedor e não usa chave de idempotência.
-  const trecho = fonte.slice(fonte.indexOf("async companyCheckout(companyId: string) {"));
+  // A âncora inclui o primeiro parâmetro porque `async companyCheckout` sozinho
+  // casaria com `companyCheckoutAsaas`, que é o caminho do outro provedor e não
+  // usa chave de idempotência. Não repetimos a assinatura inteira: ela ganha
+  // parâmetros com o tempo, e quando isso aconteceu o teste passou a ler string
+  // vazia e a aprovar qualquer coisa.
+  const inicio = fonte.indexOf("async companyCheckout(companyId");
+  if (inicio < 0) throw new Error("companyCheckout não encontrado em billing.service.ts");
+  const trecho = fonte.slice(inicio);
   const corpo = trecho.slice(0, trecho.indexOf("\n  async "));
 
   it("não deriva a chave de updatedAt", () => {
