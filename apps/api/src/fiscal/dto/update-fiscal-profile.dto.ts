@@ -174,6 +174,13 @@ export class UpdateFiscalProfileDto {
   @Max(100)
   defaultIcmsRate?: number;
 
+  /** Redução da base de cálculo; obrigatória quando o CST de ICMS é 20. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  defaultIcmsReductionRate?: number;
+
   @IsOptional()
   @Transform(onlyDigits)
   @IsString()

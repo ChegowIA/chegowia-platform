@@ -15,45 +15,113 @@ import { FiscalEnvironment } from "@prisma/client";
 
 /** URL de consulta do QR Code por UF e ambiente. */
 const QR_URLS: Record<string, { homologacao: string; producao: string }> = {
-  MG: {
-    homologacao: "https://hnfce.fazenda.mg.gov.br/portalnfce/sistema/qrcode.xhtml",
-    producao: "https://nfce.fazenda.mg.gov.br/portalnfce/sistema/qrcode.xhtml",
+  AC: {
+    homologacao: "http://www.hml.sefaznet.ac.gov.br/nfce/qrcode",
+    producao: "http://www.sefaznet.ac.gov.br/nfce/qrcode",
   },
-  SP: {
-    homologacao: "https://www.homologacao.nfce.fazenda.sp.gov.br/qrcode",
-    producao: "https://www.nfce.fazenda.sp.gov.br/qrcode",
+  AL: {
+    homologacao: "http://nfce.sefaz.al.gov.br/QRCode/consultarNFCe.jsp",
+    producao: "http://nfce.sefaz.al.gov.br/QRCode/consultarNFCe.jsp",
   },
-  RS: {
-    homologacao: "https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx",
-    producao: "https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx",
+  AM: {
+    homologacao: "https://sistemas.sefaz.am.gov.br/nfceweb-hom/consultarNFCe.jsp",
+    producao: "https://sistemas.sefaz.am.gov.br/nfceweb/consultarNFCe.jsp",
   },
-  PR: {
-    homologacao: "http://www.fazenda.pr.gov.br/nfce/qrcode",
-    producao: "http://www.fazenda.pr.gov.br/nfce/qrcode",
-  },
-  SC: {
-    homologacao: "https://hom.sat.sef.sc.gov.br/nfce/consulta",
-    producao: "https://sat.sef.sc.gov.br/nfce/consulta",
-  },
-  RJ: {
-    homologacao: "http://www4.fazenda.rj.gov.br/consultaNFCe/QRCode",
-    producao: "http://www4.fazenda.rj.gov.br/consultaNFCe/QRCode",
+  AP: {
+    homologacao: "https://www.sefaz.ap.gov.br/nfcehml/nfce.php",
+    producao: "https://www.sefaz.ap.gov.br/nfce/nfcep.php",
   },
   BA: {
     homologacao: "http://hnfe.sefaz.ba.gov.br/servicos/nfce/qrcode.aspx",
     producao: "http://nfe.sefaz.ba.gov.br/servicos/nfce/qrcode.aspx",
   },
-  GO: {
-    homologacao: "http://homolog.sefaz.go.gov.br/nfeweb/sites/nfce/danfeNFCe",
-    producao: "http://nfe.sefaz.go.gov.br/nfeweb/sites/nfce/danfeNFCe",
+  CE: {
+    homologacao: "http://nfceh.sefaz.ce.gov.br/pages/ShowNFCe.html",
+    producao: "http://nfce.sefaz.ce.gov.br/pages/ShowNFCe.html",
+  },
+  DF: {
+    homologacao: "http://dec.fazenda.df.gov.br/ConsultarNFCe.aspx",
+    producao: "http://www.fazenda.df.gov.br/nfce/qrcode",
   },
   ES: {
     homologacao: "http://homologacao.sefaz.es.gov.br/ConsultaNFCe/qrcode.aspx",
     producao: "http://app.sefaz.es.gov.br/ConsultaNFCe/qrcode.aspx",
   },
-  DF: {
-    homologacao: "http://www.fazenda.df.gov.br/nfce/qrcode",
-    producao: "http://www.fazenda.df.gov.br/nfce/qrcode",
+  GO: {
+    homologacao: "https://nfewebhomolog.sefaz.go.gov.br/nfeweb/sites/nfce/danfeNFCe",
+    producao: "https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfce/danfeNFCe",
+  },
+  MA: {
+    homologacao: "http://www.hom.nfce.sefaz.ma.gov.br/portal/consultarNFCe.jsp",
+    producao: "http://www.nfce.sefaz.ma.gov.br/portal/consultarNFCe.jsp",
+  },
+  MG: {
+    homologacao: "https://portalsped.fazenda.mg.gov.br/portalnfce/sistema/qrcode.xhtml",
+    producao: "https://portalsped.fazenda.mg.gov.br/portalnfce/sistema/qrcode.xhtml",
+  },
+  MS: {
+    homologacao: "http://www.dfe.ms.gov.br/nfce/qrcode",
+    producao: "http://www.dfe.ms.gov.br/nfce/qrcode",
+  },
+  MT: {
+    homologacao: "http://homologacao.sefaz.mt.gov.br/nfce/consultanfce",
+    producao: "http://www.sefaz.mt.gov.br/nfce/consultanfce",
+  },
+  PA: {
+    homologacao: "https://appnfc.sefa.pa.gov.br/portal-homologacao/view/consultas/nfce/nfceForm.seam",
+    producao: "https://appnfc.sefa.pa.gov.br/portal/view/consultas/nfce/nfceForm.seam",
+  },
+  PB: {
+    homologacao: "http://www.sefaz.pb.gov.br/nfcehom",
+    producao: "http://www.sefaz.pb.gov.br/nfce",
+  },
+  PE: {
+    homologacao: "http://nfcehomolog.sefaz.pe.gov.br/nfce/consulta",
+    producao: "http://nfce.sefaz.pe.gov.br/nfce/consulta",
+  },
+  PI: {
+    homologacao: "http://www.sefaz.pi.gov.br/nfce/qrcode",
+    producao: "http://www.sefaz.pi.gov.br/nfce/qrcode",
+  },
+  PR: {
+    homologacao: "http://www.fazenda.pr.gov.br/nfce/qrcode",
+    producao: "http://www.fazenda.pr.gov.br/nfce/qrcode",
+  },
+  RJ: {
+    homologacao: "http://www4.fazenda.rj.gov.br/consultaNFCe/QRCode",
+    producao: "https://consultadfe.fazenda.rj.gov.br/consultaNFCe/QRCode",
+  },
+  RN: {
+    homologacao: "http://hom.nfce.set.rn.gov.br/consultarNFCe.aspx",
+    producao: "http://nfce.set.rn.gov.br/consultarNFCe.aspx",
+  },
+  RO: {
+    homologacao: "http://www.nfce.sefin.ro.gov.br/consultanfce/consulta.jsp",
+    producao: "http://www.nfce.sefin.ro.gov.br/consultanfce/consulta.jsp",
+  },
+  RR: {
+    homologacao: "http://200.174.88.103:8080/nfce/servlet/qrcode",
+    producao: "https://www.sefaz.rr.gov.br/servlet/qrcode",
+  },
+  RS: {
+    homologacao: "https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx",
+    producao: "https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx",
+  },
+  SC: {
+    homologacao: "https://hom.sat.sef.sc.gov.br/nfce/consulta",
+    producao: "https://sat.sef.sc.gov.br/nfce/consulta",
+  },
+  SE: {
+    homologacao: "http://www.hom.nfe.se.gov.br/nfce/qrcode",
+    producao: "http://www.nfce.se.gov.br/nfce/qrcode",
+  },
+  SP: {
+    homologacao: "https://www.homologacao.nfce.fazenda.sp.gov.br/qrcode",
+    producao: "https://www.nfce.fazenda.sp.gov.br/qrcode",
+  },
+  TO: {
+    homologacao: "http://homologacao.sefaz.to.gov.br/nfce/qrcode",
+    producao: "http://www.sefaz.to.gov.br/nfce/qrcode",
   },
 };
 

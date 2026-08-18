@@ -16,6 +16,8 @@ export interface ResolvedProductTax {
   taxOrigin: TaxOrigin;
   icmsCode: string;
   icmsRate: number;
+  /** Redução da base de cálculo, em percentual. Obrigatória no CST 20. */
+  icmsReductionRate: number | null;
   pisCode: string;
   pisRate: number;
   cofinsCode: string;
@@ -53,6 +55,7 @@ export function resolveProductTax(
     defaultTaxOrigin: TaxOrigin;
     defaultIcmsCode: string | null;
     defaultIcmsRate: unknown;
+    defaultIcmsReductionRate?: unknown;
     defaultPisCode: string | null;
     defaultPisRate: unknown;
     defaultCofinsCode: string | null;
@@ -67,6 +70,7 @@ export function resolveProductTax(
     taxOrigin: TaxOrigin | null;
     icmsCode: string | null;
     icmsRate: unknown;
+    icmsReductionRate?: unknown;
     pisCode: string | null;
     pisRate: unknown;
     cofinsCode: string | null;
@@ -93,6 +97,9 @@ export function resolveProductTax(
   const taxOrigin = pick("taxOrigin", product.taxOrigin, profile.defaultTaxOrigin);
   const icmsCode = pick("icmsCode", product.icmsCode, profile.defaultIcmsCode);
   const icmsRate = toNumber(pick("icmsRate", product.icmsRate, profile.defaultIcmsRate));
+  const icmsReductionRate = toNumber(
+    pick("icmsReductionRate", product.icmsReductionRate, profile.defaultIcmsReductionRate),
+  );
   const pisCode = pick("pisCode", product.pisCode, profile.defaultPisCode);
   const pisRate = toNumber(pick("pisRate", product.pisRate, profile.defaultPisRate));
   const cofinsCode = pick("cofinsCode", product.cofinsCode, profile.defaultCofinsCode);
@@ -130,10 +137,22 @@ export function resolveProductTax(
   if (!unit) pendencias.push("Unidade comercial não informada.");
   else if (!isValidCode(UNIT_OPTIONS, unit)) pendencias.push(`Unidade ${unit} não é reconhecida.`);
 
-  for (const [rotulo, valor] of [["ICMS", icmsRate], ["PIS", pisRate], ["COFINS", cofinsRate]] as const) {
+  for (const [rotulo, valor] of [
+    ["ICMS", icmsRate],
+    ["PIS", pisRate],
+    ["COFINS", cofinsRate],
+    ["redução de base", icmsReductionRate],
+  ] as const) {
     if (valor !== null && (valor < 0 || valor > 100)) {
       pendencias.push(`A alíquota de ${rotulo} precisa estar entre 0 e 100.`);
     }
+  }
+
+  // O CST 20 é "com redução de base de cálculo": o XML exige o percentual de
+  // redução junto do CST, e sem ele a SEFAZ recusa por schema. Cobrar aqui
+  // evita descobrir isso com o cliente no balcão.
+  if (icmsCode === "20" && (icmsReductionRate === null || icmsReductionRate <= 0)) {
+    pendencias.push("O CST 20 exige o percentual de redução da base de cálculo.");
   }
 
   if (pendencias.length) return { tax: null, pendencias, herdados };
@@ -148,6 +167,7 @@ export function resolveProductTax(
       // Alíquota ausente vale zero: CSOSN 102 e CST 40, os casos mais comuns
       // em restaurante do Simples, não têm alíquota própria.
       icmsRate: icmsRate ?? 0,
+      icmsReductionRate,
       pisCode: pisCode!,
       pisRate: pisRate ?? 0,
       cofinsCode: cofinsCode!,

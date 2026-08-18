@@ -14,9 +14,15 @@ import { UF_CODES } from "./access-key";
  * - **Campo vazio não pode existir.** O layout distingue "ausente" de "vazio";
  *   `<xNome></xNome>` é rejeitado. Por isso `opcional()` omite em vez de
  *   escrever string vazia.
- * - **Em homologação o nome do destinatário é obrigatoriamente a frase de
- *   teste.** Regra da SEFAZ, não capricho: emitir com nome real em homologação
- *   é rejeição 999.
+ * - **Homologação tem duas frases obrigatórias.** A descrição do primeiro item
+ *   precisa ser exatamente a frase de teste (rejeição 373) e, se houver
+ *   destinatário, o nome dele também (rejeição 598). Emitir com o nome real do
+ *   produto em homologação é rejeição garantida — e homologação é justamente
+ *   onde o lojista testa antes de valer.
+ *
+ * - **O destinatário só existe com CPF ou CNPJ.** O grupo `dest` sem documento
+ *   é inválido no schema: se o consumidor não se identificou, o grupo inteiro
+ *   fica de fora, em produção e em homologação.
  */
 
 export interface NfceEmitter {
@@ -72,8 +78,11 @@ const PAYMENT_CODE: Record<PaymentMethod, string> = {
   [PaymentMethod.PIX_MANUAL]: "17",
 };
 
-/** Frase obrigatória no destinatário em homologação. */
+/** Frase obrigatória no destinatário em homologação (rejeição 598). */
 const HOMOLOGACAO_NAME = "NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL";
+
+/** Frase obrigatória na descrição do primeiro item em homologação (rejeição 373). */
+const HOMOLOGACAO_PRODUCT = "NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL";
 
 export function buildNfceXml(input: NfceInput): string {
   const { emitter, totals } = input;
@@ -134,14 +143,14 @@ export function buildNfceXml(input: NfceInput): string {
   emit.ele("CRT").txt(crtCode(emitter.taxRegime));
 
   // ---- dest ----
-  // Numa NFC-e de produção o destinatário é opcional: só entra quando o
-  // cliente pede CPF/CNPJ. Em homologação, porém, a regra E04-20 da SEFAZ
-  // exige o xNome literal de teste mesmo sem documento do consumidor.
+  // Na NFC-e o destinatário é opcional e só entra quando o cliente pede
+  // CPF/CNPJ — o grupo sem documento nenhum é recusado pelo schema. Quando
+  // existe e o ambiente é de homologação, o nome tem que ser a frase de teste.
   const documento = digits(input.customer?.document ?? "");
-  if (documento || input.environment !== FiscalEnvironment.PRODUCAO) {
+  if (documento) {
     const dest = infNFe.ele("dest");
     if (documento.length === 14) dest.ele("CNPJ").txt(documento);
-    else if (documento) dest.ele("CPF").txt(documento.padStart(11, "0"));
+    else dest.ele("CPF").txt(documento.padStart(11, "0"));
     const nome = input.environment === FiscalEnvironment.PRODUCAO
       ? input.customer?.name
       : HOMOLOGACAO_NAME;
@@ -155,7 +164,13 @@ export function buildNfceXml(input: NfceInput): string {
     const prod = det.ele("prod");
     prod.ele("cProd").txt(item.productId.slice(0, 60));
     prod.ele("cEAN").txt("SEM GTIN");
-    prod.ele("xProd").txt(cut(sanitize(item.name), 120));
+    prod.ele("xProd").txt(
+      // Em homologação a SEFAZ confere a descrição do primeiro item contra a
+      // frase literal de teste; qualquer outra coisa é rejeição 373.
+      index === 0 && input.environment !== FiscalEnvironment.PRODUCAO
+        ? HOMOLOGACAO_PRODUCT
+        : cut(sanitize(item.name), 120),
+    );
     prod.ele("NCM").txt(item.tax.ncm);
     opcional(prod, "CEST", item.tax.cest);
     prod.ele("CFOP").txt(item.tax.cfop);
@@ -167,6 +182,10 @@ export function buildNfceXml(input: NfceInput): string {
     prod.ele("uTrib").txt(item.tax.unit);
     prod.ele("qTrib").txt(xmlQuantity(item.quantity));
     prod.ele("vUnTrib").txt(xmlUnitPrice(item.unitPriceCents));
+    // A SEFAZ refaz a soma do frete e do desconto a partir dos itens; declarar
+    // só no total é rejeição 535/536.
+    if (item.freightCents > 0) prod.ele("vFrete").txt(xmlAmount(item.freightCents));
+    if (item.discountCents > 0) prod.ele("vDesc").txt(xmlAmount(item.discountCents));
     prod.ele("indTot").txt("1");
 
     const imposto = det.ele("imposto");
@@ -206,13 +225,24 @@ export function buildNfceXml(input: NfceInput): string {
   // ---- pag ----
   const pag = infNFe.ele("pag");
   for (const payment of input.payments) {
+    const tPag = PAYMENT_CODE[payment.method] ?? "99";
     const detPag = pag.ele("detPag");
     detPag.ele("indPag").txt("0"); // à vista
-    detPag.ele("tPag").txt(PAYMENT_CODE[payment.method] ?? "99");
+    detPag.ele("tPag").txt(tPag);
     detPag.ele("vPag").txt(xmlAmount(payment.amountCents));
+    if (tPag === "03" || tPag === "04") {
+      // Pagamento em cartão sem o grupo de cartões é rejeição 391 nas UFs que
+      // aplicam a regra. `tpIntegra=2` é a verdade aqui: a maquininha do
+      // restaurante não é integrada ao sistema, o valor é digitado no caixa.
+      detPag.ele("card").ele("tpIntegra").txt("2");
+    }
   }
   const pago = input.payments.reduce((sum, payment) => sum + payment.amountCents, 0);
-  if (pago > totals.totalCents) pag.ele("vTroco").txt(xmlAmount(pago - totals.totalCents));
+  // Troco só faz sentido — e só é aceito — quando houve dinheiro em espécie.
+  const houveDinheiro = input.payments.some((payment) => PAYMENT_CODE[payment.method] === "01");
+  if (pago > totals.totalCents && houveDinheiro) {
+    pag.ele("vTroco").txt(xmlAmount(pago - totals.totalCents));
+  }
 
   // ---- infAdic ----
   if (input.additionalInfo) {
@@ -234,8 +264,10 @@ function buildIcms(imposto: ReturnType<typeof create>, item: CalculatedItem) {
     grupo.ele("orig").txt(orig);
     grupo.ele("CSOSN").txt(csosn);
     if (csosn === "101") {
+      // Crédito do adquirente, não imposto destacado: vive só aqui e fica fora
+      // do total da nota.
       grupo.ele("pCredSN").txt(xmlRate(item.tax.icmsRate));
-      grupo.ele("vCredICMSSN").txt(xmlAmount(item.icmsValueCents));
+      grupo.ele("vCredICMSSN").txt(xmlAmount(item.snCreditCents));
     }
     if (csosn === "900") {
       grupo.ele("modBC").txt("3");
@@ -252,44 +284,55 @@ function buildIcms(imposto: ReturnType<typeof create>, item: CalculatedItem) {
   grupo.ele("CST").txt(cst);
   if (cst === "00" || cst === "20" || cst === "90") {
     grupo.ele("modBC").txt("3"); // valor da operação
+    // No CST 20 o percentual de redução vem antes da base e é obrigatório: é
+    // ele que explica por que a base é menor que o valor da operação.
+    if (cst === "20") grupo.ele("pRedBC").txt(xmlRate(item.tax.icmsReductionRate ?? 0));
     grupo.ele("vBC").txt(xmlAmount(item.icmsBaseCents));
     grupo.ele("pICMS").txt(xmlRate(item.tax.icmsRate));
     grupo.ele("vICMS").txt(xmlAmount(item.icmsValueCents));
   }
 }
 
+/**
+ * CST de PIS/COFINS que vão no grupo "não tributada": o schema aceita só o
+ * CST nesses casos e recusa base e alíquota, mesmo zeradas.
+ */
+const CST_NAO_TRIBUTADA = new Set(["04", "05", "06", "07", "08", "09"]);
+
+/** CST com alíquota própria — grupo `Aliq`. Os demais caem em `Outr`. */
+const CST_ALIQUOTA = new Set(["01", "02"]);
+
 function buildPisCofins(imposto: ReturnType<typeof create>, item: CalculatedItem) {
-  const pis = imposto.ele("PIS");
-  if (item.pisValueCents > 0 || item.tax.pisCode === "01" || item.tax.pisCode === "02") {
-    const grupo = pis.ele("PISAliq");
-    grupo.ele("CST").txt(item.tax.pisCode);
-    grupo.ele("vBC").txt(xmlAmount(item.pisBaseCents));
-    grupo.ele("pPIS").txt(xmlRate(item.tax.pisRate));
-    grupo.ele("vPIS").txt(xmlAmount(item.pisValueCents));
-  } else {
-    // PISOutr cobre CST 49 e os demais casos sem alíquota própria — é o grupo
-    // usado pela maioria dos restaurantes do Simples.
-    const grupo = pis.ele("PISOutr");
-    grupo.ele("CST").txt(item.tax.pisCode);
-    grupo.ele("vBC").txt(xmlAmount(item.pisBaseCents));
-    grupo.ele("pPIS").txt(xmlRate(item.tax.pisRate));
-    grupo.ele("vPIS").txt(xmlAmount(item.pisValueCents));
+  buildContribuicao(imposto.ele("PIS"), "PIS", item.tax.pisCode, {
+    baseCents: item.pisBaseCents,
+    rate: item.tax.pisRate,
+    valueCents: item.pisValueCents,
+  });
+  buildContribuicao(imposto.ele("COFINS"), "COFINS", item.tax.cofinsCode, {
+    baseCents: item.cofinsBaseCents,
+    rate: item.tax.cofinsRate,
+    valueCents: item.cofinsValueCents,
+  });
+}
+
+function buildContribuicao(
+  parent: ReturnType<typeof create>,
+  tributo: "PIS" | "COFINS",
+  cst: string,
+  valores: { baseCents: number; rate: number; valueCents: number },
+) {
+  if (CST_NAO_TRIBUTADA.has(cst)) {
+    parent.ele(`${tributo}NT`).ele("CST").txt(cst);
+    return;
   }
 
-  const cofins = imposto.ele("COFINS");
-  if (item.cofinsValueCents > 0 || item.tax.cofinsCode === "01" || item.tax.cofinsCode === "02") {
-    const grupo = cofins.ele("COFINSAliq");
-    grupo.ele("CST").txt(item.tax.cofinsCode);
-    grupo.ele("vBC").txt(xmlAmount(item.cofinsBaseCents));
-    grupo.ele("pCOFINS").txt(xmlRate(item.tax.cofinsRate));
-    grupo.ele("vCOFINS").txt(xmlAmount(item.cofinsValueCents));
-  } else {
-    const grupo = cofins.ele("COFINSOutr");
-    grupo.ele("CST").txt(item.tax.cofinsCode);
-    grupo.ele("vBC").txt(xmlAmount(item.cofinsBaseCents));
-    grupo.ele("pCOFINS").txt(xmlRate(item.tax.cofinsRate));
-    grupo.ele("vCOFINS").txt(xmlAmount(item.cofinsValueCents));
-  }
+  // `Outr` cobre CST 49 e os demais sem alíquota própria — é o grupo usado
+  // pela maioria dos restaurantes do Simples.
+  const grupo = parent.ele(`${tributo}${CST_ALIQUOTA.has(cst) ? "Aliq" : "Outr"}`);
+  grupo.ele("CST").txt(cst);
+  grupo.ele("vBC").txt(xmlAmount(valores.baseCents));
+  grupo.ele(tributo === "PIS" ? "pPIS" : "pCOFINS").txt(xmlRate(valores.rate));
+  grupo.ele(tributo === "PIS" ? "vPIS" : "vCOFINS").txt(xmlAmount(valores.valueCents));
 }
 
 /** O nome do grupo XML não é o CSOSN inteiro: 101→101, 102/103/300/400→102... */

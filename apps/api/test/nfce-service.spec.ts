@@ -75,7 +75,7 @@ describe("assinatura XMLDSig", () => {
 describe("serviço de emissão", () => {
   const tributacaoOk = {
     ncm: "21069090", cest: null, cfop: "5102", taxOrigin: TaxOrigin.NACIONAL,
-    icmsCode: "102", icmsRate: null, pisCode: "49", pisRate: 0,
+    icmsCode: "102", icmsRate: null, icmsReductionRate: null, pisCode: "49", pisRate: 0,
     cofinsCode: "49", cofinsRate: 0, unit: "UN",
   };
 
@@ -137,6 +137,7 @@ describe("serviço de emissão", () => {
           return Promise.resolve({ count: 1 });
         }),
       },
+      user: { findMany: jest.fn().mockResolvedValue(overrides.admins ?? [{ email: "dono@loja.com" }]) },
       company: { findUnique: jest.fn().mockResolvedValue({ cnpj: "12345678000199", phone: null, name: "Loja" }) },
       order: {
         findFirst: jest.fn().mockResolvedValue(overrides.order ?? pedido),
@@ -212,7 +213,10 @@ describe("serviço de emissão", () => {
       sendEvent: overrides.sendEvent ?? jest.fn(),
       sendInutilization: overrides.sendInutilization ?? jest.fn(),
     };
-    const mail = { sendOperationsAlert: jest.fn().mockResolvedValue(undefined) };
+    const mail = {
+      sendOperationsAlert: jest.fn().mockResolvedValue(undefined),
+      sendFiscalAlert: jest.fn().mockResolvedValue(undefined),
+    };
 
     const service = new NfceService(prisma as never, fiscal as never, sefaz as never, mail as never);
     service.onModuleDestroy();
@@ -286,7 +290,9 @@ describe("serviço de emissão", () => {
     const [, xml] = (sefaz.sendAuthorization as jest.Mock).mock.calls[0];
     expect(resultado.status).toBe(FiscalDocumentStatus.AUTORIZADA);
     expect(xml).toContain("<tPag>17</tPag>");
-    expect(xml).toContain("Prato servido");
+    // Em homologação a descrição do primeiro item é a frase exigida pela SEFAZ;
+    // que o item cancelado ficou de fora se vê pelo total.
+    expect(xml).toContain("<xProd>NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL</xProd>");
     expect(xml).not.toContain("Item cancelado");
     expect(xml).toContain("<vNF>30.00</vNF>");
   });
@@ -367,6 +373,41 @@ describe("serviço de emissão", () => {
 
     expect(resultado.status).toBe(FiscalDocumentStatus.REJEITADA);
     expect(resultado.actionHint).toContain("Painel > Fiscal");
+  });
+
+  it("rejeição definitiva avisa o lojista na hora, não só a operação", async () => {
+    const { service, mail } = build({
+      sendAuthorization: jest.fn().mockResolvedValue({
+        code: "104",
+        reason: "Lote processado",
+        xml: "<retEnviNFe><cStat>104</cStat><protNFe><infProt><cStat>209</cStat>"
+          + "<xMotivo>Rejeicao: IE do emitente invalida</xMotivo></infProt></protNFe></retEnviNFe>",
+      }),
+    });
+
+    const resultado: any = await service.emitForOrder("empresa-1", "pedido-1");
+
+    expect(resultado.status).toBe(FiscalDocumentStatus.REJEITADA);
+    expect(mail.sendFiscalAlert).toHaveBeenCalledWith(
+      "dono@loja.com",
+      "NFC-e rejeitada pela SEFAZ",
+      expect.arrayContaining([expect.stringContaining("Painel > Fiscal")]),
+    );
+    expect(mail.sendOperationsAlert).toHaveBeenCalled();
+  });
+
+  it("rejeição que vale reenviar não dispara alerta — o worker ainda vai tentar", async () => {
+    const { service, mail } = build({
+      sendAuthorization: jest.fn().mockResolvedValue({
+        code: "108",
+        reason: "Servico Paralisado Momentaneamente",
+        xml: "<retEnviNFe><cStat>108</cStat><xMotivo>Servico Paralisado Momentaneamente</xMotivo></retEnviNFe>",
+      }),
+    });
+
+    await service.emitForOrder("empresa-1", "pedido-1");
+
+    expect(mail.sendFiscalAlert).not.toHaveBeenCalled();
   });
 
   it("produto sem tributação completa é recusado antes de queimar numeração", async () => {

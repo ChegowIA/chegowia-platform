@@ -617,6 +617,7 @@ export interface FiscalProfile {
   defaultTaxOrigin: TaxOrigin;
   defaultIcmsCode: string | null;
   defaultIcmsRate: number | null;
+  defaultIcmsReductionRate: number | null;
   defaultPisCode: string | null;
   defaultPisRate: number | null;
   defaultCofinsCode: string | null;
@@ -658,8 +659,28 @@ export interface FiscalStatus {
   products: { total: number; pending: number };
   readiness: {
     canEmitInProduction: boolean;
+    /** Impedem emitir. */
     pendencias: string[];
+    /** Não impedem emitir, mas o lojista precisa saber. */
+    avisos: string[];
   };
+  /** Última conversa real com a SEFAZ (consulta de status do serviço). */
+  sefaz: {
+    checkedAt: string;
+    code: string | null;
+    reason: string | null;
+    online: boolean;
+  } | null;
+}
+
+/** Resposta de POST /fiscal/sefaz/testar. */
+export interface SefazCheckResult {
+  online: boolean;
+  uf: string;
+  environment: FiscalEnvironment;
+  code: string | null;
+  reason: string | null;
+  checkedAt: string;
 }
 
 /** Ponto de venda físico (GET /caixa/pontos). */

@@ -6,11 +6,12 @@ import {
   isValidAccessKey,
   parseAccessKey,
 } from "../src/fiscal/nfce/access-key";
-import { calculateTaxes, fromCents, toCents, xmlAmount } from "../src/fiscal/nfce/tax-engine";
+import { calculateTaxes, distribute, fromCents, toCents, xmlAmount } from "../src/fiscal/nfce/tax-engine";
 import { buildNfceXml } from "../src/fiscal/nfce/xml-builder";
-import { buildQrCode } from "../src/fiscal/nfce/qr-code";
+import { buildQrCode, qrCodeBaseUrl } from "../src/fiscal/nfce/qr-code";
+import { supportedUfs } from "../src/fiscal/nfce/sefaz-endpoints";
 import { isAuthorized, isServiceUnavailable, rejectionGuidance } from "../src/fiscal/nfce/rejections";
-import { extractResult, tagValue } from "../src/fiscal/nfce/sefaz-client";
+import { extractResult, generateLotId, tagValue } from "../src/fiscal/nfce/sefaz-client";
 import { buildDanfeText } from "../src/fiscal/nfce/danfe";
 
 const tributacao = {
@@ -20,6 +21,7 @@ const tributacao = {
   taxOrigin: TaxOrigin.NACIONAL,
   icmsCode: "102",
   icmsRate: 0,
+  icmsReductionRate: null,
   pisCode: "49",
   pisRate: 0,
   cofinsCode: "49",
@@ -291,12 +293,22 @@ describe("XML da NFC-e", () => {
     expect(xml).not.toContain("Fulano de Tal");
   });
 
-  it("em homologação identifica o destinatário de teste mesmo sem CPF", () => {
+  it("sem CPF a nota vai sem destinatário — o grupo sem documento é inválido", () => {
+    // O schema exige CNPJ, CPF ou idEstrangeiro dentro de `dest`. Emitir o
+    // grupo só com o nome de teste rejeitava toda nota de homologação sem CPF,
+    // que é exatamente o caso de quem está testando a integração.
     const xml = montar();
 
-    expect(xml).toContain("<dest>");
-    expect(xml).toContain("NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL");
+    expect(xml).not.toContain("<dest>");
     expect(xml).not.toContain("<CPF>");
+  });
+
+  it("em homologação o primeiro item leva a descrição obrigatória de teste", () => {
+    // Rejeição 373: em homologação a SEFAZ confere a descrição do primeiro
+    // item contra a frase literal.
+    const xml = montar();
+
+    expect(xml).toContain("<xProd>NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL</xProd>");
   });
 
   it("em produção, sem CPF/CNPJ, mantém o consumidor não identificado", () => {
@@ -336,7 +348,12 @@ describe("XML da NFC-e", () => {
     const calculo = calculateTaxes(TaxRegime.SIMPLES_NACIONAL, [
       { productId: "p1", name: "Prato do dia", quantity: 1, unitPrice: 10, tax: tributacao },
     ]);
-    const xml = montar({ items: calculo.items, totals: calculo.totals, payments: [{ method: PaymentMethod.DINHEIRO, amountCents: 1000 }] });
+    const xml = montar({
+      environment: FiscalEnvironment.PRODUCAO,
+      items: calculo.items,
+      totals: calculo.totals,
+      payments: [{ method: PaymentMethod.DINHEIRO, amountCents: 1000 }],
+    });
 
     expect(xml).toContain("<xProd>Prato do dia</xProd>");
   });
@@ -388,7 +405,16 @@ describe("QR Code", () => {
   });
 
   it("UF não habilitada avisa o que fazer", () => {
-    expect(() => buildQrCode({ ...base, uf: "AC" })).toThrow(/não está habilitada/);
+    expect(() => buildQrCode({ ...base, uf: "XX" })).toThrow(/não está habilitada/);
+  });
+
+  it("todo estado com webservice de NFC-e tem URL de QR Code", () => {
+    // As duas tabelas precisam andar juntas: um estado com endpoint e sem URL
+    // de QR só falha depois que a numeração já foi reservada.
+    for (const uf of supportedUfs()) {
+      expect(() => qrCodeBaseUrl(uf, FiscalEnvironment.PRODUCAO)).not.toThrow();
+      expect(() => qrCodeBaseUrl(uf, FiscalEnvironment.HOMOLOGACAO)).not.toThrow();
+    }
   });
 });
 
@@ -495,5 +521,138 @@ describe("DANFE", () => {
 
   it("contingência avisa que a autorização está pendente", () => {
     expect(buildDanfeText({ ...entrada, offline: true })).toContain("CONTINGENCIA");
+  });
+});
+
+describe("frete e desconto no XML", () => {
+  const emitenteSimples = {
+    cnpj: "12345678000199",
+    legalName: "Loja Teste Ltda",
+    tradeName: null,
+    stateRegistration: "0621622730081",
+    taxRegime: TaxRegime.SIMPLES_NACIONAL,
+    addressStreet: "Rua A",
+    addressNumber: "10",
+    addressComplement: null,
+    addressDistrict: "Centro",
+    cityIbgeCode: "3106200",
+    cityName: "Belo Horizonte",
+    state: "MG",
+    zipCode: "30130000",
+    phone: null,
+  };
+
+  function comEntrega(overrides: any = {}) {
+    const calculo = calculateTaxes(TaxRegime.SIMPLES_NACIONAL, [
+      { productId: "p1", name: "Prato executivo", quantity: 3, unitPrice: 32.9, tax: tributacao },
+      { productId: "p2", name: "Refrigerante", quantity: 2, unitPrice: 7.5, tax: tributacao },
+      { productId: "p3", name: "Sobremesa", quantity: 1, unitPrice: 12.3, tax: tributacao },
+    ], { deliveryFee: 7.5, discount: 2.35 });
+    return buildNfceXml({
+      accessKey: "31260812345678000199650010000000421123456780",
+      numericCode: "12345678",
+      series: 1,
+      number: 42,
+      issuedAt: new Date("2026-08-02T15:30:00-03:00"),
+      environment: FiscalEnvironment.PRODUCAO,
+      emissionType: 1,
+      emitter: emitenteSimples,
+      items: calculo.items,
+      totals: calculo.totals,
+      payments: [{ method: PaymentMethod.DINHEIRO, amountCents: calculo.totals.totalCents }],
+      ...overrides,
+    });
+  }
+
+  it("a soma do frete dos itens fecha com o total — rejeição 535", () => {
+    const xml = comEntrega();
+    const porItem = [...xml.matchAll(/<vFrete>([\d.]+)<\/vFrete>/g)].map((m) => Math.round(Number(m[1]) * 100));
+    // O último é o do total; os anteriores são os dos itens.
+    const total = porItem.pop();
+
+    expect(porItem.reduce((soma, valor) => soma + valor, 0)).toBe(total);
+    expect(total).toBe(750);
+  });
+
+  it("a soma do desconto dos itens fecha com o total — rejeição 536", () => {
+    const xml = comEntrega();
+    const porItem = [...xml.matchAll(/<vDesc>([\d.]+)<\/vDesc>/g)].map((m) => Math.round(Number(m[1]) * 100));
+    const total = porItem.pop();
+
+    expect(porItem.reduce((soma, valor) => soma + valor, 0)).toBe(total);
+    expect(total).toBe(235);
+  });
+
+  it("o rateio distribui tudo, sem perder nem inventar centavo", () => {
+    expect(distribute(1000, [1, 1, 1]).reduce((a, b) => a + b, 0)).toBe(1000);
+    expect(distribute(1, [500, 500])).toEqual([1, 0]);
+    expect(distribute(0, [10, 20])).toEqual([0, 0]);
+    expect(distribute(500, [])).toEqual([]);
+  });
+
+  it("desconto maior que a mercadoria não produz base negativa", () => {
+    const calculo = calculateTaxes(TaxRegime.SIMPLES_NACIONAL, [
+      { productId: "p1", name: "Prato", quantity: 1, unitPrice: 10, tax: tributacao },
+    ], { discount: 50 });
+
+    expect(calculo.totals.discountCents).toBe(1000);
+    expect(calculo.totals.totalCents).toBe(0);
+  });
+});
+
+describe("pagamento", () => {
+  const base = {
+    accessKey: "31260812345678000199650010000000421123456780",
+    numericCode: "12345678",
+    series: 1,
+    number: 42,
+    issuedAt: new Date("2026-08-02T15:30:00-03:00"),
+    environment: FiscalEnvironment.PRODUCAO,
+    emissionType: 1,
+    emitter: {
+      cnpj: "12345678000199", legalName: "Loja Teste Ltda", tradeName: null,
+      stateRegistration: "0621622730081", taxRegime: TaxRegime.SIMPLES_NACIONAL,
+      addressStreet: "Rua A", addressNumber: "10", addressComplement: null,
+      addressDistrict: "Centro", cityIbgeCode: "3106200", cityName: "Belo Horizonte",
+      state: "MG", zipCode: "30130000", phone: null,
+    },
+  };
+
+  function comPagamento(payments: any[], pagoExtra = 0) {
+    const calculo = calculateTaxes(TaxRegime.SIMPLES_NACIONAL, [
+      { productId: "p1", name: "Prato", quantity: 1, unitPrice: 50, tax: tributacao },
+    ]);
+    return buildNfceXml({
+      ...base,
+      items: calculo.items,
+      totals: calculo.totals,
+      payments: payments.map((p) => ({ ...p, amountCents: p.amountCents ?? calculo.totals.totalCents + pagoExtra })),
+    });
+  }
+
+  it("cartão leva o grupo card — rejeição 391", () => {
+    const xml = comPagamento([{ method: PaymentMethod.CARTAO_ENTREGA }]);
+
+    expect(xml).toContain("<tPag>03</tPag>");
+    expect(xml).toContain("<card><tpIntegra>2</tpIntegra></card>");
+  });
+
+  it("dinheiro e pix não levam grupo card", () => {
+    expect(comPagamento([{ method: PaymentMethod.DINHEIRO }])).not.toContain("<card>");
+    expect(comPagamento([{ method: PaymentMethod.PIX_MANUAL }])).not.toContain("<card>");
+  });
+
+  it("troco só existe quando houve dinheiro em espécie", () => {
+    expect(comPagamento([{ method: PaymentMethod.DINHEIRO }], 1000)).toContain("<vTroco>10.00</vTroco>");
+    expect(comPagamento([{ method: PaymentMethod.CARTAO_ENTREGA }], 1000)).not.toContain("<vTroco>");
+  });
+});
+
+describe("lote da SEFAZ", () => {
+  it("o identificador do lote é só dígitos — o schema exige [0-9]{1,15}", () => {
+    for (let i = 0; i < 50; i += 1) {
+      const id = generateLotId();
+      expect(id).toMatch(/^[0-9]{1,15}$/);
+    }
   });
 });

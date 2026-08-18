@@ -8,7 +8,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from "@nestjs/common";
-import { FiscalCertificateStatus, FiscalEnvironment, Role, TaxRegime } from "@prisma/client";
+import { FiscalCertificateStatus, FiscalDocumentStatus, FiscalEnvironment, Role, TaxRegime } from "@prisma/client";
 import {
   CFOP_OPTIONS,
   PIS_COFINS_CST_OPTIONS,
@@ -21,6 +21,8 @@ import { runsBackgroundJobs } from "../common/config/app-role";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { FiscalSecretsService } from "./fiscal-secrets.service";
+import { SefazClient, SefazUnavailableError } from "./nfce/sefaz-client";
+import { UF_CODES } from "./nfce/access-key";
 import { readCertificate } from "./certificate-reader";
 import { resolveProductTax } from "./product-tax";
 import { UpdateFiscalProfileDto } from "./dto/update-fiscal-profile.dto";
@@ -36,6 +38,9 @@ const EXPIRY_ALERT_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 const EXPIRY_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
+/** cStat de "Serviço em Operação" na consulta de status da SEFAZ. */
+const SEFAZ_ONLINE = "107";
+
 @Injectable()
 export class FiscalService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(FiscalService.name);
@@ -45,6 +50,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly secrets: FiscalSecretsService,
     private readonly mail: MailService,
+    private readonly sefaz: SefazClient,
   ) {}
 
   onModuleInit() {
@@ -78,6 +84,14 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       certificate: certificate ? this.publicCertificate(certificate) : null,
       products: { total: produtos.total, pending: produtos.pending },
       readiness: this.readiness(profile, certificate, produtos.pending),
+      sefaz: profile?.sefazCheckedAt
+        ? {
+          checkedAt: profile.sefazCheckedAt,
+          code: profile.sefazCheckStatus,
+          reason: profile.sefazCheckReason,
+          online: profile.sefazCheckStatus === SEFAZ_ONLINE,
+        }
+        : null,
     };
   }
 
@@ -114,22 +128,76 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    // Município de outro estado é rejeição 233, e o erro é fácil de cometer:
+    // são sete dígitos digitados à mão. Os dois primeiros do código do IBGE são
+    // justamente o código da UF.
+    const cUF = UF_CODES[dto.state?.toUpperCase() ?? ""];
+    if (!cUF) {
+      throw new BadRequestException(`${dto.state} não é uma UF válida.`);
+    }
+    if (dto.cityIbgeCode && !dto.cityIbgeCode.startsWith(cUF)) {
+      throw new BadRequestException(
+        `O código IBGE ${dto.cityIbgeCode} não é de um município de ${dto.state.toUpperCase()} `
+        + `— os dois primeiros dígitos deveriam ser ${cUF}.`,
+      );
+    }
+
     const existing = await this.db().companyFiscalProfile.findUnique({ where: { companyId } });
 
+    // Emitir automaticamente antes de a primeira nota passar transforma um erro
+    // de cadastro em uma rejeição por venda, a tarde inteira. A primeira nota
+    // sai pela mão de alguém, que vê o retorno da SEFAZ e decide.
+    if (dto.autoEmit && !existing?.autoEmit) {
+      await this.assertFirstDocumentAuthorized(companyId, dto.environment ?? existing?.environment);
+    }
+
     // Trocar para produção sem certificado válido e sem CSC produziria uma
-    // rejeição na SEFAZ no primeiro pedido do dia, com o cliente esperando.
-    if (dto.environment === FiscalEnvironment.PRODUCAO) {
-      await this.assertReadyForProduction(companyId, {
+    // rejeição na SEFAZ no primeiro pedido do dia, com o cliente esperando. A
+    // checagem roda na virada, não a cada gravação: já em produção, uma
+    // instabilidade momentânea da SEFAZ não pode impedir de corrigir o endereço.
+    const virandoParaProducao = dto.environment === FiscalEnvironment.PRODUCAO
+      && existing?.environment !== FiscalEnvironment.PRODUCAO;
+    if (virandoParaProducao) {
+      const teste = await this.assertReadyForProduction(companyId, {
         cscId: dto.cscId ?? existing?.cscId ?? null,
         hasCscToken: Boolean(cscToken || existing?.cscTokenEncrypted),
+        state: dto.state,
+        stateRegistration: dto.stateRegistration ?? existing?.stateRegistration ?? "",
       });
+      data.sefazCheckedAt = teste.checkedAt;
+      data.sefazCheckStatus = teste.code;
+      data.sefazCheckReason = teste.reason;
     }
 
     const saved = existing
       ? await this.db().companyFiscalProfile.update({ where: { companyId }, data })
       : await this.db().companyFiscalProfile.create({ data: { ...data, companyId } });
 
+    if (virandoParaProducao) {
+      this.logger.warn(`Empresa ${companyId} passou a emitir NFC-e em PRODUÇÃO.`);
+    }
     return this.publicProfile(saved);
+  }
+
+  /**
+   * Exige que uma nota já tenha sido autorizada no ambiente antes de liberar a
+   * emissão automática.
+   *
+   * A emissão manual erra uma vez e alguém lê o motivo; a automática erra em
+   * toda venda até alguém perceber. Como a primeira nota é a que descobre erro
+   * de cadastro, tributação e credenciamento, ela precisa ser feita à mão.
+   */
+  private async assertFirstDocumentAuthorized(companyId: string, environment?: FiscalEnvironment) {
+    const ambiente = environment ?? FiscalEnvironment.HOMOLOGACAO;
+    const autorizadas = await this.db().fiscalDocument.count({
+      where: { companyId, environment: ambiente, status: FiscalDocumentStatus.AUTORIZADA },
+    });
+    if (autorizadas > 0) return;
+    throw new BadRequestException(
+      "Emita uma nota manualmente em Painel > Notas fiscais e confirme que a SEFAZ autorizou "
+      + "antes de ligar a emissão automática. A primeira nota é a que revela erro de cadastro, "
+      + "e no automático o erro se repetiria em cada venda.",
+    );
   }
 
   /**
@@ -218,6 +286,74 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       pfx: this.secrets.decryptToBuffer(certificate.contentEncrypted),
       password: this.secrets.decrypt(certificate.passwordEncrypted),
       notAfter: certificate.notAfter,
+    };
+  }
+
+  /**
+   * Conversa de verdade com a SEFAZ, sem emitir nada.
+   *
+   * A consulta de status do serviço é o único teste que exercita o caminho
+   * inteiro do transporte — TLS mútuo com o certificado da empresa, endpoint do
+   * estado, envelope SOAP — e que **não gasta numeração nem gera documento**.
+   * Para quem vai direto para produção sem passar por homologação, é o que
+   * separa "achamos que está configurado" de "a SEFAZ respondeu".
+   *
+   * Não lança quando a SEFAZ recusa ou está fora: devolve o que ela disse, para
+   * a tela mostrar o motivo. Só lança quando falta cadastro ou certificado, que
+   * é problema de configuração, não de disponibilidade.
+   */
+  async checkSefaz(
+    companyId: string,
+    override: { uf?: string; environment?: FiscalEnvironment } = {},
+  ) {
+    const profile = await this.db().companyFiscalProfile.findUnique({ where: { companyId } });
+    const uf = override.uf ?? profile?.state;
+    const environment = override.environment ?? profile?.environment ?? FiscalEnvironment.HOMOLOGACAO;
+    if (!uf) throw new BadRequestException("Informe o estado da empresa antes de testar a conexão com a SEFAZ.");
+
+    const material = await this.loadSigningMaterial(companyId);
+
+    let resultado: { code: string | null; reason: string | null };
+    try {
+      resultado = await this.sefaz.serviceStatus({
+        uf,
+        environment,
+        credentials: { pfx: material.pfx, password: material.password },
+      });
+    } catch (error) {
+      // Indisponibilidade e certificado recusado chegam aqui do mesmo jeito. A
+      // mensagem original da biblioteca é o que existe de mais informativo.
+      resultado = {
+        code: null,
+        reason: error instanceof SefazUnavailableError || error instanceof Error
+          ? error.message
+          : "Falha de comunicação com a SEFAZ.",
+      };
+    }
+
+    const online = resultado.code === SEFAZ_ONLINE;
+    const checkedAt = new Date();
+    await this.db().companyFiscalProfile.updateMany({
+      where: { companyId },
+      data: {
+        sefazCheckedAt: checkedAt,
+        sefazCheckStatus: resultado.code,
+        sefazCheckReason: resultado.reason,
+      },
+    }).catch(() => undefined);
+
+    this.logger.log(
+      `Teste de conexão com a SEFAZ de ${uf} (${environment}) para a empresa ${companyId}: `
+      + `${resultado.code ?? "sem resposta"} ${resultado.reason ?? ""}`,
+    );
+
+    return {
+      online,
+      uf,
+      environment,
+      code: resultado.code,
+      reason: resultado.reason,
+      checkedAt,
     };
   }
 
@@ -366,24 +502,62 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * Porta de entrada da produção.
+   *
+   * Cada checagem aqui existe porque a alternativa é descobrir o problema na
+   * primeira venda, com o cliente no balcão e um número de nota queimado. A
+   * última delas conversa com a SEFAZ de verdade — é o que substitui, em
+   * parte, a rodada de homologação que está sendo pulada.
+   */
   private async assertReadyForProduction(
     companyId: string,
-    csc: { cscId: string | null; hasCscToken: boolean },
+    dados: { cscId: string | null; hasCscToken: boolean; state: string; stateRegistration: string },
   ) {
     const certificate = await this.activeCertificate(companyId);
     const faltando: string[] = [];
     if (!certificate) faltando.push("certificado digital A1");
     else if (certificate.notAfter.getTime() <= Date.now()) faltando.push("certificado digital válido");
-    if (!csc.cscId || !csc.hasCscToken) faltando.push("CSC (identificador e token)");
+    if (!dados.cscId || !dados.hasCscToken) faltando.push("CSC (identificador e token)");
     if (faltando.length) {
       throw new BadRequestException(
         `Para emitir em produção falta cadastrar: ${faltando.join(", ")}.`,
       );
     }
+
+    // NFC-e é documento de operação com ICMS: o emitente precisa de inscrição
+    // estadual de contribuinte. Com "ISENTO" a SEFAZ recusa toda venda (209/229).
+    if (dados.stateRegistration.trim().toUpperCase() === "ISENTO") {
+      throw new BadRequestException(
+        "A NFC-e exige inscrição estadual de contribuinte de ICMS. "
+        + "Uma empresa isenta de inscrição estadual não pode emitir NFC-e — confirme com a sua contabilidade.",
+      );
+    }
+
+    const teste = await this.checkSefaz(companyId, {
+      uf: dados.state,
+      environment: FiscalEnvironment.PRODUCAO,
+    });
+    if (!teste.online) {
+      throw new BadRequestException(
+        `A SEFAZ de ${teste.uf} não confirmou a conexão de produção${teste.code ? ` (${teste.code})` : ""}: `
+        + `${teste.reason ?? "sem resposta"}. `
+        + "Confira o certificado e o credenciamento da empresa para NFC-e neste estado, e tente de novo.",
+      );
+    }
+    return teste;
   }
 
+  /**
+   * Pendências impedem emitir; avisos não.
+   *
+   * A distinção importa: misturar "falta o certificado" com "o regime normal
+   * passou a dever IBS/CBS" faria a tela dizer que a empresa não pode emitir
+   * quando ela pode — e faria o lojista ignorar a lista inteira.
+   */
   private readiness(profile: any, certificate: any, produtosPendentes = 0) {
     const pendencias: string[] = [];
+    const avisos: string[] = [];
     if (!profile) pendencias.push("Cadastro fiscal não preenchido.");
     if (produtosPendentes > 0) {
       pendencias.push(`${produtosPendentes} produto(s) sem tributação completa.`);
@@ -395,9 +569,31 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
     }
     if (profile && (!profile.cscId || !profile.cscTokenEncrypted)) pendencias.push("CSC não cadastrado.");
     if (!this.secrets.isConfigured()) pendencias.push("FISCAL_ENCRYPTION_KEY não configurada no servidor.");
+
+    if (profile?.environment === FiscalEnvironment.PRODUCAO && !profile.autoEmit) {
+      avisos.push(
+        "A emissão automática está desligada: cada venda precisa da nota emitida à mão em "
+        + "Painel > Notas fiscais. Ligue depois que a primeira nota for autorizada.",
+      );
+    }
+    // A rejeição por falta de IBS/CBS foi suspensa pelo Ato Técnico Conjunto
+    // RFB/CGIBS nº 1/2026, mas a obrigação de informar continua para o regime
+    // normal desde 03/08/2026 — e a rejeição volta em data ainda a definir.
+    if (profile?.taxRegime === TaxRegime.REGIME_NORMAL) {
+      avisos.push(
+        "Empresa do regime normal deve informar IBS e CBS na nota desde 03/08/2026. "
+        + "A SEFAZ ainda não rejeita por isso, e o ChegowIA ainda não emite esses campos — "
+        + "combine com a sua contabilidade como tratar o período.",
+      );
+    }
+    if (profile?.environment === FiscalEnvironment.PRODUCAO && profile.sefazCheckStatus !== SEFAZ_ONLINE) {
+      avisos.push("O último teste de conexão com a SEFAZ não confirmou o serviço. Teste de novo antes do expediente.");
+    }
+
     return {
       canEmitInProduction: pendencias.length === 0 && profile?.environment === FiscalEnvironment.PRODUCAO,
       pendencias,
+      avisos,
     };
   }
 

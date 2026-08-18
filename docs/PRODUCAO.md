@@ -228,24 +228,55 @@ semana. Se o worker estiver fora do ar, ninguém é avisado.
 
 Ordem obrigatória. Pular etapa produz rejeição a cada venda, com o cliente no balcão.
 
-1. **Cadastro fiscal completo** e certificado A1 enviado (Painel > Fiscal). A tela lista o
-   que falta.
-2. **Tributação do cardápio** sem pendências — padrões da empresa resolvem a maioria; o
+1. **Credenciamento da empresa** como emitente de NFC-e na SEFAZ do estado. É o que libera o
+   CSC de produção; sem ele o certificado é válido e a nota é recusada de qualquer forma.
+2. **Cadastro fiscal completo** e certificado A1 enviado (Painel > Fiscal). A tela lista o que
+   falta. A inscrição estadual precisa ser de contribuinte de ICMS — empresa isenta não emite
+   NFC-e, e a plataforma recusa a virada para produção nesse caso.
+3. **Tributação do cardápio** sem pendências — padrões da empresa resolvem a maioria; o
    restante é por produto.
-3. **CSC** (identificador e token) obtido no portal da SEFAZ do estado.
-4. **Homologação**: mantenha `Ambiente = Homologação` e emita vendas reais de teste. O cupom
-   sai marcado como sem valor fiscal. Corrija tudo que a SEFAZ apontar.
-5. Só então mude para **Produção** e ligue **emitir automaticamente**. A plataforma recusa a
-   virada se faltar certificado válido ou CSC.
+4. **CSC de produção** (identificador e token) obtido no portal da SEFAZ do estado. É diferente
+   do CSC de homologação.
+5. **Ambiente = Produção.** Ao salvar, a plataforma conversa com a SEFAZ do estado usando o
+   certificado da empresa (consulta de status do serviço) e só conclui a virada se ela
+   responder "Serviço em Operação". Esse teste não emite nota nem gasta numeração, e pode ser
+   repetido a qualquer momento pelo botão **Testar conexão** — vale rodar antes de abrir a loja.
+6. **Primeira nota à mão**, em Painel > Notas fiscais, sobre uma venda real. É ela que revela
+   erro de NCM, CFOP, código de município ou credenciamento.
+7. Só depois **ligue emitir automaticamente**. A plataforma recusa ligar antes de existir uma
+   nota autorizada no ambiente: no automático, um erro de cadastro se repetiria em cada venda
+   até alguém perceber.
+
+Indo direto para produção, sem homologação: o teste de conexão do passo 5 cobre certificado,
+TLS e endpoint, e o passo 6 cobre o resto. O que nenhum dos dois cobre é o cadastro de outra
+empresa — cada lojista novo repete os dois passos.
+
+**Rejeição definitiva agora avisa na hora.** Quando a SEFAZ recusa por algo que não se resolve
+reenviando, os administradores da empresa e o `OPS_ALERT_EMAIL` recebem o código, o motivo e a
+orientação — junto com o aviso de que aquele número precisa ser inutilizado. Antes, a venda
+ficava sem documento em silêncio até alguém abrir a tela.
+
+**IBS e CBS (Reforma Tributária).** O ChegowIA ainda não emite o grupo `IBSCBS`. Isso hoje não
+rejeita nota: o Ato Técnico Conjunto RFB/CGIBS nº 1/2026, de 01/08/2026, suspendeu as regras de
+rejeição (UB12-10 / 1115) para data futura. Empresa do **Simples Nacional** só passa a dever
+esses campos em **01/01/2027**; empresa do **regime normal** já deve desde **03/08/2026**, sem
+rejeição técnica — a tela mostra esse aviso para quem está no regime normal. Emitir o grupo é
+trabalho pendente e precisa entrar antes de a rejeição voltar.
 
 O que acontece quando a SEFAZ cai: a venda **não** para. A nota é assinada em contingência
 offline (`tpEmis 9`), o cupom sai com o aviso "pendente de autorização" e o serviço `worker`
 transmite quando o estado voltar, com espera crescente até 30 minutos. Depois de 10 tentativas
 sem sucesso, sai alerta para `OPS_ALERT_EMAIL`.
 
-Estados habilitados: MG e SP com endpoints próprios; os demais pelo SVRS. O QR Code exige a
-URL do estado — habilitar um novo é uma entrada em `fiscal/nfce/sefaz-endpoints.ts` e outra em
-`fiscal/nfce/qr-code.ts`.
+Estados habilitados: os 26 e o DF. AM, GO, MG, MS, MT, PR, RS e SP mantêm webservice próprio de
+NFC-e; os outros dezenove são atendidos pelo SVRS. As duas tabelas — endpoints em
+`fiscal/nfce/sefaz-endpoints.ts` e URL do QR Code em `fiscal/nfce/qr-code.ts` — andam juntas e a
+emissão recusa antes de reservar numeração se faltar qualquer uma, para não abrir buraco na
+sequência.
+
+Empresa em regime normal com **CST 20** precisa preencher a redução da base de cálculo em
+Painel > Fiscal: o layout exige o percentual junto do CST e a nota é recusada sem ele. O campo
+aparece no formulário assim que o CST 20 é escolhido.
 
 Cancelamento vale por 30 minutos após a autorização. Passou disso, é procedimento contábil.
 Toda nota rejeitada queima um número: use **Inutilizar numeração** em Painel > Notas fiscais,
