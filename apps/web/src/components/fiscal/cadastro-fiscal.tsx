@@ -222,7 +222,7 @@ export function CadastroFiscal() {
       )}
 
       <StatusCard
-        environment={data?.profile?.environment ?? FiscalEnvironment.HOMOLOGACAO}
+        environment={data?.profile?.environment ?? null}
         pendencias={pendencias}
         avisos={data?.readiness.avisos ?? []}
         canEmit={Boolean(data?.readiness.canEmitInProduction)}
@@ -590,7 +590,8 @@ function StatusCard({
   onTestarSefaz,
   testando,
 }: {
-  environment: FiscalEnvironment;
+  /** `null` quando ainda não existe cadastro fiscal — não é o mesmo que homologação. */
+  environment: FiscalEnvironment | null;
   pendencias: string[];
   avisos: string[];
   canEmit: boolean;
@@ -599,19 +600,33 @@ function StatusCard({
   testando: boolean;
 }) {
   const producao = environment === FiscalEnvironment.PRODUCAO;
+  // Sem cadastro fiscal não há ambiente escolhido. Dizer "Homologação" aqui
+  // sugeria uma decisão que ninguém tomou, e o aviso de "sem valor fiscal"
+  // falava de documento emitido quando nem dá para emitir.
+  const semCadastro = environment === null;
   return (
     <Card>
       <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Situação</p>
           <p className="mt-1 text-lg font-black text-slate-900 dark:text-slate-50">
-            {canEmit ? "Pronto para emitir em produção" : producao ? "Produção com pendências" : "Homologação"}
+            {semCadastro
+              ? "Emissão não configurada"
+              : canEmit
+                ? "Pronto para emitir em produção"
+                : producao
+                  ? "Produção com pendências"
+                  : "Homologação"}
           </p>
-          {!producao && (
+          {semCadastro ? (
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Preencha os dados do emitente e envie o certificado para começar.
+            </p>
+          ) : !producao ? (
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Documentos emitidos em homologação não têm valor fiscal.
             </p>
-          )}
+          ) : null}
         </div>
         <span
           className={
