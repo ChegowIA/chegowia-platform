@@ -416,6 +416,32 @@ describe("desconto do código de indicação", () => {
     }));
   });
 
+  it("a comissão acompanha o que o cliente pagou, nos dois períodos", () => {
+    const { service } = servico();
+    const assinatura = { plan: plano, monthlyPriceSnapshot: 159.9 };
+
+    // Durante a janela o cliente paga com desconto e a comissão sai sobre ele.
+    const comDesconto = service.commissionableMonthlyAmount(assinatura, 135.92);
+    expect(comDesconto).toBe(135.92);
+    expect(Math.round(comDesconto * 0.3 * 100) / 100).toBe(40.78);
+
+    // Passada a janela, a cobrança volta ao cheio e a comissão acompanha.
+    const cheia = service.commissionableMonthlyAmount(assinatura, 159.9);
+    expect(cheia).toBe(159.9);
+    expect(Math.round(cheia * 0.3 * 100) / 100).toBe(47.97);
+  });
+
+  it("cobrança maior que a mensalidade não infla a comissão", () => {
+    const { service } = servico();
+
+    // Uma fatura pode carregar consumo além do plano; a comissão para na
+    // mensalidade.
+    expect(service.commissionableMonthlyAmount(
+      { plan: plano, monthlyPriceSnapshot: 159.9 },
+      210,
+    )).toBe(159.9);
+  });
+
   it("assinatura já ajustada não é cobrada de novo pela varredura", async () => {
     const { service, asaas } = servico({ vencidas: [] });
 
