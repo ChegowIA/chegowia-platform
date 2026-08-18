@@ -21,33 +21,78 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-// Em ordem de dependência inversa; TRUNCATE ignora foreign key com o check
-// desligado, mas manter a ordem deixa o erro legível se algo faltar.
-const TABLES_TO_CLEAR = [
-  "OrderStatusHistory",
-  "OrderItem",
-  "Delivery",
-  "Payment",
-  "Order",
-  "DiningOrder",
-  "TableSession",
-  "RestaurantTable",
-  "ProductAddon",
-  "ProductVariation",
-  "Product",
-  "Category",
-  "RolePermission",
-  "EmployeeProfile",
-  "CustomerProfile",
-  "Address",
-  "RefreshToken",
-  "AccountToken",
-  "IdentityDocument",
-  "CompanySettings",
-  "DeliveryArea",
-  "User",
-  "Company",
-];
+/**
+ * Raízes dos dados que cada teste apaga.
+ *
+ * A lista antiga era escrita à mão e tinha 32 tabelas de menos — entre elas
+ * `DeliveryIncident` e `FiscalDocument`, que apontam para `Delivery` e `Order`.
+ * Cada tabela nova precisava ser lembrada aqui, e esquecer não dava erro
+ * visível: a suíte só quebrava quando o `verify` passava a ponto de chegar
+ * nela.
+ *
+ * Agora se declara apenas de onde partir e o resto sai do banco. O que **não**
+ * é descendente destas raízes é dado de referência — `Permission`,
+ * `SoftwarePlan`, `UsageRate` — e precisa sobreviver ao reset, senão a
+ * aplicação sobe sem permissões nem planos.
+ */
+const CLEANUP_ROOTS = ["Company", "User", "IdentityDocument"];
+
+/**
+ * Ordem de exclusão: filho antes do pai.
+ *
+ * Não desligamos `FOREIGN_KEY_CHECKS`, e isso é a correção do bug: a variável é
+ * de sessão, o Prisma tira conexões de um pool, e o `SET` ia para uma conexão
+ * enquanto o `TRUNCATE` ia para outra. Em máquina com poucos núcleos o pool era
+ * pequeno e coincidia; no CI, com doze, não coincidia — e o erro era
+ * "Cannot truncate a table referenced in a foreign key constraint".
+ *
+ * `DELETE` na ordem certa satisfaz as chaves estrangeiras sem depender de
+ * sessão nenhuma. É mais lento que `TRUNCATE`, o que não importa em tabelas de
+ * teste, e as chaves primárias são cuid, então ninguém depende de reiniciar
+ * auto incremento.
+ */
+async function deletionOrder(prisma: PrismaClient): Promise<string[]> {
+  const vinculos = await prisma.$queryRawUnsafe<Array<{ child: string; parent: string }>>(
+    `SELECT TABLE_NAME AS child, REFERENCED_TABLE_NAME AS parent
+       FROM information_schema.KEY_COLUMN_USAGE
+      WHERE CONSTRAINT_SCHEMA = DATABASE()
+        AND REFERENCED_TABLE_NAME IS NOT NULL
+      GROUP BY TABLE_NAME, REFERENCED_TABLE_NAME`,
+  );
+
+  const filhos = new Map<string, Set<string>>();
+  for (const { child, parent } of vinculos) {
+    if (child === parent) continue;
+    if (!filhos.has(parent)) filhos.set(parent, new Set());
+    filhos.get(parent)!.add(child);
+  }
+
+  // Fecho transitivo: toda tabela que aponta para o alcance das raízes entra.
+  const alcance = new Set(CLEANUP_ROOTS);
+  const fila = [...CLEANUP_ROOTS];
+  while (fila.length) {
+    for (const filho of filhos.get(fila.pop()!) ?? []) {
+      if (alcance.has(filho)) continue;
+      alcance.add(filho);
+      fila.push(filho);
+    }
+  }
+
+  const ordem: string[] = [];
+  const visitado = new Set<string>();
+  const visita = (tabela: string) => {
+    if (visitado.has(tabela)) return;
+    visitado.add(tabela);
+    for (const filho of [...(filhos.get(tabela) ?? [])].sort()) {
+      if (alcance.has(filho)) visita(filho);
+    }
+    ordem.push(tabela);
+  };
+  for (const tabela of [...alcance].sort()) visita(tabela);
+  return ordem;
+}
+
+let ordemDeExclusao: string[] | null = null;
 
 export async function createHarness(): Promise<Harness> {
   assertTestDatabase(process.env.DATABASE_URL!);
@@ -90,11 +135,11 @@ export async function createHarness(): Promise<Harness> {
       );
     },
     async reset() {
-      await prisma.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS = 0");
-      for (const table of TABLES_TO_CLEAR) {
-        await prisma.$executeRawUnsafe(`TRUNCATE TABLE \`${table}\``);
+      // A ordem é lida do banco uma vez por processo: ela só muda com migration.
+      ordemDeExclusao ??= await deletionOrder(prisma);
+      for (const table of ordemDeExclusao) {
+        await prisma.$executeRawUnsafe(`DELETE FROM \`${table}\``);
       }
-      await prisma.$executeRawUnsafe("SET FOREIGN_KEY_CHECKS = 1");
     },
     async close() {
       await app.close();
