@@ -61,6 +61,19 @@ export class FiscalController {
     return this.fiscalService.upsertProfile(this.assertCompany(companyId), dto);
   }
 
+  /**
+   * Conversa com a SEFAZ sem emitir nada.
+   *
+   * É o teste que o lojista pode repetir quantas vezes quiser antes de abrir a
+   * loja: prova que o certificado é aceito e que o estado está respondendo,
+   * sem gastar numeração.
+   */
+  @RequirePermission(PermissionKey.FISCAL_CONFIGURAR)
+  @Post("sefaz/testar")
+  checkSefaz(@CurrentUser("companyId") companyId: string) {
+    return this.fiscalService.checkSefaz(this.assertCompany(companyId));
+  }
+
   @RequirePermission(PermissionKey.FISCAL_CONFIGURAR)
   @Post("certificate")
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: MAX_CERTIFICATE_BYTES } }))

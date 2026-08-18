@@ -15,6 +15,11 @@ import { ResolvedProductTax } from "../product-tax";
  *    sem valor de imposto destacado; no regime normal sai `ICMS` com CST e
  *    valor. São grupos XML diferentes, não o mesmo grupo com valores
  *    diferentes — por isso `icmsGroup` viaja junto com o resultado.
+ *
+ * 3. **Frete e desconto são rateados por item.** A SEFAZ refaz a soma: o
+ *    `vFrete` e o `vDesc` do total têm que bater com a soma dos itens
+ *    (rejeições 535 e 536). Declarar a taxa de entrega só no total, sem
+ *    contrapartida em nenhum item, rejeita toda venda de delivery com taxa.
  */
 
 export interface TaxableItem {
@@ -36,6 +41,12 @@ export interface CalculatedItem {
   tax: ResolvedProductTax;
   /** "ICMSSN" no Simples, "ICMS" no regime normal. */
   icmsGroup: "ICMSSN" | "ICMS";
+  /** Parcela do frete atribuída a este item (`prod/vFrete`). */
+  freightCents: number;
+  /** Parcela do desconto atribuída a este item (`prod/vDesc`). */
+  discountCents: number;
+  /** Crédito de ICMS do Simples (CSOSN 101). Não entra no total da nota. */
+  snCreditCents: number;
   icmsBaseCents: number;
   icmsValueCents: number;
   pisBaseCents: number;
@@ -63,11 +74,18 @@ export interface TaxCalculation {
 }
 
 /**
- * CSOSN que não destacam ICMS. 102 (sem crédito) é o caso da esmagadora
- * maioria dos restaurantes do Simples; 500 é mercadoria já tributada por
- * substituição, onde destacar de novo seria cobrar duas vezes.
+ * CSOSN que não destacam ICMS no total da nota. 102 (sem crédito) é o caso da
+ * esmagadora maioria dos restaurantes do Simples; 500 é mercadoria já tributada
+ * por substituição, onde destacar de novo seria cobrar duas vezes.
+ *
+ * O 101 está aqui porque o que ele carrega não é imposto destacado, é **crédito
+ * do adquirente** (`vCredICMSSN`). Somá-lo em `ICMSTot/vICMS` deixaria o total
+ * maior que a soma dos itens — e a SEFAZ refaz essa conta.
  */
-const CSOSN_SEM_DESTAQUE = new Set(["102", "103", "300", "400", "500"]);
+const CSOSN_SEM_DESTAQUE = new Set(["101", "102", "103", "300", "400", "500"]);
+
+/** Único CSOSN que gera crédito informado ao adquirente. */
+const CSOSN_COM_CREDITO = "101";
 
 /** CST de ICMS sem valor a destacar: isento, não tributado, já retido por ST. */
 const CST_SEM_DESTAQUE = new Set(["40", "41", "50", "60"]);
@@ -87,6 +105,28 @@ const APPROXIMATE_TAX_RATE_BY_REGIME: Record<TaxRegime, number> = {
   [TaxRegime.SIMPLES_NACIONAL_EXCESSO]: 0.115,
   [TaxRegime.REGIME_NORMAL]: 0.1825,
 };
+
+/**
+ * Distribui um valor em centavos entre os itens, proporcionalmente ao peso de
+ * cada um, sem perder nem inventar centavo: o resto da divisão vai de um em um
+ * para os itens de maior valor, onde a diferença é proporcionalmente menor.
+ */
+export function distribute(amountCents: number, weights: number[]): number[] {
+  const partes = weights.map(() => 0);
+  const total = weights.reduce((soma, peso) => soma + peso, 0);
+  if (amountCents <= 0 || total <= 0 || !weights.length) return partes;
+
+  for (let i = 0; i < weights.length; i += 1) {
+    partes[i] = Math.floor((amountCents * weights[i]) / total);
+  }
+  let resto = amountCents - partes.reduce((soma, parte) => soma + parte, 0);
+  const ordem = weights.map((_, i) => i).sort((a, b) => weights[b] - weights[a]);
+  for (let i = 0; resto > 0; i = (i + 1) % ordem.length) {
+    partes[ordem[i]] += 1;
+    resto -= 1;
+  }
+  return partes;
+}
 
 export function toCents(value: number) {
   // Math.round sobre o valor já multiplicado evita o erro clássico de
@@ -110,23 +150,50 @@ export function calculateTaxes(
 ): TaxCalculation {
   const simples = regime !== TaxRegime.REGIME_NORMAL;
 
-  const calculated: CalculatedItem[] = items.map((item) => {
+  const linhas = items.map((item) => {
     const unitPriceCents = toCents(item.unitPrice);
     // O total do item é calculado sobre centavos e arredondado uma única vez.
     // Arredondar por etapa (unitário, depois total) acumula divergência.
-    const totalCents = Math.round(unitPriceCents * item.quantity);
+    return { item, unitPriceCents, totalCents: Math.round(unitPriceCents * item.quantity) };
+  });
+
+  const productsCents = linhas.reduce((sum, linha) => sum + linha.totalCents, 0);
+  const deliveryCents = Math.max(0, toCents(options.deliveryFee ?? 0));
+  // Desconto maior que a mercadoria produziria base negativa e nota rejeitada;
+  // o teto é o próprio valor dos produtos.
+  const discountCents = Math.min(productsCents, Math.max(0, toCents(options.discount ?? 0)));
+
+  const pesos = linhas.map((linha) => linha.totalCents);
+  const fretePorItem = distribute(deliveryCents, pesos);
+  const descontoPorItem = distribute(discountCents, pesos);
+
+  const calculated: CalculatedItem[] = linhas.map((linha, index) => {
+    const { item, unitPriceCents, totalCents } = linha;
+    const freightCents = fretePorItem[index];
+    const itemDiscountCents = descontoPorItem[index];
+    // Base da operação do item: mercadoria + frete − desconto. É sobre ela que
+    // o imposto incide, não sobre o valor da mercadoria isolado.
+    const baseOperacaoCents = totalCents + freightCents - itemDiscountCents;
 
     const destacaIcms = simples
       ? !CSOSN_SEM_DESTAQUE.has(item.tax.icmsCode)
       : !CST_SEM_DESTAQUE.has(item.tax.icmsCode);
 
-    const icmsBaseCents = destacaIcms ? totalCents : 0;
+    // Redução de base (CST 20) entra antes da alíquota; sem ela o pRedBC
+    // declarado no XML não corresponderia ao vBC.
+    const reducao = item.tax.icmsReductionRate ?? 0;
+    const icmsBaseCents = destacaIcms
+      ? Math.round(baseOperacaoCents * (1 - reducao / 100))
+      : 0;
     const icmsValueCents = destacaIcms ? applyRate(icmsBaseCents, item.tax.icmsRate) : 0;
+    const snCreditCents = simples && item.tax.icmsCode === CSOSN_COM_CREDITO
+      ? applyRate(baseOperacaoCents, item.tax.icmsRate)
+      : 0;
 
     const pisTributa = !PIS_COFINS_SEM_VALOR.has(item.tax.pisCode);
     const cofinsTributa = !PIS_COFINS_SEM_VALOR.has(item.tax.cofinsCode);
-    const pisBaseCents = pisTributa ? totalCents : 0;
-    const cofinsBaseCents = cofinsTributa ? totalCents : 0;
+    const pisBaseCents = pisTributa ? baseOperacaoCents : 0;
+    const cofinsBaseCents = cofinsTributa ? baseOperacaoCents : 0;
 
     return {
       productId: item.productId,
@@ -136,6 +203,9 @@ export function calculateTaxes(
       totalCents,
       tax: item.tax,
       icmsGroup: simples ? "ICMSSN" : "ICMS",
+      freightCents,
+      discountCents: itemDiscountCents,
+      snCreditCents,
       icmsBaseCents,
       icmsValueCents,
       pisBaseCents,
@@ -144,10 +214,6 @@ export function calculateTaxes(
       cofinsValueCents: cofinsTributa ? applyRate(cofinsBaseCents, item.tax.cofinsRate) : 0,
     };
   });
-
-  const productsCents = calculated.reduce((sum, item) => sum + item.totalCents, 0);
-  const deliveryCents = toCents(options.deliveryFee ?? 0);
-  const discountCents = toCents(options.discount ?? 0);
 
   const totals: CalculatedTotals = {
     productsCents,

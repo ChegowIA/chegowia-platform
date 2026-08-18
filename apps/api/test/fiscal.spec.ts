@@ -109,6 +109,7 @@ describe("cadastro fiscal", () => {
       },
       company: { findUnique: jest.fn().mockResolvedValue(overrides.company ?? { cnpj: "12345678000199" }) },
       product: { findMany: jest.fn().mockResolvedValue(overrides.produtos ?? []) },
+      fiscalDocument: { count: jest.fn().mockResolvedValue(overrides.notasAutorizadas ?? 0) },
       user: { findMany: jest.fn().mockResolvedValue(overrides.admins ?? []) },
       $transaction: jest.fn().mockImplementation((fn: any) => fn({
         fiscalCertificate: {
@@ -117,16 +118,25 @@ describe("cadastro fiscal", () => {
         },
       })),
     };
+    (prisma.companyFiscalProfile as any).updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const mail = { sendFiscalAlert: jest.fn().mockResolvedValue(undefined) };
-    const service = new FiscalService(prisma as never, new FiscalSecretsService(), mail as never);
+    // A SEFAZ do teste responde o que o cenário mandar; por padrão, no ar.
+    const sefaz = {
+      serviceStatus: jest.fn().mockImplementation(() => (
+        overrides.sefazIndisponivel
+          ? Promise.reject(new Error("A SEFAZ não respondeu em 4000ms."))
+          : Promise.resolve(overrides.sefaz ?? { code: "107", reason: "Servico em Operacao", xml: "" })
+      )),
+    };
+    const service = new FiscalService(prisma as never, new FiscalSecretsService(), mail as never, sefaz as never);
     service.onModuleDestroy();
-    return { service, prisma, mail };
+    return { service, prisma, mail, sefaz };
   }
 
   const dtoValido: any = {
     taxRegime: TaxRegime.SIMPLES_NACIONAL,
     cnae: "5611201",
-    stateRegistration: "ISENTO",
+    stateRegistration: "0621622730081",
     legalName: "Loja Teste Ltda",
     addressStreet: "Rua A",
     addressNumber: "10",
@@ -163,20 +173,146 @@ describe("cadastro fiscal", () => {
     })).rejects.toThrow(/certificado digital A1/);
   });
 
-  it("aceita produção quando certificado e CSC estão em ordem", async () => {
-    const { service } = build({
-      certificados: [{
-        id: "cert-1",
-        notAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-        status: FiscalCertificateStatus.ATIVO,
-      }],
+  /** Certificado que o serviço consegue mesmo decifrar e usar no teste da SEFAZ. */
+  function certificadoUtilizavel() {
+    const secrets = new FiscalSecretsService();
+    return {
+      id: "cert-1",
+      notAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+      status: FiscalCertificateStatus.ATIVO,
+      contentEncrypted: secrets.encrypt(Buffer.from("pfx-de-teste")),
+      passwordEncrypted: secrets.encrypt("senha"),
+    };
+  }
+
+  function prontoParaProducao(overrides: any = {}) {
+    return build({
+      certificados: [certificadoUtilizavel()],
       profile: { cscId: "000001", cscTokenEncrypted: "v1.a.b.c" },
+      ...overrides,
     });
+  }
+
+  it("aceita produção quando certificado e CSC estão em ordem e a SEFAZ responde", async () => {
+    const { service, sefaz } = prontoParaProducao();
 
     await expect(service.upsertProfile("empresa-1", {
       ...dtoValido,
       environment: FiscalEnvironment.PRODUCAO,
     })).resolves.toBeDefined();
+    expect(sefaz.serviceStatus).toHaveBeenCalledTimes(1);
+  });
+
+  describe("porta de entrada da produção", () => {
+    it("conversa com a SEFAZ antes de liberar, e guarda o que ela respondeu", async () => {
+      const { service, prisma, sefaz } = prontoParaProducao();
+
+      await service.upsertProfile("empresa-1", { ...dtoValido, environment: FiscalEnvironment.PRODUCAO });
+
+      // O teste roda no ambiente de produção, não no que estava salvo.
+      expect(sefaz.serviceStatus.mock.calls[0][0]).toMatchObject({
+        uf: "MG",
+        environment: FiscalEnvironment.PRODUCAO,
+      });
+      const gravado = prisma.companyFiscalProfile.update.mock.calls[0][0].data;
+      expect(gravado.sefazCheckStatus).toBe("107");
+      expect(gravado.sefazCheckedAt).toBeInstanceOf(Date);
+    });
+
+    it("SEFAZ fora do ar não vira produção — não dá para provar que funciona", async () => {
+      const { service } = prontoParaProducao({ sefazIndisponivel: true });
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        environment: FiscalEnvironment.PRODUCAO,
+      })).rejects.toThrow(/não confirmou a conexão de produção/);
+    });
+
+    it("certificado recusado pela SEFAZ é explicado com o código dela", async () => {
+      const { service } = prontoParaProducao({ sefaz: { code: "656", reason: "Consumo indevido", xml: "" } });
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        environment: FiscalEnvironment.PRODUCAO,
+      })).rejects.toThrow(/656/);
+    });
+
+    it("empresa isenta de inscrição estadual não emite NFC-e", async () => {
+      const { service } = prontoParaProducao();
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        stateRegistration: "ISENTO",
+        environment: FiscalEnvironment.PRODUCAO,
+      })).rejects.toThrow(/inscrição estadual de contribuinte/);
+    });
+
+    it("já em produção, salvar o cadastro não depende da SEFAZ estar no ar", async () => {
+      const { service, sefaz } = prontoParaProducao({
+        sefazIndisponivel: true,
+        profile: {
+          cscId: "000001",
+          cscTokenEncrypted: "v1.a.b.c",
+          environment: FiscalEnvironment.PRODUCAO,
+        },
+      });
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        environment: FiscalEnvironment.PRODUCAO,
+      })).resolves.toBeDefined();
+      expect(sefaz.serviceStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("emissão automática", () => {
+    it("não liga antes de a primeira nota ser autorizada", async () => {
+      const { service } = prontoParaProducao({
+        profile: { cscId: "000001", cscTokenEncrypted: "v1.a.b.c", environment: FiscalEnvironment.PRODUCAO },
+        notasAutorizadas: 0,
+      });
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        environment: FiscalEnvironment.PRODUCAO,
+        autoEmit: true,
+      })).rejects.toThrow(/Emita uma nota manualmente/);
+    });
+
+    it("libera depois que uma nota foi autorizada no mesmo ambiente", async () => {
+      const { service, prisma } = prontoParaProducao({
+        profile: { cscId: "000001", cscTokenEncrypted: "v1.a.b.c", environment: FiscalEnvironment.PRODUCAO },
+        notasAutorizadas: 1,
+      });
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        environment: FiscalEnvironment.PRODUCAO,
+        autoEmit: true,
+      })).resolves.toBeDefined();
+      expect(prisma.fiscalDocument.count.mock.calls[0][0].where).toMatchObject({
+        environment: FiscalEnvironment.PRODUCAO,
+        status: "AUTORIZADA",
+      });
+    });
+  });
+
+  describe("município do emitente", () => {
+    it("recusa código IBGE de município de outro estado — rejeição 233", async () => {
+      const { service } = build();
+
+      await expect(service.upsertProfile("empresa-1", {
+        ...dtoValido,
+        state: "SP",
+        cityIbgeCode: "3106200",
+      })).rejects.toThrow(/não é de um município de SP/);
+    });
+
+    it("aceita o município do próprio estado", async () => {
+      const { service } = build();
+
+      await expect(service.upsertProfile("empresa-1", dtoValido)).resolves.toBeDefined();
+    });
   });
 
   describe("upload do certificado", () => {

@@ -626,6 +626,12 @@ model CompanyFiscalProfile {
   cscId                 String?           @db.VarChar(6)
   // CSC cifrado em repouso — é segredo, nunca sai em resposta nem em log.
   cscTokenEncrypted     String?           @db.Text
+  // Última conversa real com a SEFAZ (consulta de status do serviço). É a
+  // única prova, antes de emitir, de que o certificado é aceito no TLS mútuo e
+  // de que o endpoint do estado responde — sem gastar numeração.
+  sefazCheckedAt        DateTime?
+  sefazCheckStatus      String?           @db.VarChar(10)
+  sefazCheckReason      String?           @db.Text
 
   // Padrões fiscais do cardápio. Um restaurante tem centenas de itens e quase
   // todos compartilham a mesma tributação; obrigar o preenchimento produto a
@@ -638,6 +644,9 @@ model CompanyFiscalProfile {
   // CSOSN no Simples, CST nos demais — validado contra o regime da empresa.
   defaultIcmsCode   String?   @db.VarChar(3)
   defaultIcmsRate   Decimal?  @db.Decimal(5, 2)
+  // Percentual de redução da base de cálculo. Só o CST 20 usa, e para ele é
+  // obrigatório no XML: sem o pRedBC a nota é recusada pelo schema.
+  defaultIcmsReductionRate Decimal? @db.Decimal(5, 2)
   defaultPisCode    String?   @db.VarChar(2)
   defaultPisRate    Decimal?  @db.Decimal(5, 2)
   defaultCofinsCode String?   @db.VarChar(2)
@@ -670,8 +679,13 @@ model CompanyFiscalProfile {
 model FiscalDocument {
   id             String               @id @default(cuid())
   companyId      String
-  orderId        String?              @unique
-  tableSessionId String?              @unique
+  // Sem unicidade: uma venda pode acumular mais de um documento ao longo da
+  // vida — a tentativa rejeitada fica registrada com o número que queimou (é
+  // dela que sai a inutilização) e a reemissão nasce como documento novo. A
+  // idempotência do botão "emitir" é garantida no serviço, que recusa emitir
+  // quando já existe documento vivo para a mesma venda.
+  orderId        String?
+  tableSessionId String?
   status         FiscalDocumentStatus @default(RASCUNHO)
   emissionType   FiscalEmissionType   @default(NORMAL)
   environment    FiscalEnvironment
@@ -709,7 +723,8 @@ model FiscalDocument {
   events       FiscalDocumentEvent[]
 
   @@unique([companyId, environment, series, number])
-  @@unique([tableSessionId, companyId])
+  @@index([orderId])
+  @@index([tableSessionId, companyId])
   @@index([companyId, status, createdAt])
   @@index([status, nextAttemptAt])
 }
@@ -1000,6 +1015,7 @@ model Product {
   taxOrigin  TaxOrigin?
   icmsCode   String?    @db.VarChar(3)
   icmsRate   Decimal?   @db.Decimal(5, 2)
+  icmsReductionRate Decimal? @db.Decimal(5, 2)
   pisCode    String?    @db.VarChar(2)
   pisRate    Decimal?   @db.Decimal(5, 2)
   cofinsCode String?    @db.VarChar(2)
@@ -1122,7 +1138,7 @@ model Order {
   statusHistory  OrderStatusHistory[]
   delivery       Delivery?
   payment        Payment?
-  FiscalDocument FiscalDocument?
+  fiscalDocuments FiscalDocument[]
 
   @@unique([whatsappOrderDraftId, companyId])
   @@index([companyId, status])
@@ -1233,7 +1249,7 @@ model TableSession {
   attendant      User?           @relation("TableSessionAttendant", fields: [attendantUserId], references: [id])
   closedBy       User?           @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
   orders         DiningOrder[]
-  fiscalDocument FiscalDocument? @relation("FiscalDocumentTableSession")
+  fiscalDocuments FiscalDocument[] @relation("FiscalDocumentTableSession")
 
   @@unique([id, companyId])
   @@index([companyId, status])

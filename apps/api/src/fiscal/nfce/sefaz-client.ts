@@ -1,4 +1,5 @@
 import { Agent, request as httpsRequest } from "node:https";
+import { randomInt } from "node:crypto";
 import { Injectable, Logger } from "@nestjs/common";
 import { FiscalEnvironment } from "@prisma/client";
 import { create } from "xmlbuilder2";
@@ -18,13 +19,36 @@ import { UF_CODES } from "./access-key";
  *    no balcão. Esperar 60 segundos por um servidor estadual instável é pior
  *    do que cair em contingência offline em 8 e imprimir o cupom.
  *
- * 3. **A resposta é SOAP com XML embutido.** O corpo útil vem dentro do
+ * 3. **A mensagem vai embrulhada em `nfeDadosMsg`.** O WSDL de cada serviço
+ *    declara esse elemento com o namespace do próprio serviço; mandar o
+ *    `enviNFe` solto no corpo do envelope faz o servidor recusar a requisição
+ *    antes de olhar a nota. E, em SOAP 1.2, a ação vai como parâmetro do
+ *    `Content-Type` — os serviços estaduais são ASP.NET e recusam a ação
+ *    apenas no cabeçalho `SOAPAction`, que é a forma do SOAP 1.1.
+ *
+ * 4. **A resposta é SOAP com XML embutido.** O corpo útil vem dentro do
  *    envelope, e cada estado nomeia o wrapper de um jeito. Por isso a extração
  *    procura pela tag de negócio (`retEnviNFe` etc.) em vez de navegar o
  *    envelope.
  */
 
 const DEFAULT_TIMEOUT_MS = 8_000;
+
+/** Namespace declarado no WSDL de cada serviço, usado no `nfeDadosMsg`. */
+const WSDL_NAMESPACE = "http://www.portalfiscal.inf.br/nfe/wsdl";
+
+/**
+ * Identificador de lote.
+ *
+ * O schema exige `[0-9]{1,15}` — qualquer letra é rejeição 225 antes de a
+ * SEFAZ olhar a nota. O carimbo de tempo em milissegundos tem 13 dígitos e já
+ * é crescente; os dois dígitos aleatórios cobrem dois envios no mesmo
+ * milissegundo.
+ */
+export function generateLotId(): string {
+  const sufixo = String(randomInt(0, 100)).padStart(2, "0");
+  return `${Date.now()}${sufixo}`.slice(-15);
+}
 
 export class SefazUnavailableError extends Error {
   constructor(message: string, readonly cause?: unknown) {
@@ -73,7 +97,7 @@ export class SefazClient {
     return this.post(
       context,
       sefazEndpoints(context.uf, context.environment).autorizacao,
-      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote",
+      { service: "NFeAutorizacao4", method: "nfeAutorizacaoLote" },
       corpo,
       ["retEnviNFe"],
     );
@@ -92,7 +116,7 @@ export class SefazClient {
     return this.post(
       context,
       sefazEndpoints(context.uf, context.environment).consultaProtocolo,
-      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeConsultaProtocolo4/nfeConsultaNF",
+      { service: "NFeConsultaProtocolo4", method: "nfeConsultaNF" },
       corpo,
       ["retConsSitNFe"],
     );
@@ -110,7 +134,7 @@ export class SefazClient {
     return this.post(
       context,
       sefazEndpoints(context.uf, context.environment).recepcaoEvento,
-      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento",
+      { service: "NFeRecepcaoEvento4", method: "nfeRecepcaoEvento" },
       corpo,
       ["retEnvEvento"],
     );
@@ -120,7 +144,7 @@ export class SefazClient {
     return this.post(
       context,
       sefazEndpoints(context.uf, context.environment).inutilizacao,
-      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeInutilizacao4/nfeInutilizacaoNF",
+      { service: "NFeInutilizacao4", method: "nfeInutilizacaoNF" },
       stripDeclaration(signedXml),
       ["retInutNFe"],
     );
@@ -143,7 +167,7 @@ export class SefazClient {
     return this.post(
       context,
       sefazEndpoints(context.uf, context.environment).statusServico,
-      "http://www.portalfiscal.inf.br/nfe/wsdl/NFeStatusServico4/nfeStatusServicoNF",
+      { service: "NFeStatusServico4", method: "nfeStatusServicoNF" },
       corpo,
       ["retConsStatServ"],
       4_000,
@@ -153,12 +177,14 @@ export class SefazClient {
   private async post(
     context: SefazContext,
     url: string,
-    soapAction: string,
+    operation: { service: string; method: string },
     body: string,
     resultTags: string[],
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<SefazResponse> {
-    const envelope = soapEnvelope(body);
+    const namespace = `${WSDL_NAMESPACE}/${operation.service}`;
+    const soapAction = `${namespace}/${operation.method}`;
+    const envelope = soapEnvelope(`<nfeDadosMsg xmlns="${namespace}">${body}</nfeDadosMsg>`);
     const alvo = new URL(url);
 
     const raw = await new Promise<string>((resolve, reject) => {
@@ -169,7 +195,10 @@ export class SefazClient {
           path: `${alvo.pathname}${alvo.search}`,
           method: "POST",
           headers: {
-            "Content-Type": "application/soap+xml; charset=utf-8",
+            // A ação no Content-Type é a forma do SOAP 1.2, que é o que os
+            // serviços estaduais falam. O SOAPAction fica junto porque alguns
+            // proxies ainda roteiam por ele, e o cabeçalho a mais é inofensivo.
+            "Content-Type": `application/soap+xml; charset=utf-8; action="${soapAction}"`,
             "Content-Length": Buffer.byteLength(envelope),
             SOAPAction: soapAction,
           },

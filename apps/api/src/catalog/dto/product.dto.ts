@@ -123,6 +123,13 @@ export class CreateProductDto {
   @Max(100)
   icmsRate?: number;
 
+  /** Redução da base de cálculo; obrigatória quando o CST de ICMS é 20. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  icmsReductionRate?: number;
+
   @IsOptional()
   @Transform(onlyDigits)
   @IsString()

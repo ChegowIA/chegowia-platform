@@ -15,7 +15,7 @@ import {
   icmsCodeOptions,
 } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
-import { FiscalStatus, ProductTaxStatusResponse } from "@/lib/types";
+import { FiscalStatus, ProductTaxStatusResponse, SefazCheckResult } from "@/lib/types";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select } from "@/components/ui/input";
@@ -47,6 +47,7 @@ const EMPTY_FORM = {
   defaultTaxOrigin: TaxOrigin.NACIONAL as TaxOrigin,
   defaultIcmsCode: "",
   defaultIcmsRate: "",
+  defaultIcmsReductionRate: "",
   defaultPisCode: "",
   defaultPisRate: "",
   defaultCofinsCode: "",
@@ -100,6 +101,9 @@ export function CadastroFiscal() {
       defaultTaxOrigin: profile.defaultTaxOrigin ?? TaxOrigin.NACIONAL,
       defaultIcmsCode: profile.defaultIcmsCode ?? "",
       defaultIcmsRate: profile.defaultIcmsRate === null || profile.defaultIcmsRate === undefined ? "" : String(profile.defaultIcmsRate),
+      defaultIcmsReductionRate: profile.defaultIcmsReductionRate === null || profile.defaultIcmsReductionRate === undefined
+        ? ""
+        : String(profile.defaultIcmsReductionRate),
       defaultPisCode: profile.defaultPisCode ?? "",
       defaultPisRate: profile.defaultPisRate === null || profile.defaultPisRate === undefined ? "" : String(profile.defaultPisRate),
       defaultCofinsCode: profile.defaultCofinsCode ?? "",
@@ -108,12 +112,38 @@ export function CadastroFiscal() {
     });
   }, [data?.profile]);
 
+  /**
+   * Teste de conexão com a SEFAZ.
+   *
+   * É a única forma de conferir certificado, credenciamento e endereço do
+   * estado sem emitir nada — e vale repetir antes de abrir a loja.
+   */
+  const testarSefaz = useMutation({
+    mutationFn: async () => (await api.post<SefazCheckResult>("/fiscal/sefaz/testar")).data,
+    onSuccess: (resultado) => {
+      setError(null);
+      setSuccess(
+        resultado.online
+          ? `SEFAZ de ${resultado.uf} respondeu: serviço em operação. O certificado foi aceito.`
+          : null,
+      );
+      if (!resultado.online) {
+        setError(
+          `A SEFAZ de ${resultado.uf} não confirmou o serviço`
+          + `${resultado.code ? ` (${resultado.code})` : ""}: ${resultado.reason ?? "sem resposta"}.`,
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["fiscal-profile"] });
+    },
+    onError: (err) => { setSuccess(null); setError(apiErrorMessage(err)); },
+  });
+
   const saveProfile = useMutation({
     mutationFn: async () => {
       const {
         cscToken, nfceSeries, municipalRegistration, tradeName, addressComplement, cscId,
-        defaultNcm, defaultCest, defaultIcmsCode, defaultIcmsRate, defaultPisCode, defaultPisRate,
-        defaultCofinsCode, defaultCofinsRate, ...rest
+        defaultNcm, defaultCest, defaultIcmsCode, defaultIcmsRate, defaultIcmsReductionRate,
+        defaultPisCode, defaultPisRate, defaultCofinsCode, defaultCofinsRate, ...rest
       } = form;
       // Campo em branco vira `undefined`: no backend a ausência é o que
       // significa "não definido", e string vazia gravaria um valor inútil.
@@ -131,6 +161,7 @@ export function CadastroFiscal() {
         defaultCest: texto(defaultCest),
         defaultIcmsCode: texto(defaultIcmsCode),
         defaultIcmsRate: numero(defaultIcmsRate),
+        defaultIcmsReductionRate: numero(defaultIcmsReductionRate),
         defaultPisCode: texto(defaultPisCode),
         defaultPisRate: numero(defaultPisRate),
         defaultCofinsCode: texto(defaultCofinsCode),
@@ -193,7 +224,11 @@ export function CadastroFiscal() {
       <StatusCard
         environment={data?.profile?.environment ?? FiscalEnvironment.HOMOLOGACAO}
         pendencias={pendencias}
+        avisos={data?.readiness.avisos ?? []}
         canEmit={Boolean(data?.readiness.canEmitInProduction)}
+        sefaz={data?.sefaz ?? null}
+        onTestarSefaz={() => testarSefaz.mutate()}
+        testando={testarSefaz.isPending}
       />
 
       <Card>
@@ -356,6 +391,10 @@ export function CadastroFiscal() {
                   <option key={value} value={value}>{label}</option>
                 ))}
               </Select>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Ao salvar em produção o ChegowIA conversa com a SEFAZ do seu estado usando o
+                certificado da empresa. Se ela não confirmar, a virada não acontece.
+              </p>
             </FormField>
             <FormField label="Série">
               <Input
@@ -387,7 +426,8 @@ export function CadastroFiscal() {
             <span>
               Emitir automaticamente ao confirmar um pedido pago ou fechar uma mesa
               <span className="mt-0.5 block text-xs font-normal text-slate-400">
-                Ligue só depois de testar em homologação — antes disso cada venda vira uma rejeição.
+                Só liberamos depois que a primeira nota for autorizada pela SEFAZ. É ela que revela
+                erro de cadastro — e, no automático, o erro se repetiria em cada venda.
               </span>
             </span>
             <input
@@ -461,6 +501,21 @@ export function CadastroFiscal() {
                 onChange={(e) => setForm((f) => ({ ...f, defaultIcmsRate: e.target.value }))}
               />
             </FormField>
+            {form.defaultIcmsCode === "20" ? (
+              <FormField label="Redução da base de cálculo (%)">
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  value={form.defaultIcmsReductionRate}
+                  onChange={(e) => setForm((f) => ({ ...f, defaultIcmsReductionRate: e.target.value }))}
+                />
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                  Obrigatória no CST 20 — é ela que explica a base menor que o valor da venda.
+                </p>
+              </FormField>
+            ) : null}
             <FormField label="CST de PIS padrão">
               <CodeSelect
                 value={form.defaultPisCode}
@@ -529,11 +584,19 @@ export function CadastroFiscal() {
 function StatusCard({
   environment,
   pendencias,
+  avisos,
   canEmit,
+  sefaz,
+  onTestarSefaz,
+  testando,
 }: {
   environment: FiscalEnvironment;
   pendencias: string[];
+  avisos: string[];
   canEmit: boolean;
+  sefaz: FiscalStatus["sefaz"];
+  onTestarSefaz: () => void;
+  testando: boolean;
 }) {
   const producao = environment === FiscalEnvironment.PRODUCAO;
   return (
@@ -572,6 +635,34 @@ function StatusCard({
           </ul>
         </CardContent>
       )}
+      {avisos.length > 0 && (
+        <CardContent className="border-t border-slate-100 pt-4 dark:border-slate-800">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Fique de olho</p>
+          <ul className="mt-2 space-y-1 text-sm text-slate-500 dark:text-slate-400">
+            {avisos.map((item) => (
+              <li key={item} className="flex gap-2">
+                <span aria-hidden className="text-slate-300 dark:text-slate-600">•</span>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      )}
+      <CardContent className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-800">
+        <div className="text-sm">
+          <p className="font-bold text-slate-800 dark:text-slate-200">Conexão com a SEFAZ</p>
+          <p className="mt-0.5 text-slate-500 dark:text-slate-400">
+            {sefaz
+              ? `${sefaz.online ? "Serviço em operação" : `Sem confirmação${sefaz.code ? ` (${sefaz.code})` : ""}`}`
+                + ` · ${new Date(sefaz.checkedAt).toLocaleString("pt-BR")}`
+                + (sefaz.online ? "" : ` · ${sefaz.reason ?? "sem resposta"}`)
+              : "Nunca testada. O teste usa o certificado da empresa e não emite nota nem gasta numeração."}
+          </p>
+        </div>
+        <Button variant="outline" onClick={onTestarSefaz} disabled={testando}>
+          {testando ? "Testando..." : "Testar conexão"}
+        </Button>
+      </CardContent>
     </Card>
   );
 }

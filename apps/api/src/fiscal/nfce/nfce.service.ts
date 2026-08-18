@@ -18,6 +18,7 @@ import {
   OrderStatus,
   PaymentMethod,
   PaymentStatus,
+  Role,
   TableSessionStatus,
 } from "@prisma/client";
 import { create } from "xmlbuilder2";
@@ -31,8 +32,9 @@ import { calculateTaxes, fromCents, toCents, TaxableItem } from "./tax-engine";
 import { buildAccessKey, generateNumericCode } from "./access-key";
 import { buildNfceXml, toXmlDate } from "./xml-builder";
 import { extractKeyPair, extractDigestValue, signXml } from "./xml-signer";
-import { buildQrCode } from "./qr-code";
-import { SefazClient, SefazContext, SefazUnavailableError, tagValue } from "./sefaz-client";
+import { buildQrCode, qrCodeBaseUrl } from "./qr-code";
+import { SefazClient, SefazContext, SefazUnavailableError, generateLotId, tagValue } from "./sefaz-client";
+import { isUfSupported } from "./sefaz-endpoints";
 import { isAuthorized, isPending, isServiceUnavailable, rejectionGuidance } from "./rejections";
 import { buildDanfeHtml, buildDanfeText } from "./danfe";
 
@@ -51,8 +53,35 @@ import { buildDanfeHtml, buildDanfeText } from "./danfe";
 
 const MAX_TRANSMISSION_ATTEMPTS = 10;
 const RETRY_SWEEP_INTERVAL_MS = 60_000;
+/**
+ * Rascunho parado por mais que isso é resto de um processo que caiu antes de
+ * assinar. Sem esse prazo, a venda ficaria travada para sempre atrás de um
+ * documento que nunca vai existir.
+ */
+const STALE_DRAFT_MS = 5 * 60 * 1000;
+/**
+ * Documento em ENVIANDO por mais que isso perdeu a resposta da SEFAZ — o
+ * processo caiu entre o envio e a gravação. A saída não é reenviar (a nota pode
+ * já estar autorizada, e o reenvio vira duplicidade), é perguntar pela chave.
+ */
+const STALE_SENDING_MS = 5 * 60 * 1000;
 /** A NFC-e tem janela curta de cancelamento; 30 min é o mais restritivo. */
 const CANCEL_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * Situações em que o documento ainda ocupa a venda: emitir de novo produziria
+ * duas notas para o mesmo consumo. Rejeitada, denegada e inutilizada ficam de
+ * fora — nesses casos a venda continua sem documento fiscal válido e precisa
+ * de uma nova tentativa, com número novo.
+ */
+const STATUS_QUE_OCUPAM_A_VENDA: FiscalDocumentStatus[] = [
+  FiscalDocumentStatus.RASCUNHO,
+  FiscalDocumentStatus.ASSINADA,
+  FiscalDocumentStatus.ENVIANDO,
+  FiscalDocumentStatus.CONTINGENCIA,
+  FiscalDocumentStatus.AUTORIZADA,
+  FiscalDocumentStatus.CANCELADA,
+];
 
 @Injectable()
 export class NfceService implements OnModuleInit, OnModuleDestroy {
@@ -93,10 +122,11 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
    * cancelamento.
   */
   async emitForOrder(companyId: string, orderId: string, options: { customerDocument?: string } = {}) {
-    const existente = await this.db().fiscalDocument.findFirst({ where: { orderId, companyId } });
-    if (existente && existente.status !== FiscalDocumentStatus.REJEITADA) {
-      return this.publicDocument(existente);
-    }
+    const existente = await this.db().fiscalDocument.findFirst({
+      where: { orderId, companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    if (existente && !this.podeReemitir(existente)) return this.publicDocument(existente);
 
     const order = await this.db().order.findFirst({
       // A nota sempre nasce de uma venda recebida. A tela também só lista
@@ -135,10 +165,11 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
     tableSessionId: string,
     options: { customerDocument?: string; paymentMethod?: PaymentMethod } = {},
   ) {
-    const existente = await this.db().fiscalDocument.findFirst({ where: { tableSessionId, companyId } });
-    if (existente && existente.status !== FiscalDocumentStatus.REJEITADA) {
-      return this.publicDocument(existente);
-    }
+    const existente = await this.db().fiscalDocument.findFirst({
+      where: { tableSessionId, companyId },
+      orderBy: { createdAt: "desc" },
+    });
+    if (existente && !this.podeReemitir(existente)) return this.publicDocument(existente);
 
     const session = await this.db().tableSession.findFirst({
       where: { id: tableSessionId, companyId, status: TableSessionStatus.FECHADA },
@@ -199,6 +230,24 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Se a venda pode receber uma nova tentativa de emissão.
+   *
+   * Rejeitada e denegada não geraram documento válido: a venda continua sem
+   * nota e precisa tentar de novo, com número novo — o número queimado fica
+   * registrado no documento anterior, que é de onde sai a inutilização.
+   *
+   * O rascunho velho entra na mesma regra por um motivo prático: ele só existe
+   * enquanto a emissão está no meio do caminho, e se o processo cai ali a venda
+   * ficaria travada para sempre atrás de um documento que nunca foi assinado.
+   */
+  private podeReemitir(documento: { status: FiscalDocumentStatus; updatedAt?: Date; createdAt?: Date }) {
+    if (!STATUS_QUE_OCUPAM_A_VENDA.includes(documento.status)) return true;
+    if (documento.status !== FiscalDocumentStatus.RASCUNHO) return false;
+    const desde = new Date(documento.updatedAt ?? documento.createdAt ?? Date.now()).getTime();
+    return Date.now() - desde > STALE_DRAFT_MS;
+  }
+
+  /**
    * Vendas concluídas que ainda não receberam documento fiscal.
    *
    * A lista permite emissão manual tanto para delivery pago quanto para mesas
@@ -247,6 +296,9 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
       ? await this.db().fiscalDocument.findMany({
         where: {
           companyId,
+          // Documento rejeitado não tira a venda da lista: ela continua sem
+          // nota e o lojista precisa conseguir emitir de novo pela tela.
+          status: { in: STATUS_QUE_OCUPAM_A_VENDA },
           OR: [
             ...(orderIds.length ? [{ orderId: { in: orderIds } }] : []),
             ...(tableSessionIds.length ? [{ tableSessionId: { in: tableSessionIds } }] : []),
@@ -303,6 +355,10 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
     ]);
     if (!profile) throw new BadRequestException("Cadastre os dados fiscais da empresa antes de emitir.");
     if (!company?.cnpj) throw new BadRequestException("A empresa precisa de um CNPJ cadastrado para emitir nota.");
+    // A checagem de UF é aqui, e não na montagem: lá dentro o número da nota já
+    // foi reservado, e uma UF sem endpoint deixaria um buraco na sequência para
+    // cada tentativa — buraco que depois precisa ser justificado à fiscalização.
+    this.assertUfHabilitada(profile.state, profile.environment);
 
     const produtos = await this.db().product.findMany({
       where: { companyId, id: { in: input.items.map((item) => item.productId) } },
@@ -356,10 +412,32 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
         phone: company.phone,
       },
       calculo,
-      payments: input.payments,
+      payments: reconcilePayments(input.payments, calculo.totals.totalCents),
       customerDocument: input.customerDocument,
       customerName: input.customerName,
     };
+  }
+
+  /**
+   * Recusa antes de reservar numeração quando o estado não está habilitado.
+   *
+   * São duas tabelas — endpoints do webservice e URL do QR Code — e faltar
+   * qualquer uma impede a emissão. A mensagem diz o que fazer porque quem lê
+   * é o suporte, não o lojista.
+   */
+  private assertUfHabilitada(uf: string, environment: FiscalEnvironment) {
+    if (!isUfSupported(uf)) {
+      throw new BadRequestException(
+        `A UF ${uf} ainda não está habilitada para NFC-e nesta instalação. Contate o suporte do ChegowIA.`,
+      );
+    }
+    try {
+      qrCodeBaseUrl(uf, environment);
+    } catch {
+      throw new BadRequestException(
+        `Falta a URL do QR Code da NFC-e de ${uf} nesta instalação. Contate o suporte do ChegowIA.`,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -534,7 +612,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
 
     let resposta;
     try {
-      resposta = await this.sefaz.sendAuthorization(context, documento.xml, documento.id.slice(-15));
+      resposta = await this.sefaz.sendAuthorization(context, documento.xml, generateLotId());
     } catch (error) {
       await this.db().fiscalDocument.update({
         where: { id: documentId },
@@ -553,6 +631,15 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
     const protocolo = this.extractProtocol(resposta.xml);
     const codigo = protocolo.code ?? resposta.code;
     const motivo = protocolo.reason ?? resposta.reason;
+
+    if (codigo === "204" || codigo === "539") {
+      // Duplicidade: a SEFAZ já recebeu esta nota antes — normalmente porque a
+      // resposta do primeiro envio se perdeu. Reenviar só repete a duplicidade
+      // e o documento ficaria marcado como rejeitado aqui, com a nota válida
+      // lá. Quem sabe a verdade é a consulta pela chave.
+      const conciliado = await this.reconcileByAccessKey(companyId, documentId, material).catch(() => null);
+      if (conciliado) return conciliado;
+    }
 
     if (isAuthorized(codigo)) {
       const atualizado = await this.db().fiscalDocument.update({
@@ -600,7 +687,138 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
       },
     });
     this.logger.warn(`NFC-e ${atualizado.number} rejeitada (${codigo}): ${motivo}`);
+    // Rejeição que não se resolve reenviando sai da fila aqui mesmo: sem aviso,
+    // a venda fica concluída e sem documento fiscal até alguém abrir a tela.
+    if (!orientacao.retryable) {
+      await this.alertRejection(companyId, atualizado, orientacao.hint).catch(() => undefined);
+    }
     return this.publicDocument(atualizado);
+  }
+
+  /**
+   * Avisa quem precisa agir sobre uma nota que não vai sair sozinha.
+   *
+   * Vai para os administradores da empresa, não só para a operação da
+   * plataforma: quem corrige NCM, CFOP ou endereço é o lojista, e a nota
+   * costuma ser de uma venda que acabou de acontecer. O claim em `alertedAt`
+   * garante um aviso por documento, mesmo com worker e tela reenviando juntos.
+   */
+  private async alertRejection(companyId: string, documento: any, orientacao: string) {
+    const claimed = await this.db().fiscalDocument.updateMany({
+      where: { id: documento.id, alertedAt: null },
+      data: { alertedAt: new Date() },
+    }).catch(() => ({ count: 0 }));
+    if (claimed.count !== 1) return;
+
+    const linhas = [
+      `Nota: série ${documento.series}, número ${documento.number}`,
+      `Retorno da SEFAZ: ${documento.statusCode ?? "-"} ${documento.statusReason ?? ""}`,
+      `O que fazer: ${orientacao}`,
+      "A venda foi concluída e continua sem documento fiscal autorizado.",
+      "O número desta nota foi queimado: inutilize a faixa em Painel > Notas fiscais.",
+    ];
+
+    const [empresa, admins] = await Promise.all([
+      this.db().company.findUnique({ where: { id: companyId }, select: { name: true } }).catch(() => null),
+      this.db().user.findMany({
+        where: { companyId, role: Role.ADMIN, isActive: true },
+        select: { email: true },
+      }).catch(() => []),
+    ]);
+
+    for (const admin of admins) {
+      await this.mail.sendFiscalAlert(admin.email, "NFC-e rejeitada pela SEFAZ", linhas).catch(() => undefined);
+    }
+    await this.mail.sendOperationsAlert(
+      "NFC-e rejeitada pela SEFAZ",
+      [`Empresa: ${empresa?.name ?? companyId} (${companyId})`, ...linhas],
+    ).catch(() => undefined);
+  }
+
+  /**
+   * Pergunta à SEFAZ o que aconteceu com a chave e adota a resposta.
+   *
+   * É a saída para os dois casos em que o banco e a SEFAZ discordam: a resposta
+   * do envio se perdeu (documento preso em ENVIANDO) e o reenvio voltou como
+   * duplicidade. Nos dois, a nota pode estar autorizada — e insistir no envio
+   * nunca descobriria isso.
+   *
+   * Devolve `null` quando a SEFAZ não conhece a chave: aí o caminho normal de
+   * transmissão continua valendo.
+   */
+  async reconcileByAccessKey(
+    companyId: string,
+    documentId: string,
+    credentials?: { pfx: Buffer; password: string },
+  ) {
+    const documento = await this.db().fiscalDocument.findFirst({ where: { id: documentId, companyId } });
+    if (!documento?.accessKey) return null;
+
+    const profile = await this.db().companyFiscalProfile.findUnique({ where: { companyId } });
+    if (!profile) return null;
+    const material = credentials ?? await this.fiscal.loadSigningMaterial(companyId);
+    const resposta = await this.sefaz.consultProtocol(
+      {
+        uf: profile.state,
+        environment: documento.environment,
+        credentials: { pfx: material.pfx, password: material.password },
+      },
+      documento.accessKey,
+    );
+
+    const protocolo = this.extractProtocol(resposta.xml);
+    const codigo = protocolo.code ?? resposta.code;
+    const motivo = protocolo.reason ?? resposta.reason;
+
+    if (isAuthorized(codigo)) {
+      const atualizado = await this.db().fiscalDocument.update({
+        where: { id: documentId },
+        data: {
+          status: FiscalDocumentStatus.AUTORIZADA,
+          statusCode: codigo,
+          statusReason: motivo,
+          actionHint: null,
+          protocolNumber: protocolo.number ?? tagValue(resposta.xml, "nProt"),
+          protocolXml: resposta.xml,
+          authorizedAt: documento.authorizedAt ?? new Date(),
+          nextAttemptAt: null,
+        },
+      });
+      this.logger.log(`NFC-e ${atualizado.number} conciliada pela chave: já estava autorizada na SEFAZ.`);
+      return this.publicDocument(atualizado);
+    }
+
+    // 101/151 é cancelamento homologado; 110/301/302 é denegação. Nos dois a
+    // nota existe na SEFAZ e o que falta é o banco refletir isso.
+    if (codigo === "101" || codigo === "151" || codigo === "135") {
+      const atualizado = await this.db().fiscalDocument.update({
+        where: { id: documentId },
+        data: {
+          status: FiscalDocumentStatus.CANCELADA,
+          statusCode: codigo,
+          statusReason: motivo,
+          protocolXml: resposta.xml,
+          nextAttemptAt: null,
+        },
+      });
+      return this.publicDocument(atualizado);
+    }
+    if (codigo === "110" || codigo === "301" || codigo === "302") {
+      const atualizado = await this.db().fiscalDocument.update({
+        where: { id: documentId },
+        data: {
+          status: FiscalDocumentStatus.DENEGADA,
+          statusCode: codigo,
+          statusReason: motivo,
+          actionHint: rejectionGuidance(codigo, motivo).hint,
+          protocolXml: resposta.xml,
+          nextAttemptAt: null,
+        },
+      });
+      return this.publicDocument(atualizado);
+    }
+
+    return null;
   }
 
   private async toContingency(
@@ -684,8 +902,42 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
       await this.transmit(documento.companyId, documento.id).catch(() => undefined);
     }
 
+    await this.rescueStuckTransmissions();
     await this.alertExhausted();
     return pendentes.length;
+  }
+
+  /**
+   * Documento preso em ENVIANDO: o processo caiu entre o envio e a gravação da
+   * resposta. Reenviar às cegas produziria duplicidade, então primeiro se
+   * pergunta pela chave; só se a SEFAZ não conhecer a nota é que ela volta
+   * para a fila.
+   */
+  private async rescueStuckTransmissions() {
+    const presos = await this.db().fiscalDocument.findMany({
+      where: {
+        status: FiscalDocumentStatus.ENVIANDO,
+        updatedAt: { lt: new Date(Date.now() - STALE_SENDING_MS) },
+      },
+      take: 20,
+      orderBy: { updatedAt: "asc" },
+      select: { id: true, companyId: true },
+    }).catch(() => []);
+
+    for (const documento of presos) {
+      const conciliado = await this.reconcileByAccessKey(documento.companyId, documento.id)
+        .catch(() => null);
+      if (conciliado) continue;
+      await this.db().fiscalDocument.updateMany({
+        where: { id: documento.id, status: FiscalDocumentStatus.ENVIANDO },
+        data: {
+          status: FiscalDocumentStatus.CONTINGENCIA,
+          statusReason: "A resposta da SEFAZ se perdeu; a nota voltou para a fila de transmissão.",
+          nextAttemptAt: new Date(),
+        },
+      }).catch(() => undefined);
+    }
+    return presos.length;
   }
 
   /**
@@ -768,7 +1020,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
 
     const xml = this.buildEventXml({
       accessKey: documento.accessKey,
-      cnpj: profile.legalName ? (await this.companyCnpj(companyId)) : "",
+      cnpj: await this.companyCnpj(companyId),
       uf: profile.state,
       environment: documento.environment,
       eventType: "110111",
@@ -788,7 +1040,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
         credentials: { pfx: material.pfx, password: material.password },
       },
       assinado,
-      evento.id.slice(-15),
+      generateLotId(),
     );
 
     const bloco = resposta.xml.match(/<retEvento[\s\S]*?<\/retEvento>/)?.[0] ?? resposta.xml;
@@ -887,7 +1139,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
         credentials: { pfx: material.pfx, password: material.password },
       },
       assinado,
-      evento.id.slice(-15),
+      generateLotId(),
     );
 
     const bloco = resposta.xml.match(/<retEvento[\s\S]*?<\/retEvento>/)?.[0] ?? resposta.xml;
@@ -1232,4 +1484,36 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
       createdAt: documento.createdAt,
     };
   }
+}
+
+/**
+ * Ajusta os pagamentos para fecharem com o total da nota.
+ *
+ * O total da NFC-e é recalculado item a item, em centavos, e pode diferir por
+ * alguns centavos do valor gravado na venda — o preço unitário de um item
+ * vendido por peso, por exemplo, não fecha exato. A SEFAZ confere: pagamento
+ * menor que o total é rejeição, e pagamento maior sem troco também. Troco só
+ * existe quando houve dinheiro em espécie.
+ */
+export function reconcilePayments(
+  payments: Array<{ method: PaymentMethod; amountCents: number }>,
+  totalCents: number,
+): Array<{ method: PaymentMethod; amountCents: number }> {
+  if (!payments.length) return payments;
+  const pago = payments.reduce((soma, pagamento) => soma + pagamento.amountCents, 0);
+  if (pago === totalCents) return payments;
+
+  // Sobra em dinheiro é troco legítimo e a nota declara os dois valores.
+  const houveDinheiro = payments.some((pagamento) => pagamento.method === PaymentMethod.DINHEIRO);
+  if (pago > totalCents && houveDinheiro) return payments;
+
+  const ajustados = payments.map((pagamento) => ({ ...pagamento }));
+  const ultimo = ajustados.length - 1;
+  ajustados[ultimo].amountCents += totalCents - pago;
+  // Se o ajuste zeraria ou inverteria a última linha, o rateio anterior não
+  // fazia sentido: a nota vai com um pagamento só, do valor total.
+  if (ajustados[ultimo].amountCents <= 0) {
+    return [{ method: payments[0].method, amountCents: totalCents }];
+  }
+  return ajustados;
 }
