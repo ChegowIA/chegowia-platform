@@ -32,7 +32,8 @@ import { AI_PROVIDER, AIProvider } from "../ai/providers/ai-provider.interface";
 import { ClientApplicationDto } from "./dto/client-application.dto";
 import { normalizeBrazilDocument } from "../common/validators/brazil-document.validator";
 import { AuthService } from "../auth/auth.service";
-import { AsaasProvider, AsaasPayment, AsaasTransfer } from "./asaas.provider";
+import {
+  AsaasBillingType, AsaasProvider, AsaasPayment, AsaasTransfer } from "./asaas.provider";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
@@ -60,6 +61,14 @@ const RESELLER_COMMISSION_RATE = 0.30;
 const REFERRAL_DISCOUNT_RATE = 0.15;
 const REFERRAL_DISCOUNT_MONTHS = 3;
 const REFERRAL_DISCOUNT_SYNC_INTERVAL_MS = 60 * 60_000;
+/**
+ * Taxa do cartão repassada ao cliente. Fica em variável de ambiente porque a
+ * tabela do Asaas muda: os três primeiros meses da conta são promocionais
+ * (1,99%) e depois sobem para 2,99%, e conta grande costuma negociar. Fixar no
+ * código faria a plataforma cobrar errado no dia em que a promoção vencesse.
+ */
+const CARD_FEE_PERCENT_DEFAULT = 2.99;
+const CARD_FEE_FIXED_DEFAULT = 0.49;
 /** Prazo máximo comunicado ao revendedor depois que ele pede o repasse. */
 const RESELLER_PAYOUT_NOTICE_BUSINESS_DAYS = 5;
 /**
@@ -202,6 +211,73 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const cheio = this.effectiveSubscriptionMonthlyPrice(subscription);
     if (!this.referralDiscountActive(subscription)) return cheio;
     return Math.round(cheio * (1 - REFERRAL_DISCOUNT_RATE) * 100) / 100;
+  }
+
+  /** Taxa do cartão vigente, conforme configuração do ambiente. */
+  private cardFee() {
+    const percent = Number(process.env.ASAAS_CARD_FEE_PERCENT ?? CARD_FEE_PERCENT_DEFAULT);
+    const fixed = Number(process.env.ASAAS_CARD_FEE_FIXED ?? CARD_FEE_FIXED_DEFAULT);
+    return {
+      percent: Number.isFinite(percent) && percent >= 0 && percent < 100 ? percent : CARD_FEE_PERCENT_DEFAULT,
+      fixed: Number.isFinite(fixed) && fixed >= 0 ? fixed : CARD_FEE_FIXED_DEFAULT,
+    };
+  }
+
+  /**
+   * Valor da cobrança já considerando a forma de pagamento.
+   *
+   * Só o cartão carrega a taxa. Pix e boleto custam R$ 1,99 fixos e seguem no
+   * preço do plano — repassar centavos ali só daria ao cliente um motivo a mais
+   * para desistir na hora de pagar.
+   *
+   * O cálculo é de acréscimo por dentro, não soma simples: somar a taxa ao
+   * preço faria o Asaas cobrar o percentual sobre o total já acrescido, e a
+   * plataforma receberia alguns centavos a menos que a mensalidade. Dividir por
+   * `1 - taxa` é o que faz o líquido bater exatamente com o preço do plano.
+   */
+  private chargeValueForBillingType(
+    subscription: {
+      monthlyPriceSnapshot?: unknown;
+      plan: { monthlyPrice: unknown };
+      resellerId?: string | null;
+      discountEndsAt?: Date | string | null;
+      discountRemovedAt?: Date | string | null;
+    },
+    billingType?: AsaasBillingType,
+  ) {
+    const base = this.subscriptionChargeValue(subscription);
+    if (billingType !== "CREDIT_CARD") return base;
+    const { percent, fixed } = this.cardFee();
+    return Math.round(((base + fixed) / (1 - percent / 100)) * 100) / 100;
+  }
+
+  /**
+   * Formas de pagamento oferecidas na contratação, com o valor de cada uma.
+   *
+   * O valor precisa vir do servidor: é ele que conhece o desconto de indicação
+   * e a taxa vigente, e é ele que vai criar a cobrança. Calcular na tela abriria
+   * espaço para mostrar um preço e cobrar outro.
+   */
+  async companyPaymentOptions(companyId: string) {
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { companyId },
+      include: { plan: true },
+    });
+    if (!subscription) throw new NotFoundException("Assinatura não encontrada.");
+
+    const { percent, fixed } = this.cardFee();
+    return {
+      options: [
+        { billingType: "PIX" as const, label: "Pix", value: this.chargeValueForBillingType(subscription, "PIX"), note: "Sem acréscimo." },
+        { billingType: "BOLETO" as const, label: "Boleto", value: this.chargeValueForBillingType(subscription, "BOLETO"), note: "Sem acréscimo." },
+        {
+          billingType: "CREDIT_CARD" as const,
+          label: "Cartão de crédito",
+          value: this.chargeValueForBillingType(subscription, "CREDIT_CARD"),
+          note: `Inclui a taxa da operadora (${percent.toFixed(2).replace(".", ",")}% + R$ ${fixed.toFixed(2).replace(".", ",")}).`,
+        },
+      ],
+    };
   }
 
   /**
@@ -1393,7 +1469,11 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * e devolve a fatura para pagamento. A cobrança em aberto é guardada para o
    * empresário reabrir o mesmo link em vez de gerar uma segunda a cada clique.
    */
-  private async companyCheckoutAsaas(subscription: any, admin: { email: string; name?: string }) {
+  private async companyCheckoutAsaas(
+    subscription: any,
+    admin: { email: string; name?: string },
+    billingType?: AsaasBillingType,
+  ) {
     if (subscription.asaasPaymentId) {
       try {
         const existing = await this.asaas.getPayment(subscription.asaasPaymentId);
@@ -1422,8 +1502,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     const customerId = await this.ensureAsaasCustomer(subscription, admin);
     // Com código de indicação a cobrança já nasce com os 15%; o preço cheio
-    // volta quando a janela de três meses fecha.
-    const monthlyPrice = this.subscriptionChargeValue(subscription);
+    // volta quando a janela de três meses fecha. No cartão entra também a taxa
+    // da operadora, que é repassada ao cliente.
+    const monthlyPrice = this.chargeValueForBillingType(subscription, billingType);
     // `dueDate` do Asaas é data civil no Brasil, não instante UTC. Depois das
     // 21h BRT, `toISOString()` já é amanhã e criaria uma fatura futura sem o
     // empresário ter pedido isso.
@@ -1432,6 +1513,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const created = await this.asaas.createSubscription({
       customer: customerId,
       value: monthlyPrice,
+      // Sem forma escolhida a cobrança aceita todas — é o comportamento antigo,
+      // preservado para links já emitidos. Com escolha, ela fica travada nela:
+      // é o que impede pagar no cartão pelo preço sem taxa.
+      ...(billingType ? { billingType } : {}),
       nextDueDate: hoje,
       description: `ChegowIA — ${subscription.plan.name}`,
       externalReference: subscription.id,
@@ -1455,7 +1540,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return { url: cobrancaFinal.invoiceUrl ?? first.invoiceUrl, reused: false };
   }
 
-  async companyCheckout(companyId: string) {
+  async companyCheckout(companyId: string, billingType?: AsaasBillingType) {
     const subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
       include: {
@@ -1485,7 +1570,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (this.billingProvider() === "ASAAS") {
-      return this.companyCheckoutAsaas(subscription, admin);
+      return this.companyCheckoutAsaas(subscription, admin, billingType);
     }
 
     if (!this.stripe) {
