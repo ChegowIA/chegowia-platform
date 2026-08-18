@@ -66,7 +66,7 @@ jobs:
       # imagem base: openssl, glibc, o próprio Node. Uma CVE crítica aí é tão
       # explorável quanto uma no package.json.
       - name: Vulnerabilidades da imagem
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: chegowia-api:ci
           format: sarif
@@ -79,7 +79,7 @@ jobs:
         with:
           sarif_file: trivy-api.sarif
       - name: Falhar em vulnerabilidade crítica sem correção pendente
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: chegowia-api:ci
           format: table
