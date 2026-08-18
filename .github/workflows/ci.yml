@@ -58,6 +58,11 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # `upload-sarif` lê o workflow run para montar o relatório, e em
+      # repositório privado isso exige `actions: read`. Sem essa linha o Trivy
+      # roda, encontra nada, e o job falha na publicação — que foi o que
+      # aconteceu enquanto a versão errada da action escondia o problema.
+      actions: read
     steps:
       - uses: actions/checkout@v4
       - name: Construir imagem da API
