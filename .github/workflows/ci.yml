@@ -78,13 +78,23 @@ jobs:
           output: trivy-api.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+      # Publicar no Security depende de "code scanning" habilitado no
+      # repositório, que em repositório privado é recurso pago. Enquanto não
+      # estiver ligado, a publicação falha — e antes de `continue-on-error` ela
+      # derrubava o job **antes** do gate abaixo, deixando a checagem de CVE
+      # sem efeito nenhum. Se o recurso for habilitado, esta etapa volta a
+      # publicar sozinha.
       - name: Publicar resultado no Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
+        continue-on-error: true
         with:
           sarif_file: trivy-api.sarif
+      # `always()` porque este é o gate: ele precisa rodar mesmo que a
+      # publicação acima não tenha funcionado.
       - name: Falhar em vulnerabilidade crítica sem correção pendente
         uses: aquasecurity/trivy-action@v0.36.0
+        if: always()
         with:
           image-ref: chegowia-api:ci
           format: table
