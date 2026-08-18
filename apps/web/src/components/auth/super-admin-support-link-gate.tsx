@@ -103,7 +103,7 @@ export function SuperAdminSupportLinkGate({
             <p className="text-xs font-black uppercase tracking-[0.16em] text-red-300">Acesso não disponível</p>
             <h1 className="mt-3 text-2xl font-black">Não foi possível abrir o suporte</h1>
             <p role="alert" className="mt-3 text-sm leading-6 text-slate-300">{error}</p>
-            <button type="button" onClick={() => router.replace(returnPath)} className="mt-6 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-slate-950">{labels.back}</button>
+            <button type="button" onClick={() => router.replace(returnPath)} className="mt-6 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-slate-950 dark:bg-white dark:text-slate-950">{labels.back}</button>
           </>
         ) : (
           <>
