@@ -1552,6 +1552,10 @@ model ClientSubscription {
   referralCode            String?
   referralLockedAt        DateTime?
   discountEndsAt          DateTime?
+  // Quando a assinatura no provedor voltou ao preço cheio depois da janela de
+  // desconto por indicação. Sem esse marco a varredura não teria como saber se
+  // já ajustou, e reenviaria a mesma atualização todo dia.
+  discountRemovedAt       DateTime?
   // Limites explícitos do ciclo já pago. O início impede que o painel use mês
   // civil e reapresente consumo da fatura anterior depois da baixa.
   currentPeriodStart      DateTime?

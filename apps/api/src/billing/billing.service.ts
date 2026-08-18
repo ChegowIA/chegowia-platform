@@ -56,6 +56,10 @@ const ASAAS_PAYOUT_RECHECK_INTERVAL_MS = 60_000;
 const ASAAS_ANTICIPATION_RECHECK_INTERVAL_MS = 15 * 60_000;
 /** Regra comercial única: 30% da mensalidade do plano pertence ao revendedor. */
 const RESELLER_COMMISSION_RATE = 0.30;
+/** Desconto que o código de indicação dá ao cliente, e por quantos meses. */
+const REFERRAL_DISCOUNT_RATE = 0.15;
+const REFERRAL_DISCOUNT_MONTHS = 3;
+const REFERRAL_DISCOUNT_SYNC_INTERVAL_MS = 60 * 60_000;
 /** Prazo máximo comunicado ao revendedor depois que ele pede o repasse. */
 const RESELLER_PAYOUT_NOTICE_BUSINESS_DAYS = 5;
 /**
@@ -155,6 +159,49 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return subscription.monthlyPriceSnapshot === null || subscription.monthlyPriceSnapshot === undefined
       ? Number(subscription.plan.monthlyPrice)
       : Number(subscription.monthlyPriceSnapshot);
+  }
+
+  /**
+   * Se a assinatura ainda está dentro da janela de desconto por indicação.
+   *
+   * Na criação a assinatura ainda não foi paga e `discountEndsAt` é nulo — a
+   * janela só começa a contar com a primeira mensalidade. Mesmo assim a
+   * primeira cobrança já sai com desconto: é ela que o cliente vê ao contratar,
+   * e é sobre ela que o revendedor faz a promessa.
+   */
+  private referralDiscountActive(subscription: {
+    resellerId?: string | null;
+    discountEndsAt?: Date | string | null;
+    discountRemovedAt?: Date | string | null;
+  }) {
+    if (!subscription.resellerId) return false;
+    if (subscription.discountRemovedAt) return false;
+    if (!subscription.discountEndsAt) return true;
+    return new Date(subscription.discountEndsAt).getTime() > Date.now();
+  }
+
+  /**
+   * Valor que vai para a cobrança da assinatura.
+   *
+   * O desconto vive aqui e não num campo do provedor porque o `discount` do
+   * Asaas vale para **todas** as cobranças da assinatura — não existe "só nas
+   * três primeiras". A janela é nossa, e quem a encerra é
+   * `syncExpiredReferralDiscounts`, devolvendo o preço cheio.
+   *
+   * Consequência que vale dizer em voz alta: a comissão do revendedor incide
+   * sobre o que o cliente pagou (ver `commissionableMonthlyAmount`), então nos
+   * três primeiros meses ela acompanha o valor com desconto.
+   */
+  private subscriptionChargeValue(subscription: {
+    monthlyPriceSnapshot?: unknown;
+    plan: { monthlyPrice: unknown };
+    resellerId?: string | null;
+    discountEndsAt?: Date | string | null;
+    discountRemovedAt?: Date | string | null;
+  }) {
+    const cheio = this.effectiveSubscriptionMonthlyPrice(subscription);
+    if (!this.referralDiscountActive(subscription)) return cheio;
+    return Math.round(cheio * (1 - REFERRAL_DISCOUNT_RATE) * 100) / 100;
   }
 
   /**
@@ -1374,7 +1421,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
 
     const customerId = await this.ensureAsaasCustomer(subscription, admin);
-    const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
+    // Com código de indicação a cobrança já nasce com os 15%; o preço cheio
+    // volta quando a janela de três meses fecha.
+    const monthlyPrice = this.subscriptionChargeValue(subscription);
     // `dueDate` do Asaas é data civil no Brasil, não instante UTC. Depois das
     // 21h BRT, `toISOString()` já é amanhã e criaria uma fatura futura sem o
     // empresário ter pedido isso.
@@ -2075,6 +2124,64 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     for (const item of pending) await this.processStripeEvent(item.id);
   }
 
+  /**
+   * Devolve o preço cheio às assinaturas cuja janela de desconto por indicação
+   * terminou.
+   *
+   * Roda no worker e não no webhook de pagamento porque o Asaas gera a próxima
+   * cobrança logo depois de fechar a anterior: esperar o pagamento chegar já
+   * seria tarde para a fatura seguinte. `discountRemovedAt` marca o ajuste
+   * feito — sem ele a varredura repetiria a mesma atualização todo dia.
+   */
+  private async syncExpiredReferralDiscounts() {
+    if (!this.deveConferir("desconto-indicacao", REFERRAL_DISCOUNT_SYNC_INTERVAL_MS)) return 0;
+
+    // O `try` cobre a montagem da consulta, não só a promessa: esta varredura é
+    // a última da fila do worker e uma exceção aqui pularia a conciliação de
+    // pagamento das rodadas seguintes — trocar dinheiro atrasado por acesso
+    // indevidamente cortado seria um péssimo negócio.
+    let vencidas: any[] = [];
+    try {
+      vencidas = await this.db().clientSubscription.findMany({
+        where: {
+          resellerId: { not: null },
+          asaasSubscriptionId: { not: null },
+          discountRemovedAt: null,
+          discountEndsAt: { lte: new Date() },
+        },
+        take: 50,
+        orderBy: { discountEndsAt: "asc" },
+        include: { plan: true },
+      });
+    } catch (error) {
+      this.logger.error("Não foi possível listar descontos de indicação vencidos.", this.stripeErrorForLog(error));
+      return 0;
+    }
+
+    for (const assinatura of vencidas) {
+      const cheio = this.effectiveSubscriptionMonthlyPrice(assinatura);
+      try {
+        await this.asaas.updateSubscription(assinatura.asaasSubscriptionId, { value: cheio });
+        await this.db().clientSubscription.update({
+          where: { id: assinatura.id },
+          data: { discountRemovedAt: new Date() },
+        });
+        this.logger.log(
+          `Desconto de indicação encerrado na assinatura ${assinatura.id}: valor voltou para ${cheio}.`,
+        );
+      } catch (error) {
+        // Falhar aqui não pode derrubar o resto da fila: a próxima rodada tenta
+        // de novo, e enquanto isso o cliente segue pagando a menos — erro que
+        // custa dinheiro, mas não tira o acesso de ninguém.
+        this.logger.error(
+          `Não foi possível encerrar o desconto de indicação da assinatura ${assinatura.id}.`,
+          this.stripeErrorForLog(error),
+        );
+      }
+    }
+    return vencidas.length;
+  }
+
   private async processBackgroundJobs() {
     if (this.backgroundJobsRunning) return;
     this.backgroundJobsRunning = true;
@@ -2090,6 +2197,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         await this.reconcilePendingAsaasPayments();
         await this.reconcilePaidAsaasRenewals();
         await this.reconcilePendingAsaasCommissions();
+        await this.syncExpiredReferralDiscounts();
       }
       // O fim do período é suficiente para interromper o acesso, mesmo se o
       // provedor externo estiver fora, com webhook atrasado ou sem configuração
