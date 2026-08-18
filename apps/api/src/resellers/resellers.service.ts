@@ -343,7 +343,19 @@ export class ResellersService {
         commissionRatePercent: 30,
         appliesTo: "Somente à mensalidade do plano; consumo de IA e WhatsApp não entra na comissão.",
         releaseRule: "A comissão é liberada depois que o Asaas registra o recebimento ou confirma o crédito de uma antecipação automática elegível.",
-        settlementNotice: "O pagamento pode aparecer como confirmado antes de o saldo ficar disponível. Em cartão com antecipação automática elegível, o crédito informado pelo Asaas pode ocorrer em até 2 dias úteis.",
+        settlementNotice: "O pagamento pode aparecer como confirmado antes de o saldo ficar disponível: confirmado quer dizer que o cliente pagou, e o saque só abre quando o dinheiro entra na conta. Quem escolhe a forma de pagamento é o cliente, então o prazo abaixo é dele, não seu.",
+        /**
+         * Prazos de compensação do Asaas, contados a partir do pagamento do
+         * cliente. São previsão, não promessa: quem abre o saque é o aviso de
+         * crédito do próprio Asaas, e antecipação automática elegível encurta
+         * o prazo do cartão.
+         */
+        settlementSchedule: [
+          { method: "Pix", eta: "no mesmo dia", detail: "Cai em segundos, inclusive fim de semana." },
+          { method: "Boleto", eta: "1 a 2 dias úteis", detail: "Depende da compensação bancária." },
+          { method: "Cartão de débito", eta: "até 3 dias úteis", detail: "Compensa só em dia útil." },
+          { method: "Cartão de crédito", eta: "32 dias corridos", detail: "É o prazo padrão do Asaas; com antecipação elegível, sai antes." },
+        ],
       },
       activeSubscriptions,
       prospects,

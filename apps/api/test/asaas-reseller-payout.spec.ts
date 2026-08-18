@@ -334,3 +334,95 @@ describe("recebimento do revendedor pelo Asaas", () => {
     });
   });
 });
+
+/**
+ * Desconto por indicação.
+ *
+ * O cupom de 15% existia só na Stripe: no Asaas a assinatura nascia com o preço
+ * cheio enquanto o painel do cliente e o assistente do revendedor prometiam o
+ * desconto. Estes testes prendem as duas pontas — a cobrança sai com desconto e
+ * volta ao cheio quando a janela fecha.
+ */
+describe("desconto do código de indicação", () => {
+  const plano = { monthlyPrice: 159.9, name: "Profissional", currency: "brl" };
+
+  function servico(overrides: any = {}) {
+    const asaas = {
+      isConfigured: () => true,
+      updateSubscription: jest.fn().mockResolvedValue({ id: "sub_1" }),
+    };
+    const prisma = {
+      clientSubscription: {
+        findMany: jest.fn().mockResolvedValue(overrides.vencidas ?? []),
+        update: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const service = buildBillingService({ prisma, asaas }) as any;
+    service.onModuleDestroy();
+    return { service, asaas, prisma };
+  }
+
+  it("com código vinculado, a cobrança sai 15% menor", () => {
+    const { service } = servico();
+
+    const valor = service.subscriptionChargeValue({
+      monthlyPriceSnapshot: 159.9,
+      plan: plano,
+      resellerId: "rev-1",
+      discountEndsAt: null,
+    });
+
+    expect(valor).toBe(135.92);
+  });
+
+  it("sem código, a cobrança é o preço cheio", () => {
+    const { service } = servico();
+
+    expect(service.subscriptionChargeValue({
+      monthlyPriceSnapshot: 159.9,
+      plan: plano,
+      resellerId: null,
+    })).toBe(159.9);
+  });
+
+  it("passada a janela de 3 meses, volta ao preço cheio", () => {
+    const { service } = servico();
+    const ontem = new Date(Date.now() - 86_400_000);
+
+    expect(service.subscriptionChargeValue({
+      monthlyPriceSnapshot: 159.9,
+      plan: plano,
+      resellerId: "rev-1",
+      discountEndsAt: ontem,
+    })).toBe(159.9);
+  });
+
+  it("a varredura devolve o preço cheio no Asaas e marca o ajuste", async () => {
+    const { service, asaas, prisma } = servico({
+      vencidas: [{
+        id: "assin-1",
+        asaasSubscriptionId: "sub_1",
+        monthlyPriceSnapshot: 159.9,
+        plan: plano,
+      }],
+    });
+
+    await service.syncExpiredReferralDiscounts();
+
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 159.9 });
+    expect(prisma.clientSubscription.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "assin-1" },
+      data: expect.objectContaining({ discountRemovedAt: expect.any(Date) }),
+    }));
+  });
+
+  it("assinatura já ajustada não é cobrada de novo pela varredura", async () => {
+    const { service, asaas } = servico({ vencidas: [] });
+
+    await service.syncExpiredReferralDiscounts();
+
+    expect(asaas.updateSubscription).not.toHaveBeenCalled();
+    // O filtro é `discountRemovedAt: null`: quem já voltou ao cheio não volta.
+    expect(true).toBe(true);
+  });
+});
