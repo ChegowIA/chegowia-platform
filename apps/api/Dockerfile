@@ -40,6 +40,15 @@ RUN apt-get update \
   && sed -i 's|^DatabaseDirectory .*|DatabaseDirectory /data/clamav|' /etc/clamav/freshclam.conf \
   && sed -i '/^NotifyClamd /d' /etc/clamav/freshclam.conf \
   && rm -rf /var/lib/apt/lists/* \
+  # Gerenciador de pacote não tem função em produção: o entrypoint chama
+  # `./node_modules/.bin/prisma` direto, o processo sobe por `node` e o health
+  # check também. O que a imagem base traz aqui é código a mais para manter e
+  # auditar — o npm 10.9.8 embarca `tar` 7.5.11, que é CVE-2026-59873
+  # (crítica), e o mesmo valeria para a próxima. Sair com eles é mais simples
+  # que persegui-los.
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
   && groupadd --system --gid 1001 nodeapp \
   && useradd --system --uid 1001 --gid nodeapp --home-dir /app nodeapp
 COPY --from=production-dependencies /app/node_modules ./node_modules
