@@ -439,7 +439,10 @@ model RefreshToken {
   assumedAccessId   String?
   // Tipo e sujeito do acesso auditado. São necessários para renovar uma visão
   // de revendedor sem jamais trocar a identidade real (`userId`) da sessão.
-  assumedAccessKind String?
+  // "COMPANY" ou "RESELLER". A largura acompanha a coluna criada em
+  // 20260814003000: sem ela declarada, o Prisma acha que o campo tem 191
+  // caracteres e a próxima migration gerada alargaria a coluna sem motivo.
+  assumedAccessKind String? @db.VarChar(20)
   assumedUserId     String?
   assumedResellerId String?
 
@@ -940,7 +943,7 @@ model Address {
   longitude    Decimal? @db.Decimal(10, 7)
   isDefault    Boolean  @default(false)
   createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt    DateTime @default(now()) @updatedAt
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   orders Order[]
@@ -1127,7 +1130,11 @@ model Order {
   updatedAt DateTime @updatedAt
 
   company              Company               @relation(fields: [companyId], references: [id])
-  customer             User?                 @relation("OrderCustomer", fields: [customerId], references: [id])
+  // `Restrict` é o que o banco faz desde a criação da tabela: apagar um
+  // usuário com pedidos falha, em vez de soltar o histórico do dono. Sem
+  // declarar, o Prisma assumiria SET NULL — padrão de relação opcional — e a
+  // próxima migration gerada mudaria a regra sem ninguém decidir.
+  customer             User?                 @relation("OrderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
   address              Address?              @relation(fields: [addressId], references: [id])
   // FKs compostas: mesmo uma escrita externa não consegue ligar um pedido à
   // conversa ou ao rascunho de outra empresa.
@@ -1281,6 +1288,7 @@ model DiningOrder {
   @@index([companyId, status])
   @@index([tableSessionId])
   @@index([tableSessionId, companyId])
+  @@index([companyId, source])
 }
 
 model DiningOrderItem {
@@ -2119,4 +2127,9 @@ model UsageLedger {
   @@index([companyId, trialCoveredAt, status])
   @@index([stripeInvoiceItemId])
   @@index([stripeInvoiceId])
+  // Não é único de propósito: uma cobrança do Asaas cobre várias linhas de uso.
+  // O webhook procura por este campo para marcar o lote inteiro como pago, e o
+  // índice existe no banco desde 20260813030000 — declarar aqui evita que a
+  // próxima migration gerada o derrube e transforme aquela busca em varredura.
+  @@index([asaasPaymentId])
 }
