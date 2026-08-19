@@ -2055,7 +2055,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     await this.ensureClientIdentityAvailable(application);
     const slug = await this.uniqueCompanySlug(application.tradeName || application.companyName);
     const stripeCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
-    const discountEndsAt = application.resellerId ? new Date(new Date().setMonth(new Date().getMonth() + 3)) : null;
+    // A janela do desconto sai da mesma constante que o cálculo do valor usa;
+    // com o prazo escrito à mão aqui, mudar a regra em um lugar só deixaria a
+    // cobrança e a data de fim discordando.
+    const discountEndsAt = application.resellerId
+      ? new Date(new Date().setMonth(new Date().getMonth() + REFERRAL_DISCOUNT_MONTHS))
+      : null;
     const admin = await this.db().$transaction(async (tx: any) => {
       const company = await tx.company.create({
         data: {
