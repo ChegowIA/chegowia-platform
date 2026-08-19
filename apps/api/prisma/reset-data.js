@@ -35,6 +35,15 @@ const PRESERVADAS = new Set([
   "SoftwarePlan",
   "UsageRate",
   "StripeEvent",
+  // O WhatsApp institucional é da plataforma, não de nenhum cliente: apagar o
+  // canal derrubaria o número da ChegowIA e exigiria reconectar no Gupshup.
+  // Hoje ele sobreviveria de qualquer forma, por não ter chave estrangeira para
+  // empresa nem usuário — mas isso é acidente, e uma coluna nova amanhã o
+  // colocaria na varredura sem ninguém perceber. Aqui a intenção fica escrita.
+  "PlatformWhatsAppChannel",
+  "PlatformWhatsAppConversation",
+  "PlatformWhatsAppMessage",
+  "PlatformUsageLedger",
 ]);
 
 /** De onde a limpeza parte. Tudo que aponta para isso, direta ou indiretamente, cai junto. */

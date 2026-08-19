@@ -303,6 +303,11 @@ impedir. Sem o parâmetro, ele nunca escreve nada.
 A ordem de exclusão é lida do `information_schema` a cada execução, então tabela
 nova entra sozinha — não há lista para manter desatualizada.
 
+O **WhatsApp institucional da ChegowIA** é preservado: canal, conversas, mensagens
+e o consumo da plataforma. Ele é da plataforma, não de nenhum cliente — apagar
+derrubaria o número e exigiria reconectar no Gupshup. O canal de WhatsApp de cada
+empresa (`MessagingChannel`) é apagado junto com a empresa, como deve ser.
+
 **Não há desfazer.** Faça o backup antes, sempre.
 
 ### Observabilidade
