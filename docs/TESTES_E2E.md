@@ -15,6 +15,42 @@ o que apareceu na tela, no log da API e no banco, **sem consertar antes de repor
 
 ---
 
+## 0. Índice: onde cada tela é testada
+
+| Tela | Seção |
+|---|---|
+| `/` · `/busca` · `/loja/[slug]` · `/loja/[slug]/produto/[productId]` | 5.1 |
+| `/planos` · `/software` · `/revenda` · `/termos` · `/privacidade` | 5.1 |
+| `/login` · `/cadastro` | 4.1, 4.3 |
+| `/verificar-email` · `/recuperar-senha` · `/redefinir-senha` | 4.6 |
+| `/acesso` · `/acesso/suporte` · `/acesso/suporte/revendedor` | 4.6, 16.16 |
+| `/minha-conta` · `/minha-conta/enderecos` · `/minha-conta/pedidos` | 4.5, 5.2, 5.3 |
+| `/carrinho` · `/checkout` · `/pedido/[id]` | 5.3, 5.4 |
+| `/mesa/[token]` | 5.5 |
+| `/contratar/sucesso` | 5.4 |
+| `/painel/dashboard` | 6.8 |
+| `/painel/pedidos` · `/painel/pedidos/[id]` | 6.1 |
+| `/painel/cardapio` | 6.2 |
+| `/painel/mesas` | 6.3 |
+| `/painel/caixa` | 6.4 |
+| `/painel/clientes` · `/painel/configuracoes` | 6.5 |
+| `/painel/funcionarios` | 6.6, 7.3 |
+| `/painel/relatorios` | 6.7 |
+| `/painel/atendimento` | 6.8, 10.2 |
+| `/painel/entregas` | 8 |
+| `/painel/agente` | 9 |
+| `/painel/notas` · `/painel/fiscal` | 13 |
+| `/painel/assinatura` | 14 |
+| `/revendedor/dashboard` · `/revendedor/clientes` · `/revendedor/leads` | 15 |
+| `/revendedor/financeiro` | 15.4, 15.5, 15.6 |
+| `/super-admin/dashboard` · `/super-admin/empresas` · `/super-admin/empresas/[id]` · `/super-admin/empresas/nova` | 16 |
+| `/super-admin/planos` · `/super-admin/aprovacoes` · `/super-admin/operacao` · `/super-admin/conta` | 16 |
+| `/super-admin/relatorios` | 16.8 |
+| `/super-admin/revendedores` | 15.1 |
+| `/super-admin/atendimento` · `/super-admin/suporte` | 11 |
+
+---
+
 ## 1. Preparação
 
 ### 1.1 Banco descartável
@@ -158,6 +194,35 @@ Um mesmo e-mail pode ter vínculo com mais de uma empresa/papel.
 | 4.4.3 | Escolher contexto que não é seu | Recusado |
 | 4.4.4 | Após trocar, listar pedidos | Só os da empresa do contexto atual |
 
+### 4.5 Conta do usuário e LGPD
+
+Cinco rotas em `/api/users/me`. A exclusão **anonimiza** em vez de apagar: pedido é
+documento fiscal com guarda obrigatória de cinco anos.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 4.5.1 | `PATCH /users/me` alterando nome | Perfil atualizado |
+| 4.5.2 | `POST /users/me/avatar` com imagem | Foto aplicada; arquivo acima de 4 MB recusado |
+| 4.5.3 | Enviar `.exe` como avatar | Recusado |
+| 4.5.4 | `PATCH /users/me/password` com senha atual errada | Recusado |
+| 4.5.5 | Trocar a senha com sucesso | Sessões antigas deixam de valer |
+| 4.5.6 | `GET /users/me/export` | Devolve os dados do titular: perfil, endereços, pedidos |
+| 4.5.7 | `DELETE /users/me` com senha certa | Conta **anonimizada**; login deixa de funcionar |
+| 4.5.8 | Após a exclusão, abrir os pedidos no painel da empresa | Pedidos **continuam existindo**, sem os dados pessoais |
+| 4.5.9 | `DELETE /users/me` com senha errada | Recusado |
+| 4.5.10 | Exportar/excluir a conta de outro usuário | Impossível — a rota opera sempre sobre o token |
+
+### 4.6 Telas de acesso e verificação
+
+| # | Passo | Esperado |
+|---|---|---|
+| 4.6.1 | `/verificar-email` com token do e-mail | Confirma e leva ao login |
+| 4.6.2 | `/recuperar-senha` | Envia o e-mail sem revelar se a conta existe |
+| 4.6.3 | `/redefinir-senha` com token válido | Troca a senha |
+| 4.6.4 | `/redefinir-senha` com token expirado | Recusa com opção de pedir outro |
+| 4.6.5 | `/acesso` e `/acesso/suporte` | Portas do acesso de suporte (ver 16.16) |
+| 4.6.6 | `/acesso/suporte/revendedor` | Mesma checagem, para revendedor |
+
 ---
 
 ## 5. Consumidor
@@ -200,15 +265,27 @@ Um mesmo e-mail pode ter vínculo com mais de uma empresa/papel.
 | 5.3.8 | Abrir `/pedido/[id]` de outro cliente | Negado |
 | 5.3.9 | Loja fechada (fora do horário) | Checkout recusa ou avisa, conforme configuração |
 
-### 5.4 Mesa por QR
+### 5.4 Orçamento, carrinho e repetição
 
 | # | Passo | Esperado |
 |---|---|---|
-| 5.4.1 | `/mesa/[token]` de mesa ativa | Cardápio sem exigir login |
-| 5.4.2 | Lançar dois itens | `DiningOrder` com `source = QR_MESA`, status `RECEBIDO` |
-| 5.4.3 | Token inválido | "QR da mesa não encontrado" |
-| 5.4.4 | Mesa `INATIVA` | Mesma recusa |
-| 5.4.5 | Empresa inativa | Recusado |
+| 5.4.1 | `/carrinho` com itens | Resumo com variações, adicionais e subtotal |
+| 5.4.2 | `POST /me/orders/quote` antes de fechar | Devolve taxa e prazo **sem** criar pedido |
+| 5.4.3 | Orçamento para endereço fora da área | Informa que não atende, sem criar nada |
+| 5.4.4 | `POST /me/orders/:id/repeat` de um pedido antigo | Novo carrinho com os mesmos itens |
+| 5.4.5 | Repetir pedido cujo produto foi desativado | Avisa o que saiu do cardápio, sem quebrar |
+| 5.4.6 | Repetir pedido de outro cliente | Negado |
+| 5.4.7 | `/contratar/sucesso` após contratar | Confirmação com o próximo passo |
+
+### 5.5 Mesa por QR
+
+| # | Passo | Esperado |
+|---|---|---|
+| 5.5.1 | `/mesa/[token]` de mesa ativa | Cardápio sem exigir login |
+| 5.5.2 | Lançar dois itens | `DiningOrder` com `source = QR_MESA`, status `RECEBIDO` |
+| 5.5.3 | Token inválido | "QR da mesa não encontrado" |
+| 5.5.4 | Mesa `INATIVA` | Mesma recusa |
+| 5.5.5 | Empresa inativa | Recusado |
 
 ---
 
@@ -242,6 +319,9 @@ Fluxo: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA 
 | 6.2.8 | Pré-visualizar importação (`import/preview`) | Mostra o que vai entrar **antes** de gravar |
 | 6.2.9 | Aplicar importação (`import/:id/apply`) | Produtos criados, com custo quando informado |
 | 6.2.10 | Importar planilha com coluna faltando | Erro apontando a coluna |
+| 6.2.11 | Criar, renomear e reordenar categorias | Ordem reflete na vitrine |
+| 6.2.12 | Desativar categoria com produtos ativos | Produtos somem da vitrine junto |
+| 6.2.13 | Excluir categoria em uso | Bloqueado ou com aviso do impacto |
 
 ### 6.3 Mesas e salão
 
@@ -254,6 +334,10 @@ Fluxo: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA 
 | 6.3.5 | Fechar com forma de pagamento | Sessão `FECHADA`, mesa `LIVRE` |
 | 6.3.6 | Transferir/juntar mesas (se disponível) | Comanda consolidada sem perder item |
 | 6.3.7 | Reabrir mesa fechada | Conforme a regra: bloqueado ou com registro |
+| 6.3.8 | `tables/overview` — visão do salão | Todas as mesas com estado e valor aberto |
+| 6.3.9 | Garçom A abre comanda; garçom B chama `:id/assume` | B passa a ser o atendente; troca fica registrada |
+| 6.3.10 | Rotacionar o QR (`:id/qr/rotate`, só ADMIN) | Token novo; **o QR antigo para de abrir** |
+| 6.3.11 | Tentar rotacionar como GARCOM | Negado |
 
 ### 6.4 Caixa (9 rotas)
 
@@ -264,6 +348,10 @@ Fluxo: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA 
 | 6.4.3 | Fechar com divergência | Diferença registrada, não bloqueada |
 | 6.4.4 | Abrir dois caixas no mesmo ponto | O segundo é recusado |
 | 6.4.5 | Relatório de fechamento | Bate com pedidos pagos no período |
+| 6.4.6 | Criar e editar ponto de venda (`caixa/pontos`) | Ponto disponível para abrir turno |
+| 6.4.7 | Desativar ponto com turno aberto | Recusado |
+| 6.4.8 | `caixa/turnos/atual` | Devolve o turno aberto do operador, ou vazio |
+| 6.4.9 | Listar movimentos do turno (`:id/movimentos`) | Sangrias e suprimentos na ordem |
 
 ### 6.5 Clientes e configurações
 
@@ -273,6 +361,49 @@ Fluxo: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA 
 | 6.5.2 | Logo da empresa (`me/logo`) | Upload aplicado na vitrine |
 | 6.5.3 | `me/settings` — horário, raio, taxa | Refletem no checkout do consumidor |
 | 6.5.4 | Desativar a empresa | Some da vitrine imediatamente |
+
+### 6.6 Funcionários (5 rotas)
+
+| # | Passo | Esperado |
+|---|---|---|
+| 6.6.1 | Criar um de cada papel (FUNCIONARIO, COZINHA, MOTOBOY, GARCOM) | Nasce com as permissões padrão do papel (7.1) |
+| 6.6.2 | Criar com e-mail já usado | Recusado |
+| 6.6.3 | Editar permissões (`:id/permissions`) | Só as marcadas passam a valer |
+| 6.6.4 | Trocar o papel | Permissões voltam ao padrão do novo papel |
+| 6.6.5 | Desativar funcionário logado em outra aba | Próxima chamada dele é recusada |
+| 6.6.6 | Reativar | Volta a acessar com as permissões que tinha |
+
+### 6.7 Relatórios da empresa (7 rotas)
+
+Confira que cada número bate com o que foi criado nos roteiros anteriores — relatório
+que "abre" mas mostra número errado é o defeito silencioso desta área.
+
+| # | Relatório | O que conferir |
+|---|---|---|
+| 6.7.1 | Vendas (`sales`) | Soma dos pedidos pagos no período; filtro de data funciona |
+| 6.7.2 | Pedidos por situação (`orders-by-status`) | Contagem por status bate com a tela de pedidos |
+| 6.7.3 | Produtos mais vendidos (`top-products`) | Ranking reflete os itens dos pedidos criados |
+| 6.7.4 | Clientes recorrentes (`recurring-customers`) | Quem pediu mais de uma vez aparece |
+| 6.7.5 | Entregas atrasadas (`delayed-deliveries`) | Só o que passou do limiar |
+| 6.7.6 | Desempenho de motoboy (`motoboy-performance`) | Entregas por pessoa e tempo médio |
+| 6.7.7 | Horários de pico (`peak-hours`) | Distribuição por hora, coerente com os horários dos pedidos |
+| 6.7.8 | Empresa sem movimento | Relatório vazio, não erro |
+| 6.7.9 | Abrir como FUNCIONARIO sem `relatorios.visualizar` | Negado |
+
+### 6.8 Acompanhamento em tempo real do dia
+
+Rotas que alimentam o dashboard e os contadores da barra lateral.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 6.8.1 | `orders/today` | Só os pedidos de hoje da empresa |
+| 6.8.2 | `orders/pending-count` | Número bate com os pedidos não finalizados |
+| 6.8.3 | `orders/delayed` | Lista os parados além do limiar |
+| 6.8.4 | `orders/flow` | Devolve o fluxo de status válido, usado pela tela |
+| 6.8.5 | Criar pedido com o dashboard aberto | Contadores sobem sem recarregar |
+| 6.8.6 | `customers/inactive` | Clientes sem pedido no período |
+| 6.8.7 | `/painel/atendimento` | Conversas de WhatsApp da empresa (ver 10.2) |
+| 6.8.8 | `/painel/notas` | Notas fiscais emitidas, com filtro por situação |
 
 ---
 
@@ -452,6 +583,10 @@ O assistente do painel tem ferramentas de leitura e de escrita.
 | 10.1.5 | Atualizar perfil e foto | Refletem no WhatsApp |
 | 10.1.6 | Desconectar | Canal removido; token apagado |
 | 10.1.7 | Ler a credencial pela API | **Nunca** volta em claro |
+| 10.1.8 | Ligar a automação (`channel/whatsapp/automation`) | Respostas automáticas passam a sair |
+| 10.1.9 | Desligar a automação | Mensagem fica só na fila de atendimento humano |
+| 10.1.10 | Webhook de auto-atendimento (`webhooks/gupshup/self-serve`) | Onboarding do número conclui sozinho |
+| 10.1.11 | Super admin gerencia o canal de uma empresa (`messaging/companies/:companyId/whatsapp`) | Consegue conectar/desconectar pela empresa |
 
 ### 10.2 Webhook e conversas
 
@@ -486,6 +621,8 @@ Rascunho: `MONTANDO → AGUARDANDO_CONFIRMACAO → CONCLUIDO` (ou `CANCELADO`).
 | 10.4.2 | Receber mensagem | `platform.whatsapp.message.received` |
 | 10.4.3 | Responder pelo super admin | `platform.whatsapp.message.sent` |
 | 10.4.4 | Conferir isolamento | Mensagem institucional não aparece para nenhuma empresa |
+| 10.4.5 | Perfil e foto do canal institucional | Atualizam sem afetar o canal das empresas |
+| 10.4.6 | Automação institucional | Liga e desliga de forma independente |
 
 ---
 
@@ -550,6 +687,11 @@ Rascunho: `MONTANDO → AGUARDANDO_CONFIRMACAO → CONCLUIDO` (ou `CANCELADO`).
 | 13.3.8 | Pagamento em cartão | XML traz `<card><tpIntegra>2</tpIntegra></card>` |
 | 13.3.9 | `autoEmit` ligado + pedido pago | Nota sai sozinha |
 | 13.3.10 | `autoEmit` ligado + mesa fechada | Nota sai sozinha, sem travar a liberação da mesa |
+| 13.3.11 | `fiscal/nfce/pendentes-emissao` | Lista vendas pagas e mesas fechadas **sem** documento |
+| 13.3.12 | Emitir uma da lista | Sai da lista depois de autorizada |
+| 13.3.13 | Venda com nota rejeitada | **Continua** na lista — ela ainda não tem documento válido |
+| 13.3.14 | Reenviar manualmente (`:id/transmitir`) uma nota em contingência | Transmite; se já autorizada, devolve a existente |
+| 13.3.15 | Reenviar enquanto o worker envia a mesma | Conflito, sem envio duplicado |
 
 ### 13.4 Contingência e falhas
 
@@ -630,6 +772,10 @@ R$ 159,90/mês, 7 dias de teste.
 | 15.1.2 | Super admin aprova | Perfil com **código único** e 30% |
 | 15.1.3 | Reprovar outra | Sem perfil; motivo registrado |
 | 15.1.4 | Login | Cai em `/revendedor/dashboard` |
+| 15.1.5 | `resellers/admin/applications` | Fila de candidaturas para o super admin |
+| 15.1.6 | `resellers/admin/applications/:id/resume` | Resumo da candidatura antes de decidir |
+| 15.1.7 | `resellers/admin/profiles` | Lista os revendedores ativos, com código e situação |
+| 15.1.8 | `resellers/applications/:id/status` | O candidato acompanha sem estar logado como revendedor |
 
 ### 15.2 Recebimento
 
@@ -698,20 +844,29 @@ dias úteis · Crédito 32 dias corridos.
 | 16.5 | `/super-admin/planos` | Preço novo vale para nova contratação, não para as existentes |
 | 16.6 | `/super-admin/aprovacoes` | Aprovar/reprovar candidaturas |
 | 16.7 | `/super-admin/operacao` | Fila de eventos e dead-letters |
-| 16.8 | `/super-admin/relatorios` | Visão global, top empresas, crescimento |
+| 16.8 | `reports/global/overview` | Total de empresas, pedidos e receita da plataforma |
+| 16.8.1 | `reports/global/top-companies` | Ranking coerente com o movimento das empresas |
+| 16.8.2 | `reports/global/growth` | Série temporal de crescimento |
+| 16.8.3 | Abrir relatório global como ADMIN de empresa | Negado |
 | 16.9 | `usage/admin/rates` | Alterar tarifa de consumo |
+| 16.10 | `billing/admin/operational-status` | Situação da fila: pendentes, mortos, atrasos |
+| 16.11 | Reprocessar evento morto (`billing/admin/stripe-events/:id/retry`) | Volta para a fila e é processado |
+| 16.12 | Reprocessar evento já concluído | Não duplica efeito |
+| 16.13 | Trocar o administrador de uma empresa (`companies/:id/admin`) | Novo admin acessa; o anterior perde o painel |
+| 16.14 | `/super-admin/conta` | Perfil e senha do próprio super admin |
+| 16.15 | `permissions` (GET) | Lista as chaves disponíveis, usada na tela de funcionários |
 
-### 16.10 Acesso assumido
+### 16.16 Acesso assumido
 
 | # | Passo | Esperado |
 |---|---|---|
-| 16.10.1 | Gerar link para uma empresa | Validade curta |
-| 16.10.2 | Abrir o link | Entra no painel **daquela empresa** |
-| 16.10.3 | Conferir o token | Papel e `companyId` da empresa; `sub` continua o super admin |
-| 16.10.4 | Reutilizar link consumido | Recusado |
-| 16.10.5 | Encerrar | Volta ao super admin |
-| 16.10.6 | Acesso assumido de revendedor | Escrita bloqueada onde a regra exige |
-| 16.10.7 | Evento `session.revoked` | A sessão assumida cai sozinha ao ser revogada |
+| 16.16.1 | Gerar link para uma empresa | Validade curta |
+| 16.16.2 | Abrir o link | Entra no painel **daquela empresa** |
+| 16.16.3 | Conferir o token | Papel e `companyId` da empresa; `sub` continua o super admin |
+| 16.16.4 | Reutilizar link consumido | Recusado |
+| 16.16.5 | Encerrar | Volta ao super admin |
+| 16.16.6 | Acesso assumido de revendedor | Escrita bloqueada onde a regra exige |
+| 16.16.7 | Evento `session.revoked` | A sessão assumida cai sozinha ao ser revogada |
 
 ---
 
