@@ -102,12 +102,19 @@ Opcionais que ligam áreas inteiras:
 
 | Perfil | E-mail | Senha |
 |---|---|---|
-| SUPER_ADMIN | `SUPER_ADMIN_EMAIL` | `SUPER_ADMIN_PASSWORD` |
+| SUPER_ADMIN | `superadmin@chegowia.com` | `SuperAdmin@123` |
 | ADMIN | `admin@burgerdothiago.com` | `Admin@123` |
 | CLIENTE | `cliente@exemplo.com` | `Cliente@123` |
 
+As credenciais do super admin vêm de `SEED_SUPER_ADMIN_EMAIL` e
+`SEED_SUPER_ADMIN_PASSWORD`; fora de produção o seed usa os valores acima como padrão.
+
 FUNCIONARIO, COZINHA, MOTOBOY, GARCOM e REVENDEDOR **não vêm no seed** — são criados
-nos roteiros 7 e 14.
+nos roteiros 6.6 e 15.
+
+> **Limite de tentativas:** repetir login errado dispara HTTP 429 por alguns instantes.
+> É o comportamento correto — ao roteirizar, espere antes de tentar de novo em vez de
+> tratar como falha.
 
 ### 1.4 Dados de referência
 
