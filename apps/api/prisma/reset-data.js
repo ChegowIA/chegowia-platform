@@ -88,6 +88,56 @@ async function contar(prisma, tabela) {
   return Number(linha.total);
 }
 
+/**
+ * Avisa quando o banco tem registro que não deveria simplesmente sumir.
+ *
+ * Nota fiscal autorizada tem guarda obrigatória de cinco anos — é o mesmo
+ * motivo pelo qual a exclusão de conta pelo titular anonimiza em vez de apagar.
+ * Comissão paga e cobrança quitada são histórico financeiro de terceiros.
+ *
+ * O script não bloqueia: um banco de testes pode ter tudo isso e ser
+ * descartável. Mas ninguém deve apagar essas linhas sem ter visto que existiam.
+ */
+async function avisarSobreRegistrosSensiveis(prisma) {
+  const checagens = [
+    {
+      rotulo: "nota(s) fiscal(is) autorizada(s) ou cancelada(s)",
+      sql: "SELECT COUNT(*) AS total FROM FiscalDocument WHERE status IN ('AUTORIZADA','CANCELADA')",
+      nota: "documento fiscal tem guarda obrigatória de cinco anos",
+    },
+    {
+      rotulo: "comissão(ões) já paga(s) a revendedor",
+      sql: "SELECT COUNT(*) AS total FROM CommissionLedger WHERE status = 'PAGA'",
+      nota: "é histórico de repasse a terceiro",
+    },
+    {
+      rotulo: "assinatura(s) ativa(s) de cliente",
+      sql: "SELECT COUNT(*) AS total FROM ClientSubscription WHERE status = 'ATIVA'",
+      nota: "há cliente pagando hoje",
+    },
+  ];
+
+  const achados = [];
+  for (const { rotulo, sql, nota } of checagens) {
+    try {
+      const [linha] = await prisma.$queryRawUnsafe(sql);
+      const total = Number(linha.total);
+      if (total > 0) achados.push(`  ${total} ${rotulo} — ${nota}`);
+    } catch {
+      // Tabela ausente num banco antigo não pode impedir o diagnóstico.
+    }
+  }
+
+  if (!achados.length) return;
+  console.log("\nATENÇÃO — este banco tem registros que costumam ser definitivos:\n");
+  for (const achado of achados) console.log(achado);
+  console.log(
+    "\n  Se este for o banco de produção, confirme com a contabilidade antes de seguir.\n"
+    + "  Para tirar lojas de teste do ar sem apagar nada, marque a empresa como\n"
+    + "  isTestOnly ou inativa — some do catálogo e é reversível.",
+  );
+}
+
 async function main() {
   const prisma = new PrismaClient();
   try {
@@ -118,6 +168,8 @@ async function main() {
     for (const tabela of [...PRESERVADAS].filter((t) => !t.startsWith("_")).sort()) {
       console.log(`  tabela       ${tabela} (${await contar(prisma, tabela)} linha(s))`);
     }
+
+    await avisarSobreRegistrosSensiveis(prisma);
 
     console.log("\nSerão apagados:");
     let total = 0;
