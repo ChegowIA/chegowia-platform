@@ -281,6 +281,49 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Troca a forma de pagamento da assinatura.
+   *
+   * O valor muda junto, porque só o cartão carrega a taxa — então a troca
+   * precisa alcançar dois lugares: a assinatura, que dita as cobranças
+   * futuras, e a fatura em aberto, que é a que o cliente vai pagar agora. Sem
+   * o segundo, quem trocasse para Pix continuaria vendo o preço do cartão no
+   * boleto do mês.
+   *
+   * A troca vale a cada mês: nada aqui prende o cliente à escolha da ativação.
+   */
+  async changeCompanyBillingType(companyId: string, billingType: AsaasBillingType) {
+    const subscription = await this.db().clientSubscription.findUnique({
+      where: { companyId },
+      include: { plan: true },
+    });
+    if (!subscription) throw new NotFoundException("Assinatura não encontrada.");
+    if (this.billingProvider() !== "ASAAS") {
+      throw new BadRequestException("A troca de forma de pagamento está disponível apenas no provedor atual.");
+    }
+
+    const value = this.chargeValueForBillingType(subscription, billingType);
+
+    if (subscription.asaasSubscriptionId) {
+      await this.asaas.updateSubscription(subscription.asaasSubscriptionId, { value, billingType });
+    }
+
+    // A cobrança em aberto é atualizada separadamente: alterar a assinatura só
+    // alcança o que ainda vai ser gerado.
+    let invoiceUrl: string | null = null;
+    if (subscription.asaasPaymentId) {
+      const atual = await this.asaas.findPayment(subscription.asaasPaymentId).catch(() => null);
+      const quitada = ["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"].includes(String(atual?.status ?? ""));
+      if (atual && !quitada) {
+        const atualizada = await this.asaas.updatePayment(subscription.asaasPaymentId, { value, billingType });
+        invoiceUrl = atualizada?.invoiceUrl ?? atual.invoiceUrl ?? null;
+      }
+    }
+
+    this.logger.log(`Empresa ${companyId} passou a pagar por ${billingType}; valor da cobrança agora é ${value}.`);
+    return { billingType, value, invoiceUrl };
+  }
+
+  /**
    * Não usamos uma taxa configurável na emissão: o programa comercial vigente
    * promete 30%, e a taxa gravada no razão é o snapshot auditável dessa regra.
    * Se houver dado legado divergente, preservamos o registro antigo, mas nunca
@@ -2267,40 +2310,78 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return vencidas.length;
   }
 
+  /**
+   * Roda um job da rodada sem deixar que ele derrube os outros.
+   *
+   * Antes, os jobs eram chamados em sequência e sem proteção: uma exceção em
+   * qualquer um pulava todos os seguintes. Na prática isso significava que uma
+   * indisponibilidade do Asaas em "conciliar consumo" também parava o alerta de
+   * dead-letter e o processamento de repasses, sem ninguém perceber — a rodada
+   * seguinte tentava tudo de novo e falhava no mesmo ponto.
+   *
+   * Devolve se o job passou, porque uma das dependências de ordem da rodada
+   * precisa saber disso.
+   */
+  private async runJob(nome: string, job: () => Promise<unknown>) {
+    try {
+      await job();
+      return true;
+    } catch (error) {
+      this.logger.error(`Job "${nome}" falhou nesta rodada.`, this.stripeErrorForLog(error));
+      return false;
+    }
+  }
+
   private async processBackgroundJobs() {
     if (this.backgroundJobsRunning) return;
     this.backgroundJobsRunning = true;
     try {
-      await this.processPendingStripeEvents();
+      await this.runJob("eventos-stripe", () => this.processPendingStripeEvents());
       // Reserva pós-crédito opcional: a liberação não depende de o revendedor
       // abrir o painel, e a notificação sai só depois de o saldo estar sacável.
-      await this.releaseMatureCommissions();
-      await this.processPendingPayouts();
+      await this.runJob("liberar-comissoes", () => this.releaseMatureCommissions());
+      await this.runJob("repasses", () => this.processPendingPayouts());
+
       // Recupere primeiro uma renovação Asaas já paga cujo webhook se perdeu.
       // Só depois disso a data local pode transformar o acesso em inadimplência.
+      //
+      // Esta é a única dependência de ordem da rodada, e por isso ela é
+      // explícita: se a recuperação falhar, o corte por data **não** roda. Um
+      // cliente que pagou e cujo webhook se perdeu perderia o acesso por um
+      // erro nosso, e ele só descobriria com a loja no ar e o painel fechado.
+      let recuperacaoOk = true;
       if (this.asaas.isConfigured()) {
-        await this.reconcilePendingAsaasPayments();
-        await this.reconcilePaidAsaasRenewals();
-        await this.reconcilePendingAsaasCommissions();
-        await this.syncExpiredReferralDiscounts();
+        recuperacaoOk = await this.runJob("asaas-pagamentos-pendentes", () => this.reconcilePendingAsaasPayments());
+        recuperacaoOk = await this.runJob("asaas-renovacoes-pagas", () => this.reconcilePaidAsaasRenewals()) && recuperacaoOk;
+        await this.runJob("asaas-comissoes-pendentes", () => this.reconcilePendingAsaasCommissions());
+        await this.runJob("desconto-indicacao", () => this.syncExpiredReferralDiscounts());
       }
+
       // O fim do período é suficiente para interromper o acesso, mesmo se o
       // provedor externo estiver fora, com webhook atrasado ou sem configuração
       // temporariamente. Cada provedor ainda concilia pagamento em seguida.
-      await this.reconcileExpiredSubscriptionPeriods();
+      if (recuperacaoOk) {
+        await this.runJob("periodos-vencidos", () => this.reconcileExpiredSubscriptionPeriods());
+      } else {
+        this.logger.warn(
+          "Corte de acesso por vencimento adiado: a conciliação de pagamentos do Asaas falhou nesta rodada "
+          + "e cortar agora poderia atingir quem já pagou.",
+        );
+      }
+
       // O provedor global decide novas contratações, não o provedor de cada
       // assinatura existente. Durante uma migração podemos ter assinaturas dos
       // dois lados; deixar de conciliar uma delas porque o padrão mudou abre
       // justamente a brecha de cobrança que esta rotina existe para fechar.
       if (this.asaas.isConfigured()) {
-        await this.reconcileOverdueAsaasPayments();
-        await this.reconcileOrphanUsage();
-        await this.syncVariableUsageToAsaas();
+        await this.runJob("asaas-vencidos", () => this.reconcileOverdueAsaasPayments());
+        await this.runJob("consumo-orfao", () => this.reconcileOrphanUsage());
+        await this.runJob("consumo-asaas", () => this.syncVariableUsageToAsaas());
       }
       if (this.stripe) {
-        await this.syncVariableUsageToStripe();
+        await this.runJob("consumo-stripe", () => this.syncVariableUsageToStripe());
       }
-      await this.alertDeadLetters();
+      await this.runJob("dead-letters", () => this.alertDeadLetters());
     } catch (error) {
       // Chamado por `setInterval` sem quem espere a promessa: uma exceção que
       // escapasse daqui viraria unhandled rejection e derrubaria o processo do

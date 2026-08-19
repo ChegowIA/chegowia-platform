@@ -141,6 +141,18 @@ export default function SubscriptionPage() {
       options: Array<{ billingType: "PIX" | "BOLETO" | "CREDIT_CARD"; label: string; value: number; note: string }>;
     },
   });
+  // A troca vale a cada mês: atualiza a fatura em aberto e as próximas.
+  const trocarForma = useMutation({
+    mutationFn: async (billingType: "PIX" | "BOLETO" | "CREDIT_CARD") =>
+      (await api.post("/billing/company/payment-method", { billingType })).data as {
+        billingType: string; value: number; invoiceUrl?: string | null;
+      },
+    onSuccess: (resultado) => {
+      queryClient.invalidateQueries({ queryKey: ["company-payment-options"] });
+      queryClient.invalidateQueries({ queryKey: ["company-billing-status"] });
+      if (resultado.invoiceUrl) abrirFatura(resultado.invoiceUrl);
+    },
+  });
   const activate = useMutation({
     mutationFn: async () => (await api.post("/billing/company/checkout", { billingType: formaPagamento })).data as { url?: string; activated?: boolean },
     onSuccess: (result) => {
@@ -280,7 +292,7 @@ export default function SubscriptionPage() {
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}
           </div> : canPayAsaas ? <>
             <Button className="mt-6" onClick={() => data?.payableInvoice?.url && abrirFatura(data.payableInvoice.url)}>Pagar fatura pendente</Button>
-            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">A forma de pagamento é escolhida na própria fatura: Pix, boleto ou cartão.</p>
+            {formasPagamento?.options?.length ? <div className="mt-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Forma de pagamento desta fatura</p><div className="mt-2 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" disabled={trocarForma.isPending} onClick={() => { setFormaPagamento(opcao.billingType); trocarForma.mutate(opcao.billingType); }} className={`rounded-2xl border p-3 text-left transition disabled:opacity-60 ${formaPagamento === opcao.billingType ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-950/30" : "border-slate-200 bg-white hover:border-brand-300 dark:border-slate-800 dark:bg-slate-900"}`}><span className="block text-sm font-black text-slate-900 dark:text-white">{opcao.label}</span><span className="mt-0.5 block text-lg font-black text-brand-700 dark:text-brand-300">{formatCurrency(opcao.value)}</span><span className="mt-0.5 block text-[11px] leading-4 text-slate-500 dark:text-slate-400">{opcao.note}</span></button>)}</div><p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Pode trocar quando quiser: a fatura em aberto é atualizada na hora e as próximas seguem a nova escolha.</p>{trocarForma.error && <p className="mt-2 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(trocarForma.error)}</p>}</div> : null}
             {faturaAberta && <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Abrimos a fatura em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui</a>.</p>}
           </> : canOpenStripePortal ? <>
             <Button className="mt-6" isLoading={portal.isPending} onClick={() => portal.mutate()}>Abrir portal seguro do Stripe</Button>

@@ -87,13 +87,18 @@ describe("varrimento da home do marketplace", () => {
     expect(resultado.sections[0].categoryId).toBe("pizzas");
   });
 
-  it("filtra a cidade nas três consultas, sem sobrescrever o filtro da empresa", async () => {
+  /**
+   * Igualdade, e não `contains`: com substring, um cliente em "Rio Branco"
+   * receberia lojas de "Rio Branco do Sul", que fica em outro estado. Acento e
+   * caixa continuam sendo ignorados pela collation da coluna.
+   */
+  it("filtra a cidade por igualdade nas três consultas, sem sobrescrever o filtro da empresa", async () => {
     const { service, findMany } = build();
 
     await service.getMarketplace({ city: "Belo Horizonte", categoryId: "pizzas" });
 
     for (const [args] of findMany.mock.calls) {
-      expect(args.where.company.is).toMatchObject({ isActive: true, city: { contains: "Belo Horizonte" } });
+      expect(args.where.company.is).toMatchObject({ isActive: true, city: "Belo Horizonte" });
     }
   });
 });

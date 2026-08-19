@@ -477,6 +477,59 @@ describe("desconto do código de indicação", () => {
     expect(valor).toBe(140.61);
   });
 
+  it("trocar a forma atualiza a assinatura e a fatura em aberto", async () => {
+    const asaas = {
+      isConfigured: () => true,
+      updateSubscription: jest.fn().mockResolvedValue({}),
+      findPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", invoiceUrl: "https://asaas/fatura" }),
+      updatePayment: jest.fn().mockResolvedValue({ id: "pay_1", invoiceUrl: "https://asaas/fatura-nova" }),
+    };
+    const prisma = {
+      clientSubscription: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "assin-1", plan: plano, monthlyPriceSnapshot: 159.9, resellerId: null,
+          asaasSubscriptionId: "sub_1", asaasPaymentId: "pay_1",
+        }),
+      },
+    };
+    const service = buildBillingService({ prisma, asaas }) as any;
+    service.onModuleDestroy();
+    process.env.BILLING_PROVIDER = "ASAAS";
+
+    const resultado = await service.changeCompanyBillingType("empresa-1", "CREDIT_CARD");
+
+    // A assinatura dita as próximas cobranças; a fatura em aberto é a de agora.
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 165.33, billingType: "CREDIT_CARD" });
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", { value: 165.33, billingType: "CREDIT_CARD" });
+    expect(resultado.invoiceUrl).toBe("https://asaas/fatura-nova");
+  });
+
+  it("fatura já paga não é reaberta pela troca de forma", async () => {
+    const asaas = {
+      isConfigured: () => true,
+      updateSubscription: jest.fn().mockResolvedValue({}),
+      findPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "RECEIVED" }),
+      updatePayment: jest.fn(),
+    };
+    const prisma = {
+      clientSubscription: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "assin-1", plan: plano, monthlyPriceSnapshot: 159.9, resellerId: null,
+          asaasSubscriptionId: "sub_1", asaasPaymentId: "pay_1",
+        }),
+      },
+    };
+    const service = buildBillingService({ prisma, asaas }) as any;
+    service.onModuleDestroy();
+    process.env.BILLING_PROVIDER = "ASAAS";
+
+    await service.changeCompanyBillingType("empresa-1", "PIX");
+
+    // Mexer no valor de uma cobrança quitada seria reescrever o passado.
+    expect(asaas.updatePayment).not.toHaveBeenCalled();
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 159.9, billingType: "PIX" });
+  });
+
   it("assinatura já ajustada não é cobrada de novo pela varredura", async () => {
     const { service, asaas } = servico({ vencidas: [] });
 

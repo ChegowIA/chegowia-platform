@@ -330,12 +330,18 @@ export class ToolsService {
 
     const visibility = this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false };
     const companyWhere: any = { isActive: true, ...visibility };
-    if (city) companyWhere.city = { contains: city };
+    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
+    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
+    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
+    if (city) companyWhere.city = city;
     const companySearch = buildCompanySearch(tokens);
     if (companySearch.length) companyWhere.OR = companySearch;
 
     const productCompanyWhere: any = { isActive: true, ...(visibility ?? {}) };
-    if (city) productCompanyWhere.city = { contains: city };
+    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
+    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
+    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
+    if (city) productCompanyWhere.city = city;
     const productWhere: any = { isActive: true, company: { is: productCompanyWhere } };
     const productSearch = buildProductSearch(tokens);
     if (productSearch.length) productWhere.OR = productSearch;
