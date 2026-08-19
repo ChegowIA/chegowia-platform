@@ -15,3 +15,9 @@ export class CompanyCheckoutDto {
   })
   billingType?: "PIX" | "BOLETO" | "CREDIT_CARD";
 }
+
+/** Troca da forma de pagamento de uma assinatura já ativa. */
+export class ChangeBillingTypeDto {
+  @IsIn(["PIX", "BOLETO", "CREDIT_CARD"], { message: "Forma de pagamento inválida." })
+  billingType: "PIX" | "BOLETO" | "CREDIT_CARD";
+}

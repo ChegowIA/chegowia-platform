@@ -10,7 +10,7 @@ import { Roles } from "../common/decorators/roles.decorator";
 import { BlockResellerSupportWrite } from "../common/decorators/block-reseller-support-write.decorator";
 import { BillingService } from "./billing.service";
 import { ClientApplicationDto } from "./dto/client-application.dto";
-import { CompanyCheckoutDto } from "./dto/company-checkout.dto";
+import { ChangeBillingTypeDto, CompanyCheckoutDto } from "./dto/company-checkout.dto";
 import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
 import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
@@ -136,6 +136,20 @@ export class BillingController {
     @Body() dto: CompanyCheckoutDto,
   ) {
     return this.billing.companyCheckout(companyId, dto?.billingType);
+  }
+
+  /**
+   * Troca a forma de pagamento. Vale a qualquer momento: a fatura em aberto é
+   * atualizada junto, e as próximas seguem a nova escolha.
+   */
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Post("company/payment-method")
+  changeBillingType(
+    @CurrentUser("companyId") companyId: string,
+    @Body() dto: ChangeBillingTypeDto,
+  ) {
+    return this.billing.changeCompanyBillingType(companyId, dto.billingType);
   }
 
   /** Formas de pagamento e o valor de cada uma; só o cartão carrega a taxa. */

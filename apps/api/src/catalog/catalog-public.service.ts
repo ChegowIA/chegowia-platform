@@ -191,7 +191,10 @@ export class CatalogPublicService {
     const publicTypeId = params.categoryId?.trim();
 
     const companyFilter: any = await this.publicCompanyWhere(viewer);
-    if (city) companyFilter.city = { contains: city };
+    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
+    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
+    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
+    if (city) companyFilter.city = city;
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },
@@ -328,7 +331,10 @@ export class CatalogPublicService {
     const terms = Array.from(new Set([...params.terms, ...typeKeywords].filter((t) => t && t.length >= 3))).slice(0, 40);
 
     const companyFilter: any = await this.publicCompanyWhere(viewer);
-    if (city) companyFilter.city = { contains: city };
+    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
+    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
+    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
+    if (city) companyFilter.city = city;
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },

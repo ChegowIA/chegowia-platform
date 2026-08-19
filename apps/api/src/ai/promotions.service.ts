@@ -31,7 +31,10 @@ export class PromotionsService {
       isActive: true,
       ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
     };
-    if (city) companyWhere.city = { contains: city };
+    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
+    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
+    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
+    if (city) companyWhere.city = city;
     return this.db().promotion.findMany({
       where: {
         status: PromotionStatus.ATIVA,
