@@ -222,3 +222,67 @@ describe("login multiacesso do superadmin", () => {
     });
   });
 });
+
+/**
+ * Empresa desativada e login.
+ *
+ * O `AccountStatusGuard` já recusava toda requisição de uma empresa inativa, mas
+ * o login continuava emitindo token: a pessoa entrava, o painel abria e cada
+ * consulta voltava 403. Na tela isso parece "consigo acessar normalmente", e
+ * quem desativou a conta acredita que a desativação não funcionou.
+ */
+describe("login com empresa desativada", () => {
+  function build(overrides: any = {}) {
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: "u1",
+          email: "admin@loja.com",
+          passwordHash: "$2b$04$abcdefghijklmnopqrstuv",
+          role: overrides.role ?? "ADMIN",
+          companyId: overrides.companyId ?? "emp-1",
+          isActive: true,
+          emailVerifiedAt: new Date(),
+        }),
+      },
+      company: {
+        findUnique: jest.fn().mockResolvedValue({ isActive: overrides.companyAtiva ?? true }),
+      },
+    };
+    const service: any = Object.create(AuthService.prototype);
+    service.db = () => prisma;
+    return { service, prisma };
+  }
+
+  it("recusa a entrada de quem trabalha numa empresa desativada", async () => {
+    const { service } = build({ companyAtiva: false });
+    jest.spyOn(require("bcrypt"), "compare").mockResolvedValue(true as never);
+
+    await expect(service.validateUser("admin@loja.com", "senha"))
+      .rejects.toThrow(/empresa está desativada/);
+  });
+
+  it("empresa ativa entra normalmente", async () => {
+    const { service } = build({ companyAtiva: true });
+    jest.spyOn(require("bcrypt"), "compare").mockResolvedValue(true as never);
+
+    await expect(service.validateUser("admin@loja.com", "senha")).resolves.toMatchObject({ id: "u1" });
+  });
+
+  it("super administrador não tem empresa e não é barrado", async () => {
+    const { service, prisma } = build({ role: "SUPER_ADMIN", companyId: null });
+    jest.spyOn(require("bcrypt"), "compare").mockResolvedValue(true as never);
+
+    await expect(service.validateUser("super@chegowia.com", "senha")).resolves.toMatchObject({ id: "u1" });
+    // Sem empresa vinculada, nem consulta a tabela.
+    expect(prisma.company.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("cliente consumidor não é barrado por empresa", async () => {
+    const { service, prisma } = build({ role: "CLIENTE", companyId: null });
+    jest.spyOn(require("bcrypt"), "compare").mockResolvedValue(true as never);
+
+    await expect(service.validateUser("cliente@exemplo.com", "senha")).resolves.toMatchObject({ id: "u1" });
+    expect(prisma.company.findUnique).not.toHaveBeenCalled();
+  });
+});
