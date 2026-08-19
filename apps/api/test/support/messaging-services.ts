@@ -67,8 +67,13 @@ export function buildBillingService(deps: {
   mail?: Dep;
   asaas?: Dep;
 } = {}) {
+  // `companyBillingStatus` consulta a empresa para dizer à tela se a conta está
+  // ativa. Sem um padrão aqui, todo teste de cobrança precisaria repetir esse
+  // mock só para não estourar em um dado que não é o assunto dele.
+  const prisma: any = { ...(deps.prisma ?? {}) };
+  prisma.company ??= { findUnique: async () => ({ isActive: true }) };
   return new BillingService(
-    (deps.prisma ?? {}) as never,
+    prisma as never,
     (deps.ai ?? {}) as never,
     (deps.auth ?? {}) as never,
     (deps.usage ?? {}) as never,

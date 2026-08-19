@@ -70,7 +70,7 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
   const canSeeOrders = Boolean(user && NAV_ITEMS.find((item) => item.href === "/painel/pedidos") && canUsePanelItem(user, NAV_ITEMS.find((item) => item.href === "/painel/pedidos")!));
   const {data:billingStatus}=useQuery({
     queryKey:["company-billing-status"],
-    queryFn:async()=>(await api.get("/billing/company/status")).data as {accessRestricted:boolean},
+    queryFn:async()=>(await api.get("/billing/company/status")).data as {accessRestricted:boolean;companyActive?:boolean},
     enabled:user?.role===Role.ADMIN && Boolean(accessToken) && !isSessionLoading,
     retry:false,
   });
@@ -160,6 +160,14 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
   const isAuditedSupportAccess = Boolean(
     user?.actorRole === Role.SUPER_ADMIN && user.impersonation?.supportAccess,
   );
+  /**
+   * Acesso de suporte passa por cima do bloqueio de empresa inativa, o que é
+   * proposital — é quando alguém mais precisa entrar para entender o que
+   * aconteceu. Sem este aviso, porém, a conta desativada parecia uma conta
+   * normal, e quem desativou concluía que a desativação não tinha funcionado.
+   */
+  const suporteEmEmpresaInativa = isAuditedSupportAccess && billingStatus?.companyActive === false;
+
   const billingLocked =
     user?.role === Role.ADMIN
     && !isAuditedSupportAccess
@@ -270,6 +278,17 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <main className="w-full min-w-0 max-w-full overflow-x-clip px-3 pb-28 pt-[77px] sm:px-6 sm:pt-[85px] md:pb-6 lg:px-8 lg:pt-[93px]">
+          {suporteEmEmpresaInativa && (
+            <div className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-800/70 dark:bg-amber-950/30">
+              <p className="text-sm font-black text-amber-900 dark:text-amber-200">
+                Esta empresa está desativada.
+              </p>
+              <p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-300/90">
+                Você está vendo o painel pelo acesso de suporte. Os usuários dela não conseguem entrar,
+                a loja não aparece no catálogo e a assinatura foi encerrada no provedor.
+              </p>
+            </div>
+          )}
           <SuperAdminImpersonationBanner />
           {children}
         </main>

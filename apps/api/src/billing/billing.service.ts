@@ -1124,10 +1124,22 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * Situação de cobrança da empresa.
+   *
+   * Devolve também se a empresa está ativa: quem entra por acesso de suporte
+   * passa por cima do bloqueio, e sem esse dado a tela não teria como avisar que
+   * está dentro de uma conta desativada — parecia uma empresa normal.
+   */
   async companyBillingStatus(companyId: string) {
     const enforcementEnabled = process.env.BILLING_ENFORCEMENT === "true"
       || (process.env.NODE_ENV === "production" && process.env.BILLING_ENFORCEMENT !== "false");
     const now = new Date();
+    const empresa = await this.db().company.findUnique({
+      where: { id: companyId },
+      select: { isActive: true },
+    });
+    const companyActive = empresa?.isActive !== false;
     let subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
       include: { plan: true, reseller: { include: { user: { select: { name: true } } } } },
@@ -1139,6 +1151,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         manageable: false,
         payableInvoice: null,
         accessRestricted: enforcementEnabled,
+        companyActive,
         usage,
       };
     }
@@ -1227,6 +1240,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       manageable: Boolean(subscription.stripeCustomerId || subscription.asaasSubscriptionId),
       payableInvoice,
       accessRestricted: trialExpired || (enforcementEnabled && !trialActive && subscription.status !== SubscriptionStatus.ATIVA),
+      companyActive,
       activationAvailable: trialExpired,
       trial: subscription.trialStartedAt || subscription.trialEndsAt
         ? {
@@ -1416,7 +1430,15 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * período já pago: cancelar não devolve dinheiro, e cortar na hora seria tirar
    * algo que ele pagou.
    */
-  async cancelCompanySubscription(companyId: string) {
+  /**
+   * Encerra a assinatura da empresa no provedor.
+   *
+   * `imediato` existe para a desativação pelo super admin: ali o acesso já foi
+   * revogado, então guardar o resto do período pago só deixaria uma assinatura
+   * marcada como ATIVA numa conta que ninguém consegue usar. No cancelamento
+   * pedido pelo próprio lojista o período pago continua valendo.
+   */
+  async cancelCompanySubscription(companyId: string, { imediato = false }: { imediato?: boolean } = {}) {
     const subscription = await this.db().clientSubscription.findUnique({ where: { companyId } });
     if (!subscription) throw new NotFoundException("Assinatura não encontrada para esta empresa.");
     if (subscription.status === SubscriptionStatus.CANCELADA) {
@@ -1445,16 +1467,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     // No Asaas, cancelar a assinatura só impede cobranças futuras; o acesso
     // segue até o fim do período pago.
     const fimDoPeriodo = subscription.currentPeriodEnd ?? null;
+    const preservaPeriodo = !imediato && Boolean(fimDoPeriodo && fimDoPeriodo > new Date());
     await this.db().clientSubscription.update({
       where: { id: subscription.id },
       data: {
         canceledAt: new Date(),
         // Sem período pago em curso não há o que preservar.
-        ...(fimDoPeriodo && fimDoPeriodo > new Date() ? {} : { status: SubscriptionStatus.CANCELADA }),
+        ...(preservaPeriodo ? {} : { status: SubscriptionStatus.CANCELADA }),
       },
     });
     this.logger.log(`Assinatura ${subscription.id} cancelada a pedido da empresa ${companyId}.`);
-    return { status: SubscriptionStatus.CANCELADA, endsAt: fimDoPeriodo, scheduled: Boolean(fimDoPeriodo && fimDoPeriodo > new Date()) };
+    return { status: SubscriptionStatus.CANCELADA, endsAt: fimDoPeriodo, scheduled: preservaPeriodo };
   }
 
   /**
