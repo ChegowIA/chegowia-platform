@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { Role } from "@prisma/client";
 import * as bcrypt from "bcrypt";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
@@ -8,6 +8,7 @@ import { slugify } from "../common/utils/slugify";
 import { CreateCompanyDto } from "./dto/create-company.dto";
 import { UpdateCompanyDto } from "./dto/update-company.dto";
 import { CreateCompanyAdminDto } from "./dto/create-company-admin.dto";
+import { BillingService } from "../billing/billing.service";
 import { UpdateCompanySettingsDto } from "./dto/update-company-settings.dto";
 import { normalizeBrazilDocument } from "../common/validators/brazil-document.validator";
 import { AuthService } from "../auth/auth.service";
@@ -18,6 +19,8 @@ import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-da
 
 @Injectable()
 export class CompaniesService {
+  private readonly logger = new Logger(CompaniesService.name);
+
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly auth: AuthService,
@@ -25,6 +28,8 @@ export class CompaniesService {
     // Opcional apenas para manter testes unitários que instanciam o serviço
     // diretamente. No app real o módulo global sempre o injeta.
     private readonly legacyTestData?: LegacyTestDataService,
+    // Idem: opcional para os testes que instanciam o serviço direto.
+    private readonly billing?: BillingService,
   ) {}
 
   private db() {
@@ -166,9 +171,40 @@ export class CompaniesService {
     }
   }
 
+  /**
+   * Ativa ou desativa a empresa.
+   *
+   * Desativar encerra a assinatura no provedor antes de mexer no cadastro. A
+   * ordem importa: marcar a empresa como inativa e falhar no cancelamento
+   * deixaria o lojista sem acesso e ainda pagando — o pior dos dois lados. Por
+   * isso, se o provedor recusar, a desativação não acontece e o erro sobe.
+   *
+   * Não é reversível pelo botão: reativar a empresa devolve o acesso, mas a
+   * assinatura precisa ser contratada de novo.
+   */
   async setActive(id: string, isActive: boolean) {
     await this.findById(id);
-    return this.db().company.update({ where: { id }, data: { isActive } });
+
+    if (!isActive && this.billing) {
+      try {
+        await this.billing.cancelCompanySubscription(id, { imediato: true });
+      } catch (error) {
+        // Empresa sem assinatura é caso normal: nasceu, nunca contratou, e está
+        // sendo desativada. Só o que impede o cancelamento de verdade é que
+        // deve barrar a desativação.
+        const semAssinatura = error instanceof NotFoundException
+          || (error instanceof BadRequestException && /não possui uma assinatura/.test(error.message));
+        if (!semAssinatura) throw error;
+      }
+    }
+
+    const empresa = await this.db().company.update({ where: { id }, data: { isActive } });
+    this.logger.log(
+      isActive
+        ? `Empresa ${id} reativada. A assinatura precisa ser contratada de novo.`
+        : `Empresa ${id} desativada e assinatura encerrada no provedor.`,
+    );
+    return empresa;
   }
 
   async createAdmin(companyId: string, dto: CreateCompanyAdminDto) {

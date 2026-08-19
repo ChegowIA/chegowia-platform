@@ -141,6 +141,31 @@ export class AuthService {
         "Confirme seu e-mail antes de entrar. Se necessário, solicite um novo link de confirmação.",
       );
     }
+
+    /**
+     * Empresa desativada barra a entrada de quem trabalha nela.
+     *
+     * O `AccountStatusGuard` já recusava toda requisição dessa empresa, mas o
+     * login continuava emitindo token: a pessoa entrava, o painel abria e cada
+     * consulta voltava 403. Na tela isso parece "consigo acessar normalmente" —
+     * e o super administrador que desativou a conta acredita que a desativação
+     * não funcionou.
+     *
+     * O acesso de suporte não passa por aqui: ele é consumido por link próprio,
+     * e precisa continuar funcionando justamente quando a empresa está inativa.
+     */
+    if (AuthService.COMPANY_ROLES.includes(user.role) && user.companyId) {
+      const company = await this.db().company.findUnique({
+        where: { id: user.companyId },
+        select: { isActive: true },
+      });
+      if (!company?.isActive) {
+        throw new UnauthorizedException(
+          "A conta da sua empresa está desativada. Fale com o suporte da ChegowIA.",
+        );
+      }
+    }
+
     return user;
   }
 
