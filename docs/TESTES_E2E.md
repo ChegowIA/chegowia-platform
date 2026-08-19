@@ -1,16 +1,17 @@
 # Testes de ponta a ponta — ChegowIA
 
-Roteiro para validar o sistema inteiro, área por área e perfil por perfil.
+Roteiro para validar o sistema inteiro: 32 controllers, ~248 rotas, 8 perfis de
+acesso, 4 assistentes de IA, canal de WhatsApp, entregas com rota real, emissão
+fiscal e cobrança recorrente.
 
-**Para a IA que vai executar:** rode primeiro a seção 2 (automatizado). Ela é rápida
-e pega regressão de lógica. Os roteiros manuais das seções 4 em diante existem para
-o que teste automatizado não alcança: navegação real, permissão de tela, integração
-com Asaas e SEFAZ, e o comportamento visto pelo consumidor.
+**Para a IA que vai executar:** rode primeiro a seção 2 (automatizado) — é rápida e
+pega regressão de lógica. Os roteiros manuais existem para o que teste automatizado
+não alcança: navegação real, permissão de tela por papel, integração com Asaas,
+SEFAZ, OSRM e Gupshup, e o que o consumidor enxerga.
 
-Ao executar um roteiro, **relate o que aconteceu de verdade**. Um passo que você não
-conseguiu executar não é um passo que passou — diga que não executou e por quê. Se
-um resultado divergir do esperado, registre a divergência com o que apareceu na tela,
-no log da API e no banco, sem tentar consertar antes de reportar.
+**Relate o que aconteceu de verdade.** Um passo que você não conseguiu executar não
+é um passo que passou — diga que não executou e por quê. Divergência se registra com
+o que apareceu na tela, no log da API e no banco, **sem consertar antes de reportar**.
 
 ---
 
@@ -18,26 +19,25 @@ no log da API e no banco, sem tentar consertar antes de reportar.
 
 ### 1.1 Banco descartável
 
-Os testes e2e apagam dados. O harness recusa rodar contra um schema que não termine
-em `_e2e`, mas o roteiro manual usa o banco de desenvolvimento — **nunca aponte
-qualquer coisa daqui para produção**.
+Os testes e2e apagam dados. O harness recusa schema que não termine em `_e2e`, mas o
+roteiro manual usa o banco de desenvolvimento — **nunca aponte nada daqui para produção**.
 
 ```sh
 docker run -d --name chegowia-teste \
   -e MYSQL_ROOT_PASSWORD=teste -e MYSQL_DATABASE=chegowia \
   -p 3399:3306 mysql:8.0
-
-# espere ficar de pé
 until docker exec chegowia-teste mysqladmin ping -h 127.0.0.1 -uroot -pteste --silent; do sleep 1; done
 
 export DATABASE_URL="mysql://root:teste@127.0.0.1:3399/chegowia"
-npm run prisma:migrate --workspace apps/api   # ou: prisma migrate deploy
+npm run prisma:migrate --workspace apps/api
 npm run prisma:seed --workspace apps/api
 ```
 
 Ao terminar: `docker rm -f chegowia-teste`.
 
-### 1.2 Variáveis mínimas para subir a API
+### 1.2 Variáveis
+
+Mínimo para subir:
 
 ```sh
 DATABASE_URL="mysql://root:teste@127.0.0.1:3399/chegowia"
@@ -48,42 +48,50 @@ FISCAL_ENCRYPTION_KEY="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 WHATSAPP_TOKEN_ENCRYPTION_KEY="ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
 ```
 
-`npm run dev:api` e `npm run dev:web`. A API sobe em `:3001` com prefixo `/api`,
-o web em `:3000`.
+Opcionais que ligam áreas inteiras:
+
+| Variável | Liga |
+|---|---|
+| `ROUTING_BASE_URL` | rota/distância real (OSRM). Sem ela, usa o servidor público |
+| `DEEPSEEK_API_KEY` | todos os assistentes de IA |
+| `GUPSHUP_ENABLED` + `GUPSHUP_API_KEY` + `GUPSHUP_WEBHOOK_TOKEN` | canal de WhatsApp |
+| `BILLING_PROVIDER=ASAAS` + `ASAAS_API_KEY` + `ASAAS_WEBHOOK_TOKEN` | cobrança |
+| `METRICS_TOKEN` | `/api/health/metrics` |
+| `OPS_ALERT_EMAIL` + SMTP | alertas operacionais |
+| `APP_ROLE` | `api` (só HTTP), `worker` (só jobs), vazio = ambos |
+
+`npm run dev:api` (porta 3001, prefixo `/api`) e `npm run dev:web` (porta 3000).
 
 ### 1.3 Credenciais do seed
 
 | Perfil | E-mail | Senha |
 |---|---|---|
-| SUPER_ADMIN | definido em `SUPER_ADMIN_EMAIL` | `SUPER_ADMIN_PASSWORD` |
+| SUPER_ADMIN | `SUPER_ADMIN_EMAIL` | `SUPER_ADMIN_PASSWORD` |
 | ADMIN | `admin@burgerdothiago.com` | `Admin@123` |
 | CLIENTE | `cliente@exemplo.com` | `Cliente@123` |
 
-Os demais perfis (FUNCIONARIO, COZINHA, MOTOBOY, GARCOM, REVENDEDOR) **não vêm no
-seed** — são criados durante os roteiros 6 e 9.
+FUNCIONARIO, COZINHA, MOTOBOY, GARCOM e REVENDEDOR **não vêm no seed** — são criados
+nos roteiros 7 e 14.
 
-### 1.4 Dados de referência do seed
+### 1.4 Dados de referência
 
-- **Empresa:** Burger do Thiago (`slug: burger-do-thiago`), São Paulo/SP
-- **Área de entrega:** Moema, São Paulo — taxa R$ 8,90
-- **Cardápio:**
-  - Smash Clássico — R$ 28,90 · variações Simples (+0) e Duplo (+12) · adicionais Bacon (+6) e Ovo (+4)
-  - Veggie Grelhado — R$ 26,90
-  - Refrigerante Lata — R$ 6,50
+- **Empresa:** Burger do Thiago (`burger-do-thiago`), São Paulo/SP
+- **Área de entrega:** Moema, São Paulo — R$ 8,90
+- **Cardápio:** Smash Clássico R$ 28,90 (Simples +0 / Duplo +12 · Bacon +6 · Ovo +4) ·
+  Veggie Grelhado R$ 26,90 · Refrigerante Lata R$ 6,50
 
 ---
 
 ## 2. Suítes automatizadas
 
-Rode sempre as três antes de dizer que está tudo certo. **`verify` não inclui os
-e2e** — são comandos separados, e o CI roda os dois.
+**`verify` não inclui os e2e** — são comandos separados, e o CI roda os dois.
 
 ```sh
-npm run verify        # lint, dark mode, glifos, typecheck, testes unitários, audit, build
-npm run test:e2e      # sobe o AppModule inteiro contra MySQL real (precisa do DATABASE_URL)
+npm run verify     # lint, dark mode, glifos, typecheck, 604 testes, audit, build
+npm run test:e2e   # AppModule inteiro contra MySQL real
 ```
 
-Para reproduzir o portão de vulnerabilidade da imagem, que só existe no CI:
+Portão de vulnerabilidade da imagem, que só existe no CI:
 
 ```sh
 docker build -f apps/api/Dockerfile -t chegowia-api:teste .
@@ -91,428 +99,693 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:lates
   image --severity CRITICAL --ignore-unfixed --exit-code 1 chegowia-api:teste
 ```
 
-Para rodar um recorte: `npm test --workspace apps/api -- <padrão>`.
-Nunca `npx jest` direto — sem `--runInBand` ele abre um worker por núcleo e trava a máquina.
-
-### O que cada suíte cobre
-
-| Assunto | Arquivos |
-|---|---|
-| Emissão de NFC-e, chave, tributos, DANFE | `nfce-emission`, `nfce-service`, `sefaz-soap`, `fiscal`, `product-tax` |
-| Cobrança Asaas, ativação, consumo, cancelamento | `asaas-activation`, `asaas-company-billing`, `asaas-usage-and-cancel`, `asaas-webhook`, `asaas-provider` |
-| Revendedor: comissão, desconto, repasse | `asaas-reseller-payout`, `commission-retry`, `payout-concurrency`, `reseller-commission-dashboard` |
-| Acesso de suporte do super admin | `super-admin-reseller-access`, `multi-context-login` |
-| Isolamento multiempresa e fluxo de pedido | `test-e2e/tenant-isolation`, `test-e2e/order-flow` |
+Recorte: `npm test --workspace apps/api -- <padrão>`.
+**Nunca `npx jest` direto** — sem `--runInBand` abre um worker por núcleo e trava a máquina.
 
 ---
 
 ## 3. Como reportar
 
-Para cada roteiro, informe:
-
-1. **Passou / falhou / não executado** (com o motivo, no terceiro caso)
-2. O que apareceu na tela quando divergiu do esperado
-3. Linhas relevantes do log da API
-4. O estado no banco quando o roteiro pedir conferência
+Para cada roteiro: **passou / falhou / não executado** (com motivo), o que apareceu na
+tela na divergência, linhas do log da API, e o estado no banco quando o roteiro pedir.
 
 ---
 
-## 4. Consumidor (público, sem login e com login)
+## 4. Autenticação, sessão e recuperação
 
-### 4.1 Vitrine e descoberta
+17 rotas em `/api/auth`.
 
-| # | Passo | Resultado esperado |
+### 4.1 Login e sessão
+
+| # | Passo | Esperado |
 |---|---|---|
-| 4.1.1 | Abrir `/` sem login | Página institucional carrega; catálogo **não** aparece |
-| 4.1.2 | Login como `cliente@exemplo.com` e abrir `/` | Se não houver endereço salvo, o catálogo continua vazio — a home só busca lojas com `hasLocation` |
-| 4.1.3 | Cadastrar endereço em `/minha-conta/enderecos` (Moema, São Paulo) e voltar em `/` | Burger do Thiago aparece na lista |
-| 4.1.4 | Abrir `/busca` e procurar "smash" | Smash Clássico aparece, com o nome da loja |
-| 4.1.5 | Buscar com endereço de outra cidade (trocar o endereço padrão) | A loja **não** aparece — o filtro é igualdade de cidade |
-| 4.1.6 | Abrir `/loja/burger-do-thiago` | Cardápio com as 3 categorias/itens e preços do seed |
-| 4.1.7 | Abrir `/loja/slug-inexistente` | 404 tratado, sem stack trace |
+| 4.1.1 | Login com senha certa | Token de acesso + cookie de refresh |
+| 4.1.2 | Senha errada 5x | Mensagem genérica, sem dizer se o e-mail existe |
+| 4.1.3 | Usuário desativado | Login recusado |
+| 4.1.4 | `POST /auth/refresh` com cookie válido | Novo token; o refresh anterior deixa de valer |
+| 4.1.5 | Reusar um refresh já usado | Recusado |
+| 4.1.6 | `POST /auth/logout` | Sessão encerrada; refresh não funciona mais |
+| 4.1.7 | Token expirado numa chamada | 401, e a tela manda para o login |
 
-> **Ponto de atenção conhecido:** a cidade compara por igualdade. Acento e caixa são
-> ignorados pela collation do banco, mas "São Paulo" e "Sao Paulo - SP" **não** casam.
-> Ao cadastrar empresa, use só o nome do município.
+### 4.2 MFA
 
-### 4.2 Carrinho e pedido
-
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 4.2.1 | Adicionar Smash Clássico, variação Duplo, adicionais Bacon + Ovo | Subtotal do item = 28,90 + 12 + 6 + 4 = **R$ 50,90** |
-| 4.2.2 | Adicionar Refrigerante Lata | Carrinho soma R$ 57,40 |
-| 4.2.3 | Ir para `/checkout` com endereço em Moema | Taxa de entrega **R$ 8,90**; total R$ 66,30 |
-| 4.2.4 | Finalizar escolhendo Dinheiro | Pedido criado com status `RECEBIDO`; redireciona para `/pedido/[id]` |
-| 4.2.5 | Acompanhar em `/pedido/[id]` | Status atualiza sozinho conforme o painel avança (websocket) |
-| 4.2.6 | Abrir `/minha-conta/pedidos` | O pedido aparece no histórico |
-| 4.2.7 | Tentar abrir o `/pedido/[id]` de outro cliente (trocar o id) | Acesso negado — não exibe pedido alheio |
+| 4.2.1 | Login de papel exigido em `MFA_REQUIRED_ROLES` | Responde pedindo o segundo fator, sem token completo |
+| 4.2.2 | `POST /auth/mfa/verify` com código certo | Token completo emitido |
+| 4.2.3 | Código errado / expirado | Recusado, sem revelar qual dos dois |
 
-### 4.3 Mesa por QR
+### 4.3 Cadastro e recuperação
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 4.3.1 | Abrir `/mesa/[token]` com o token de uma mesa ativa | Cardápio da mesa, sem exigir login |
-| 4.3.2 | Lançar dois itens | `DiningOrder` criado com `source = QR_MESA`, status `RECEBIDO` |
-| 4.3.3 | Abrir `/mesa/[token]` com token inválido | "QR da mesa não encontrado", sem vazar dados |
-| 4.3.4 | Abrir o QR de uma mesa `INATIVA` | Recusa com a mesma mensagem |
+| 4.3.1 | `POST /auth/register` | Conta criada; e-mail de verificação enviado |
+| 4.3.2 | `verify-email` com token válido | Conta verificada |
+| 4.3.3 | `verify-email` com token usado | Recusado |
+| 4.3.4 | `resend-verification` | Novo token; o anterior perde a validade |
+| 4.3.5 | `forgot-password` com e-mail inexistente | Mesma resposta do e-mail existente (não enumera contas) |
+| 4.3.6 | `reset-password` com token válido | Senha trocada; sessões antigas revogadas |
+| 4.3.7 | `change-password` logado com senha atual errada | Recusado |
+
+### 4.4 Multi-contexto
+
+Um mesmo e-mail pode ter vínculo com mais de uma empresa/papel.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 4.4.1 | `GET /auth/contexts` | Lista os contextos disponíveis |
+| 4.4.2 | `POST /auth/context` escolhendo outro | Token novo, com `companyId` do escolhido |
+| 4.4.3 | Escolher contexto que não é seu | Recusado |
+| 4.4.4 | Após trocar, listar pedidos | Só os da empresa do contexto atual |
 
 ---
 
-## 5. Painel da empresa — ADMIN
+## 5. Consumidor
 
-Login: `admin@burgerdothiago.com` / `Admin@123`.
+### 5.1 Vitrine e descoberta
 
-### 5.1 Pedidos (`/painel/pedidos`)
+| # | Passo | Esperado |
+|---|---|---|
+| 5.1.1 | `/` sem login | Institucional; catálogo não aparece |
+| 5.1.2 | Login cliente, sem endereço salvo | Catálogo continua vazio (`hasLocation` falso) |
+| 5.1.3 | Cadastrar endereço em Moema e voltar | Burger do Thiago aparece |
+| 5.1.4 | `/busca` por "smash" | Produto com o nome da loja |
+| 5.1.5 | Trocar endereço padrão para outra cidade | A loja **não** aparece (igualdade de cidade) |
+| 5.1.6 | `/loja/burger-do-thiago` | Cardápio completo |
+| 5.1.7 | `/loja/[slug]/produto/[id]` | Página do produto com variações e adicionais |
+| 5.1.8 | `/loja/slug-inexistente` | 404 tratado |
+| 5.1.9 | `/planos`, `/software`, `/revenda`, `/termos`, `/privacidade` | Abrem sem login |
+| 5.1.10 | `GET /api/catalog/public/sitemap` | Só empresas e produtos ativos |
 
-Fluxo válido: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA → ENTREGUE`.
+### 5.2 Endereços (`/minha-conta/enderecos`, 4 rotas)
+
+| # | Passo | Esperado |
+|---|---|---|
+| 5.2.1 | Cadastrar endereço | Geocodificado (latitude/longitude preenchidos) |
+| 5.2.2 | Marcar como padrão | O anterior deixa de ser padrão |
+| 5.2.3 | CEP inexistente | Erro tratado, sem quebrar a tela |
+| 5.2.4 | Excluir endereço em uso por pedido ativo | Comportamento consistente (bloqueia ou desvincula, mas não perde o pedido) |
+
+### 5.3 Carrinho, checkout e acompanhamento
+
+| # | Passo | Esperado |
+|---|---|---|
+| 5.3.1 | Smash Duplo + Bacon + Ovo | Item **R$ 50,90** |
+| 5.3.2 | Somar Refrigerante | Subtotal R$ 57,40 |
+| 5.3.3 | Checkout em Moema | Taxa **R$ 8,90**; total R$ 66,30 |
+| 5.3.4 | Endereço fora da área/raio | Recusa explicando, sem criar pedido |
+| 5.3.5 | Finalizar com Dinheiro | Pedido `RECEBIDO`; vai para `/pedido/[id]` |
+| 5.3.6 | Acompanhar em `/pedido/[id]` | Status muda sozinho quando o painel avança |
+| 5.3.7 | `/minha-conta/pedidos` | Histórico do cliente |
+| 5.3.8 | Abrir `/pedido/[id]` de outro cliente | Negado |
+| 5.3.9 | Loja fechada (fora do horário) | Checkout recusa ou avisa, conforme configuração |
+
+### 5.4 Mesa por QR
+
+| # | Passo | Esperado |
+|---|---|---|
+| 5.4.1 | `/mesa/[token]` de mesa ativa | Cardápio sem exigir login |
+| 5.4.2 | Lançar dois itens | `DiningOrder` com `source = QR_MESA`, status `RECEBIDO` |
+| 5.4.3 | Token inválido | "QR da mesa não encontrado" |
+| 5.4.4 | Mesa `INATIVA` | Mesma recusa |
+| 5.4.5 | Empresa inativa | Recusado |
+
+---
+
+## 6. Painel da empresa — ADMIN
+
+### 6.1 Pedidos
+
+Fluxo: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA → ENTREGUE`.
 `CANCELADO` sai de qualquer ponto antes de `ENTREGUE`.
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 5.1.1 | Abrir a lista | Pedido do roteiro 4.2 aparece |
-| 5.1.2 | Avançar status um a um até `ENTREGUE` | Cada transição grava histórico com o usuário que mudou |
-| 5.1.3 | Tentar pular de `RECEBIDO` para `ENTREGUE` | Recusado — transição inválida |
-| 5.1.4 | Abrir o mesmo pedido em duas abas e avançar nas duas | A segunda recebe conflito ("o status mudou enquanto você confirmava") |
-| 5.1.5 | Cancelar um pedido em `EM_PREPARO` | Vai para `CANCELADO`; não aparece mais para avançar |
+| 6.1.1 | Avançar um a um até `ENTREGUE` | Histórico grava quem mudou cada etapa |
+| 6.1.2 | Pular de `RECEBIDO` para `ENTREGUE` | Transição inválida |
+| 6.1.3 | Duas abas avançando o mesmo pedido | A segunda recebe conflito |
+| 6.1.4 | Cancelar em `EM_PREPARO` | Vai para `CANCELADO` |
+| 6.1.5 | Marcar como pago | `paymentStatus = PAGO`; se `autoEmit`, dispara NFC-e |
+| 6.1.6 | `/painel/pedidos/[id]` | Itens, endereço, histórico e entrega |
 
-### 5.2 Cardápio (`/painel/cardapio`)
+### 6.2 Cardápio (13 rotas de produto)
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 5.2.1 | Criar categoria e produto com preço | Aparece na vitrine pública em seguida |
-| 5.2.2 | Desativar o produto | Some da vitrine, permanece no painel |
-| 5.2.3 | Criar variação e adicional | Refletem no preço do carrinho (ver 4.2.1) |
-| 5.2.4 | Importar cardápio por planilha | Pré-visualização antes de gravar; itens com custo entram corretamente |
+| 6.2.1 | Criar categoria e produto | Aparece na vitrine |
+| 6.2.2 | Desativar produto | Some da vitrine, fica no painel |
+| 6.2.3 | Criar variação e adicional | Refletem no preço (6.2 → 5.3.1) |
+| 6.2.4 | Excluir variação usada em pedido antigo | Pedido histórico preserva o que foi vendido |
+| 6.2.5 | Enviar imagem do produto | Upload aceito; formato/ tamanho inválidos recusados |
+| 6.2.6 | Marcar como destaque | Entra na faixa de destaques do marketplace |
+| 6.2.7 | Baixar modelo de importação (`import/template`) | Planilha com as colunas esperadas |
+| 6.2.8 | Pré-visualizar importação (`import/preview`) | Mostra o que vai entrar **antes** de gravar |
+| 6.2.9 | Aplicar importação (`import/:id/apply`) | Produtos criados, com custo quando informado |
+| 6.2.10 | Importar planilha com coluna faltando | Erro apontando a coluna |
 
-### 5.3 Mesas e salão (`/painel/mesas`)
+### 6.3 Mesas e salão
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 5.3.1 | Criar mesa e gerar QR | Token gerado; `/mesa/[token]` abre |
-| 5.3.2 | Abrir comanda, lançar itens, marcar `SERVIDO` | Comanda soma só o que foi servido |
-| 5.3.3 | Lançar item e cancelar | Item cancelado **não** entra no total nem na nota fiscal |
-| 5.3.4 | Fechar mesa com pedido ainda em preparo | Recusado: "Finalize ou cancele os pedidos ativos antes de fechar" |
-| 5.3.5 | Fechar mesa com forma de pagamento | Sessão vira `FECHADA`, mesa volta a `LIVRE` |
+| 6.3.1 | Criar mesa e gerar QR | Token gerado |
+| 6.3.2 | Abrir comanda, lançar, marcar `SERVIDO` | Soma só o servido |
+| 6.3.3 | Cancelar item lançado | Não entra no total nem na nota |
+| 6.3.4 | Fechar com pedido em preparo | "Finalize ou cancele os pedidos ativos" |
+| 6.3.5 | Fechar com forma de pagamento | Sessão `FECHADA`, mesa `LIVRE` |
+| 6.3.6 | Transferir/juntar mesas (se disponível) | Comanda consolidada sem perder item |
+| 6.3.7 | Reabrir mesa fechada | Conforme a regra: bloqueado ou com registro |
 
-### 5.4 Entregas (`/painel/entregas`)
+### 6.4 Caixa (9 rotas)
+
+| # | Passo | Esperado |
+|---|---|---|
+| 6.4.1 | Abrir com valor inicial | Sessão `ABERTA` |
+| 6.4.2 | Sangria e suprimento | Movimentos ajustam o esperado |
+| 6.4.3 | Fechar com divergência | Diferença registrada, não bloqueada |
+| 6.4.4 | Abrir dois caixas no mesmo ponto | O segundo é recusado |
+| 6.4.5 | Relatório de fechamento | Bate com pedidos pagos no período |
+
+### 6.5 Clientes e configurações
+
+| # | Passo | Esperado |
+|---|---|---|
+| 6.5.1 | `/painel/clientes` | Só clientes da própria empresa |
+| 6.5.2 | Logo da empresa (`me/logo`) | Upload aplicado na vitrine |
+| 6.5.3 | `me/settings` — horário, raio, taxa | Refletem no checkout do consumidor |
+| 6.5.4 | Desativar a empresa | Some da vitrine imediatamente |
+
+---
+
+## 7. Perfis e permissões
+
+### 7.1 Matriz padrão
+
+| Papel | Permissões ao nascer |
+|---|---|
+| **FUNCIONARIO** | caixa (ver, operar), pedidos (ver, editar), mesas (ver, operar), cardápio (ver), entregas (ver) |
+| **COZINHA** | pedidos (ver, editar), mesas (ver, operar) |
+| **MOTOBOY** | entregas (ver, editar) |
+| **GARCOM** | mesas (ver, operar), cardápio (ver) |
+| **ADMIN** | tudo da empresa |
+
+### 7.2 O que cada um pode e **não** pode
+
+| # | Papel | Consegue | Deve ser negado |
+|---|---|---|---|
+| 7.2.1 | FUNCIONARIO | Caixa, pedidos, mesas | `/painel/funcionarios`, `/painel/fiscal`, `/painel/assinatura`, relatórios |
+| 7.2.2 | COZINHA | Marcar `EM_PREPARO` e `PRONTO` | `SAIU_PARA_ENTREGA`, `ENTREGUE`, caixa, cardápio |
+| 7.2.3 | MOTOBOY | Ver e avançar as **próprias** entregas | Pedidos, mesas, cardápio, caixa, entregas de outro motoboy |
+| 7.2.4 | GARCOM | Comanda, lançar item, ver cardápio | Fechar caixa, editar cardápio, relatórios |
+| 7.2.5 | CLIENTE | `/minha-conta` e pedidos próprios | Qualquer `/painel/*` |
+| 7.2.6 | REVENDEDOR | `/revendedor/*` | `/painel/*` e `/super-admin/*` |
+
+> A restrição da COZINHA é regra de serviço, não só de tela.
+
+### 7.3 Permissão granular
+
+| # | Passo | Esperado |
+|---|---|---|
+| 7.3.1 | Remover `caixa.operar` de um FUNCIONARIO | Ele vê o caixa mas não movimenta |
+| 7.3.2 | Conceder `relatorios.visualizar` a um GARCOM | Passa a abrir relatórios |
+| 7.3.3 | Trocar o papel de um funcionário | Permissões voltam ao padrão do novo papel |
+| 7.3.4 | Desativar funcionário logado | Próxima chamada é recusada |
+
+### 7.4 Isolamento multiempresa
+
+O teste mais importante e o mais fácil de esquecer — nada na tela sugere que ele exista.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 7.4.1 | Criar segunda empresa com dados próprios | — |
+| 7.4.2 | Na empresa A, listar pedidos | Só os de A |
+| 7.4.3 | Na empresa A, abrir por id um pedido de B | Não encontrado |
+| 7.4.4 | Repetir com produtos, clientes, mesas, caixa, notas, entregas, conversas | Sempre só a própria |
+| 7.4.5 | Chamar a API direto com `x-company-id` de outra empresa | Ignorado para quem não é super admin |
+
+---
+
+## 8. Entregas, motoboy e rotas
+
+### 8.1 Atribuição e fluxo
 
 Fluxo: `AGUARDANDO_RETIRADA → RETIRADO → EM_ROTA → ENTREGUE`, com desvio para `PROBLEMA`.
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 5.4.1 | Atribuir motoboy a um pedido `PRONTO` | Entrega criada em `AGUARDANDO_RETIRADA` |
-| 5.4.2 | Avançar até `ENTREGUE` | Pedido correspondente chega a `ENTREGUE` |
-| 5.4.3 | Registrar `PROBLEMA` com motivo | Motivo gravado; pedido não avança sozinho |
+| 8.1.1 | Atribuir motoboy a pedido `PRONTO` | Entrega em `AGUARDANDO_RETIRADA`; pedido vai a `SAIU_PARA_ENTREGA` |
+| 8.1.2 | Atribuir a quem não é MOTOBOY | Recusado |
+| 8.1.3 | Reatribuir para outro motoboy | Histórico preserva quem estava antes |
+| 8.1.4 | Avançar até `ENTREGUE` | Pedido chega a `ENTREGUE` junto |
+| 8.1.5 | Registrar `PROBLEMA` com motivo | Motivo gravado; pedido não avança sozinho |
+| 8.1.6 | Voltar de `PROBLEMA` para `EM_ROTA` | Conforme a regra: permitido com registro |
 
-### 5.5 Caixa (`/painel/caixa`)
+### 8.2 Visão do motoboy
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 5.5.1 | Abrir caixa com valor inicial | Sessão `ABERTA` com o valor registrado |
-| 5.5.2 | Registrar sangria e suprimento | Movimentos somam/subtraem do esperado |
-| 5.5.3 | Fechar com divergência | Diferença registrada, não bloqueada |
-| 5.5.4 | Abrir dois caixas no mesmo ponto | O segundo é recusado |
+| 8.2.1 | Login MOTOBOY → `/painel/entregas` | Só a fila dele |
+| 8.2.2 | `GET /api/deliveries/me` | Apenas entregas atribuídas a ele |
+| 8.2.3 | Tentar avançar entrega de outro motoboy | Negado |
+| 8.2.4 | Tentar abrir `/painel/pedidos` | Negado |
 
-### 5.6 Funcionários e permissões (`/painel/funcionarios`)
+### 8.3 Localização em tempo real
 
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 5.6.1 | Criar um usuário de cada papel (FUNCIONARIO, COZINHA, MOTOBOY, GARCOM) | Cada um nasce com as permissões padrão do papel (tabela em 6.1) |
-| 5.6.2 | Remover uma permissão de um funcionário | A rota correspondente passa a ser negada para ele |
-| 5.6.3 | Desativar funcionário | Login recusado |
+| 8.3.1 | `PATCH /api/deliveries/:id/location` com lat/long | Posição gravada |
+| 8.3.2 | Painel aberto durante o envio | Evento `delivery.updated` chega por websocket e a tela move sem recarregar |
+| 8.3.3 | Cliente em `/pedido/[id]` | Vê o avanço da entrega |
+| 8.3.4 | Enviar coordenada inválida (lat 999) | Recusado |
+| 8.3.5 | Enviar localização de entrega já `ENTREGUE` | Recusado ou ignorado, sem corromper o histórico |
 
-### 5.7 Clientes, relatórios e configurações
+### 8.4 Rotas, mapa e distância (OSRM)
 
-| # | Passo | Resultado esperado |
+O cálculo usa geocodificação do endereço e rota de carro por OSRM
+(`ROUTING_BASE_URL`, padrão: servidor público do projeto).
+
+| # | Passo | Esperado |
 |---|---|---|
-| 5.7.1 | `/painel/clientes` | Lista só clientes da própria empresa |
-| 5.7.2 | `/painel/relatorios` | Números batem com os pedidos criados nos roteiros |
-| 5.7.3 | `/painel/configuracoes` | Alterar horário/raio reflete na vitrine |
-| 5.7.4 | `/painel/agente` | Configuração do agente de IA salva e responde |
+| 8.4.1 | Criar pedido com endereço válido | Distância e tempo estimado preenchidos |
+| 8.4.2 | Conferir a taxa | Corresponde à área de entrega cadastrada |
+| 8.4.3 | Endereço fora do raio configurado | Recusado no checkout |
+| 8.4.4 | Derrubar o OSRM (apontar `ROUTING_BASE_URL` para porta morta) | **A venda não pode travar**: o pedido é criado, com estimativa ausente ou de fallback |
+| 8.4.5 | Endereço que não geocodifica | Erro tratado, mensagem útil ao cliente |
+| 8.4.6 | Dois pedidos seguidos para o mesmo endereço | A fila de geocodificação não estoura limite do provedor |
+
+### 8.5 Relatório de motoboy
+
+| # | Passo | Esperado |
+|---|---|---|
+| 8.5.1 | `/painel/relatorios` → desempenho de motoboy | Entregas por pessoa, tempo médio |
+| 8.5.2 | Entregas atrasadas | Lista o que passou do limiar |
 
 ---
 
-## 6. Perfis restritos — o que cada um pode
+## 9. Assistentes de IA
 
-### 6.1 Matriz de permissão padrão
+Quatro assistentes internos e um público. Exigem `DEEPSEEK_API_KEY`; sem ela, marque
+como não executado.
 
-| Papel | Permissões que nascem com ele |
+| Assistente | Rota | Quem usa |
+|---|---|---|
+| Painel | `/api/ai/conversations` | ADMIN e equipe |
+| Cozinha | `/api/ai/cozinha` | COZINHA |
+| Garçom | `/api/ai/garcom` | GARCOM |
+| Motoboy | `/api/ai/motoboy` | MOTOBOY |
+| Público | `/api/ai/public/:slug` | consumidor, na loja |
+
+### 9.1 Conversa e ferramentas
+
+O assistente do painel tem ferramentas de leitura e de escrita.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 9.1.1 | "quantos pedidos hoje?" | Responde com o número real do dia |
+| 9.1.2 | "tem pedido atrasado?" | Lista os parados além do limiar |
+| 9.1.3 | "quais os produtos mais vendidos da semana?" | Ranking real |
+| 9.1.4 | "quais entregas estão pendentes?" | Fila atual |
+| 9.1.5 | "quais clientes sumiram?" | Inativos há mais de 30 dias |
+| 9.1.6 | "gera uma descrição para o Smash" | Texto sugerido, **sem** gravar sozinho |
+| 9.1.7 | "cria uma promoção de 20% nas bebidas" | Cria **rascunho** e pede confirmação |
+| 9.1.8 | `POST /api/ai/actions/:id/confirm` | A ação é aplicada e registra quem confirmou |
+| 9.1.9 | Não confirmar a ação | Nada é aplicado |
+| 9.1.10 | Pedir dado de outra empresa | Recusa — as ferramentas são escopadas |
+
+### 9.2 Assistentes por papel
+
+| # | Passo | Esperado |
+|---|---|---|
+| 9.2.1 | COZINHA pergunta o que está na fila | Responde com pedidos em preparo |
+| 9.2.2 | GARCOM pergunta sobre uma mesa | Responde com a comanda |
+| 9.2.3 | MOTOBOY pergunta a próxima entrega | Responde com a fila dele |
+| 9.2.4 | MOTOBOY tenta usar o assistente do painel | Negado |
+
+### 9.3 Assistente público
+
+| # | Passo | Esperado |
+|---|---|---|
+| 9.3.1 | Perguntar o cardápio na loja | Responde com produtos ativos daquela loja |
+| 9.3.2 | Perguntar de loja `isTestOnly` | Não encontra |
+| 9.3.3 | Pedir dado interno (faturamento) | Recusa |
+
+### 9.4 Consumo
+
+| # | Passo | Esperado |
+|---|---|---|
+| 9.4.1 | Conversar e conferir `/api/usage/company/summary` | Uso de IA registrado |
+| 9.4.2 | Conferir na fatura | Consumo entra como variável, **fora** da comissão do revendedor |
+
+---
+
+## 10. WhatsApp (Gupshup)
+
+24 rotas em `/api/messaging`. Exige `GUPSHUP_ENABLED=true`.
+
+### 10.1 Conexão do canal
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.1.1 | Solicitar acesso (`channel/whatsapp/request`) | Pedido registrado; evento `whatsapp.access.requested` |
+| 10.1.2 | Super admin aprova | Canal liberado para a empresa |
+| 10.1.3 | Conectar (`channel/whatsapp/gupshup/connect`) | Credencial gravada **cifrada** |
+| 10.1.4 | Consultar status | Estado real do canal |
+| 10.1.5 | Atualizar perfil e foto | Refletem no WhatsApp |
+| 10.1.6 | Desconectar | Canal removido; token apagado |
+| 10.1.7 | Ler a credencial pela API | **Nunca** volta em claro |
+
+### 10.2 Webhook e conversas
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.2.1 | Webhook com token errado | 401 |
+| 10.2.2 | Webhook válido com mensagem | Conversa criada; evento `whatsapp.message.received` |
+| 10.2.3 | Reenviar o mesmo evento | Não duplica a mensagem |
+| 10.2.4 | Responder pelo painel | `whatsapp.message.sent`; chega no aparelho |
+| 10.2.5 | Atribuir conversa a um atendente | `whatsapp.conversation.updated` |
+| 10.2.6 | Gerar link de pedido (`orders/:orderId/whatsapp-link`) | Link abre a conversa com o texto certo |
+
+### 10.3 Pedido montado por WhatsApp
+
+Rascunho: `MONTANDO → AGUARDANDO_CONFIRMACAO → CONCLUIDO` (ou `CANCELADO`).
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.3.1 | Cliente pede itens por mensagem | Rascunho em `MONTANDO` com os itens |
+| 10.3.2 | Informar nome, endereço e forma de pagamento | Campos preenchidos no rascunho |
+| 10.3.3 | Pedir o resumo | Vai para `AGUARDANDO_CONFIRMACAO` com total e taxa |
+| 10.3.4 | Confirmar | Pedido real criado; rascunho `CONCLUIDO`; evento `order.created` |
+| 10.3.5 | Desistir no meio | Rascunho `CANCELADO`, sem pedido |
+| 10.3.6 | Pedir produto inexistente | Assistente não inventa item |
+| 10.3.7 | Endereço fora da área | Avisa antes de fechar |
+
+### 10.4 Canal institucional (`/api/platform/whatsapp`, 11 rotas)
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.4.1 | Configurar o canal da plataforma | Independente do canal das empresas |
+| 10.4.2 | Receber mensagem | `platform.whatsapp.message.received` |
+| 10.4.3 | Responder pelo super admin | `platform.whatsapp.message.sent` |
+| 10.4.4 | Conferir isolamento | Mensagem institucional não aparece para nenhuma empresa |
+
+---
+
+## 11. Suporte da plataforma (10 rotas)
+
+| # | Passo | Esperado |
+|---|---|---|
+| 11.1 | Lojista abre conversa pelo balão de suporte | Conversa criada |
+| 11.2 | IA responde | Resposta automática registrada |
+| 11.3 | Pedir atendimento humano (`:id/human`) | Conversa entra na fila do super admin |
+| 11.4 | Super admin responde em `/super-admin/atendimento` | Mensagem chega ao lojista |
+| 11.5 | Fechar conversa (`:id/close`) | Encerrada; histórico preservado |
+| 11.6 | Lojista tenta ler conversa de outra empresa | Negado |
+
+---
+
+## 12. Promoções
+
+| # | Passo | Esperado |
+|---|---|---|
+| 12.1 | Criar promoção | Aparece na vitrine da loja |
+| 12.2 | Ativar/desativar (`:id/status`) | Some e volta na vitrine |
+| 12.3 | Promoção expirada | Não aparece mais |
+| 12.4 | Promoção de loja `isTestOnly` | Não aparece no público |
+
+---
+
+## 13. Fiscal — NFC-e
+
+### 13.1 Cadastro e prontidão
+
+| # | Passo | Esperado |
+|---|---|---|
+| 13.1.1 | Sem cadastro | **"Emissão não configurada"** com as pendências |
+| 13.1.2 | Município de outra UF (IBGE 3106200 com estado SP) | Recusado |
+| 13.1.3 | IE "ISENTO" e tentar Produção | Recusado — NFC-e exige contribuinte |
+| 13.1.4 | Certificado de outro CNPJ | Recusado |
+| 13.1.5 | Certificado vencido | Recusado com a data |
+| 13.1.6 | `.pdf` no lugar do `.pfx` | Recusado |
+| 13.1.7 | Senha errada | Mensagem única (arquivo ou senha) |
+| 13.1.8 | Produto sem NCM/CFOP | Aparece na lista de pendências do cardápio |
+
+### 13.2 Conexão com a SEFAZ
+
+| # | Passo | Esperado |
+|---|---|---|
+| 13.2.1 | "Testar conexão" sem certificado | Recusa pedindo o certificado |
+| 13.2.2 | Com certificado válido | Resposta da SEFAZ na tela; **nenhuma nota, nenhuma numeração** |
+| 13.2.3 | Salvar `Ambiente = Produção` | Só conclui se a SEFAZ responder "Serviço em Operação" |
+
+### 13.3 Emissão
+
+| # | Passo | Esperado |
+|---|---|---|
+| 13.3.1 | Emitir de pedido pago | `AUTORIZADA`, chave de 44 dígitos, protocolo |
+| 13.3.2 | Emitir duas vezes | Devolve a mesma nota |
+| 13.3.3 | Produto sem tributação | Recusado **antes** de reservar numeração |
+| 13.3.4 | Comanda com item cancelado | Item não entra no valor |
+| 13.3.5 | DANFE HTML e `?formato=texto` | Chave em blocos de 4, QR, protocolo |
+| 13.3.6 | Baixar XML | Assinado, `<Signature>` dentro de `<NFe>` |
+| 13.3.7 | Com entrega e desconto | Cada item traz `vFrete`/`vDesc`; soma bate |
+| 13.3.8 | Pagamento em cartão | XML traz `<card><tpIntegra>2</tpIntegra></card>` |
+| 13.3.9 | `autoEmit` ligado + pedido pago | Nota sai sozinha |
+| 13.3.10 | `autoEmit` ligado + mesa fechada | Nota sai sozinha, sem travar a liberação da mesa |
+
+### 13.4 Contingência e falhas
+
+| # | Passo | Esperado |
+|---|---|---|
+| 13.4.1 | SEFAZ inacessível | `CONTINGENCIA` com `tpEmis 9`; **a venda não trava** |
+| 13.4.2 | Restabelecer e aguardar o worker | Transmite e vira `AUTORIZADA` |
+| 13.4.3 | Rejeição definitiva | `REJEITADA` e **e-mail imediato** aos administradores |
+| 13.4.4 | Reemitir depois da rejeição | Nota nova, número novo |
+| 13.4.5 | Documento preso em `ENVIANDO` | O worker consulta pela chave e concilia |
+
+### 13.5 Eventos
+
+| # | Passo | Esperado |
+|---|---|---|
+| 13.5.1 | Cancelar com justificativa de 10 caracteres | Recusado (mínimo 15) |
+| 13.5.2 | Cancelar dentro de 30 min | `CANCELADA` com protocolo |
+| 13.5.3 | Cancelar depois de 30 min | Recusado, explicando a alternativa |
+| 13.5.4 | Carta de correção | Registrada, sequência incrementando |
+| 13.5.5 | Inutilizar faixa com nota autorizada | Recusado |
+| 13.5.6 | Inutilizar faixa livre | Documentos viram `INUTILIZADA` |
+
+> **Sem certificado A1, 13.2 em diante não roda.** Marque como não executado e valide
+> a estrutura: gerar o XML pelo código e conferir contra os XSD oficiais 4.00 com
+> `xmllint --schema`.
+
+---
+
+## 14. Assinatura e pagamento
+
+R$ 159,90/mês, 7 dias de teste.
+
+### 14.1 Teste e ativação
+
+| # | Passo | Esperado |
+|---|---|---|
+| 14.1.1 | Contratar sem código de revendedor | Teste de 7 dias começa |
+| 14.1.2 | Usar o painel durante o teste | Tudo liberado |
+| 14.1.3 | Forçar o fim do teste | Painel bloqueado, tela de ativação |
+| 14.1.4 | Abrir a ativação | Três formas com valor de cada |
+| 14.1.5 | Pix | **R$ 159,90** |
+| 14.1.6 | Boleto | **R$ 159,90** |
+| 14.1.7 | Cartão | **R$ 165,33** (taxa por dentro; líquido R$ 159,90) |
+| 14.1.8 | Gerar fatura | Abre no Asaas travada na forma escolhida |
+
+### 14.2 Troca de forma
+
+| # | Passo | Esperado |
+|---|---|---|
+| 14.2.1 | Com fatura aberta, trocar cartão → Pix | Fatura cai para R$ 159,90 e reabre atualizada |
+| 14.2.2 | Conferir a assinatura no Asaas | Próximas cobranças na nova forma |
+| 14.2.3 | Trocar com fatura já paga | A paga não muda; só as futuras |
+
+### 14.3 Pagamento e ciclo
+
+| # | Passo | Esperado |
+|---|---|---|
+| 14.3.1 | Pagar por Pix | Acesso em segundos (`PAYMENT_RECEIVED`) |
+| 14.3.2 | Pagar por cartão | Acesso com `PAYMENT_CONFIRMED`, antes de compensar |
+| 14.3.3 | Perder o webhook | Conciliação do worker libera assim mesmo |
+| 14.3.4 | Vencer sem pagar | Acesso bloqueado |
+| 14.3.5 | Pagar depois de vencido | Acesso volta |
+| 14.3.6 | Cancelar assinatura | Acesso até o fim do período pago |
+| 14.3.7 | Webhook duplicado | Não ativa duas vezes |
+
+> **Ordem no worker:** se a conciliação do Asaas falhar numa rodada, o corte por
+> vencimento **não** roda. Confira no log: "Corte de acesso por vencimento adiado".
+
+---
+
+## 15. Revendedor
+
+### 15.1 Candidatura
+
+| # | Passo | Esperado |
+|---|---|---|
+| 15.1.1 | Enviar por `/revenda` | Registro pendente |
+| 15.1.2 | Super admin aprova | Perfil com **código único** e 30% |
+| 15.1.3 | Reprovar outra | Sem perfil; motivo registrado |
+| 15.1.4 | Login | Cai em `/revendedor/dashboard` |
+
+### 15.2 Recebimento
+
+| # | Passo | Esperado |
+|---|---|---|
+| 15.2.1 | Cadastrar subconta Asaas | Formulário conforme o provedor |
+| 15.2.2 | Sacar antes de concluir | Recusado, explicando o que falta |
+
+### 15.3 Indicação com desconto
+
+| # | Passo | Esperado |
+|---|---|---|
+| 15.3.1 | Contratar **com o código** | Assinatura vinculada ao revendedor |
+| 15.3.2 | Tela de ativação do novo cliente | Pix/boleto **R$ 135,92**; cartão **R$ 140,61** |
+| 15.3.3 | `/painel/assinatura` do cliente | Mostra o código e o fim do desconto |
+| 15.3.4 | Avançar 3 meses e rodar o worker | Volta a R$ 159,90; `discountRemovedAt` preenchido |
+| 15.3.5 | Rodar o worker de novo | Não repete |
+| 15.3.6 | Código inválido na contratação | Recusado, sem vincular |
+
+### 15.4 Comissão
+
+| # | Passo | Esperado |
+|---|---|---|
+| 15.4.1 | 1ª mensalidade com desconto | **R$ 40,78** (30% de 135,92) |
+| 15.4.2 | Logo após `PAYMENT_CONFIRMED` | Existe, mas **não** liberada |
+| 15.4.3 | Após `PAYMENT_RECEIVED` | "Disponível para saque" |
+| 15.4.4 | Mensalidade sem desconto | **R$ 47,97** (30% de 159,90) |
+| 15.4.5 | Fatura com consumo extra | Comissão para na mensalidade |
+| 15.4.6 | Contestação | Vai para "em análise", não sacável |
+
+### 15.5 Prazos exibidos
+
+Em `/revendedor/financeiro`: Pix mesmo dia · Boleto 1 a 2 dias úteis · Débito até 3
+dias úteis · Crédito 32 dias corridos.
+
+### 15.6 Saque
+
+| # | Passo | Esperado |
+|---|---|---|
+| 15.6.1 | Saldo abaixo de R$ 10 | Recusado |
+| 15.6.2 | Saldo suficiente | Lote criado; comissões em `PROCESSANDO`; e-mail |
+| 15.6.3 | Segundo pedido com lote em andamento | Recusado |
+| 15.6.4 | Duas solicitações simultâneas | Só uma vence |
+| 15.6.5 | Transferência confirmada | Comissões `PAGA` |
+
+### 15.7 Leads e prospects
+
+| # | Passo | Esperado |
+|---|---|---|
+| 15.7.1 | Cadastrar prospect | Aparece só para ele |
+| 15.7.2 | Reivindicar lead | Vinculado; evento `lead.claimed` |
+| 15.7.3 | Outro revendedor tenta o mesmo | Recusado |
+| 15.7.4 | Lead vira cliente | `CONVERTIDO` |
+| 15.7.5 | Perguntar ao assistente sobre o código | Responde o código e a regra de 15% por 3 meses |
+
+---
+
+## 16. Super admin
+
+| # | Passo | Esperado |
+|---|---|---|
+| 16.1 | `/super-admin/dashboard` | Números da plataforma |
+| 16.2 | `/super-admin/empresas` | Lista e detalhe sem senha da empresa |
+| 16.3 | `/super-admin/empresas/nova` | Nasce comercial (`isTestOnly = false`) |
+| 16.4 | Ativar/desativar empresa (`:id/status`) | Some/volta da vitrine |
+| 16.5 | `/super-admin/planos` | Preço novo vale para nova contratação, não para as existentes |
+| 16.6 | `/super-admin/aprovacoes` | Aprovar/reprovar candidaturas |
+| 16.7 | `/super-admin/operacao` | Fila de eventos e dead-letters |
+| 16.8 | `/super-admin/relatorios` | Visão global, top empresas, crescimento |
+| 16.9 | `usage/admin/rates` | Alterar tarifa de consumo |
+
+### 16.10 Acesso assumido
+
+| # | Passo | Esperado |
+|---|---|---|
+| 16.10.1 | Gerar link para uma empresa | Validade curta |
+| 16.10.2 | Abrir o link | Entra no painel **daquela empresa** |
+| 16.10.3 | Conferir o token | Papel e `companyId` da empresa; `sub` continua o super admin |
+| 16.10.4 | Reutilizar link consumido | Recusado |
+| 16.10.5 | Encerrar | Volta ao super admin |
+| 16.10.6 | Acesso assumido de revendedor | Escrita bloqueada onde a regra exige |
+| 16.10.7 | Evento `session.revoked` | A sessão assumida cai sozinha ao ser revogada |
+
+---
+
+## 17. Tempo real (websocket)
+
+Abra o painel numa aba e provoque o evento em outra. **Nada pode exigir recarregar.**
+
+| Evento | Como provocar |
 |---|---|
-| **FUNCIONARIO** | caixa (visualizar, operar), pedidos (visualizar, editar), mesas (visualizar, operar), cardápio (visualizar), entregas (visualizar) |
-| **COZINHA** | pedidos (visualizar, editar), mesas (visualizar, operar) |
-| **MOTOBOY** | entregas (visualizar, editar) |
-| **GARCOM** | mesas (visualizar, operar), cardápio (visualizar) |
-| **ADMIN** | tudo da empresa |
+| `order.created` | Pedido pelo site, mesa ou WhatsApp |
+| `delivery.updated` | Motoboy avança status ou envia localização |
+| `table.opened` / `table.changed` / `table.closed` | Operar comanda |
+| `whatsapp.message.received` / `.sent` | Mensagem no canal da empresa |
+| `whatsapp.conversation.updated` | Atribuir/encerrar conversa |
+| `platform.whatsapp.*` | Canal institucional |
+| `lead.available` / `lead.claimed` | Novo lead e reivindicação |
+| `access.updated` / `company.access.paused` | Bloqueio por assinatura |
+| `session.revoked` | Encerrar acesso de suporte |
+| `whatsapp.access.requested` | Empresa pede o canal |
 
-### 6.2 Roteiro por papel
-
-Para **cada** papel abaixo, faça login e confirme os dois lados: o que deve abrir e
-o que deve ser negado.
-
-| # | Papel | Deve conseguir | Deve ser negado |
-|---|---|---|---|
-| 6.2.1 | FUNCIONARIO | Abrir caixa, avançar pedido, operar mesa | `/painel/funcionarios`, `/painel/fiscal`, `/painel/assinatura` |
-| 6.2.2 | COZINHA | Ver pedidos e marcar `EM_PREPARO`/`PRONTO` | Marcar `SAIU_PARA_ENTREGA` ou `ENTREGUE`; abrir caixa; cardápio |
-| 6.2.3 | MOTOBOY | Ver e avançar entregas atribuídas | Pedidos, mesas, cardápio, caixa |
-| 6.2.4 | GARCOM | Abrir comanda, lançar item, ver cardápio | Fechar caixa, editar cardápio, ver relatórios |
-| 6.2.5 | CLIENTE | Área `/minha-conta`, pedidos próprios | Qualquer rota `/painel/*` |
-
-> A restrição da COZINHA em 6.2.2 é regra explícita do serviço, não só de tela:
-> cozinha só marca `EM_PREPARO` e `PRONTO`.
-
-### 6.3 Isolamento multiempresa
-
-Este é o teste que mais importa e o mais fácil de esquecer.
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 6.3.1 | Criar uma segunda empresa com pedidos e produtos próprios | — |
-| 6.3.2 | Logado na empresa A, listar pedidos | Só os da empresa A |
-| 6.3.3 | Logado na empresa A, abrir por id um pedido da empresa B | Não encontrado |
-| 6.3.4 | Repetir para produtos, clientes, mesas, caixa, notas fiscais | Sempre só a própria empresa |
+Teste também: derrubar a rede do navegador e voltar — a tela deve reconectar.
 
 ---
 
-## 7. Fiscal — NFC-e (`/painel/fiscal` e `/painel/notas`)
+## 18. Saúde e observabilidade
 
-### 7.1 Cadastro e prontidão
-
-| # | Passo | Resultado esperado |
+| # | Passo | Esperado |
 |---|---|---|
-| 7.1.1 | Abrir sem cadastro preenchido | Situação: **"Emissão não configurada"**, com as pendências listadas |
-| 7.1.2 | Preencher emitente com município de outra UF (IBGE 3106200 com estado SP) | Recusado: o código não é de município de SP |
-| 7.1.3 | Preencher com IE "ISENTO" e tentar Produção | Recusado: NFC-e exige inscrição de contribuinte |
-| 7.1.4 | Enviar certificado A1 de outro CNPJ | Recusado: CNPJ do certificado não confere |
-| 7.1.5 | Enviar certificado vencido | Recusado com a data de vencimento |
-| 7.1.6 | Enviar `.pdf` em vez de `.pfx` | Recusado pela extensão |
-| 7.1.7 | Senha errada no certificado válido | Mensagem única cobrindo arquivo e senha |
-
-### 7.2 Conexão com a SEFAZ
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 7.2.1 | Clicar em **Testar conexão** sem certificado | Recusa pedindo o certificado |
-| 7.2.2 | Clicar com certificado válido | Resposta da SEFAZ na tela, com data e código; **nenhuma nota emitida, nenhuma numeração gasta** |
-| 7.2.3 | Salvar `Ambiente = Produção` | A virada só conclui se a SEFAZ responder "Serviço em Operação" |
-
-### 7.3 Emissão
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 7.3.1 | Emitir NFC-e de um pedido pago | Documento `AUTORIZADA` com chave de 44 dígitos e protocolo |
-| 7.3.2 | Clicar em emitir duas vezes no mesmo pedido | Devolve a mesma nota — não gera segunda |
-| 7.3.3 | Emitir com produto sem NCM/CFOP | Recusado **antes** de reservar numeração, listando as pendências |
-| 7.3.4 | Emitir comanda de mesa com item cancelado | O item cancelado não entra no valor |
-| 7.3.5 | Abrir o DANFE (`?formato=texto` e HTML) | Chave em blocos de 4, total, QR Code e protocolo |
-| 7.3.6 | Baixar o XML | Arquivo assinado, com `<Signature>` dentro de `<NFe>` |
-| 7.3.7 | Emitir com entrega e desconto | Cada item traz `vFrete`/`vDesc` e a soma bate com o total |
-| 7.3.8 | Emitir pagando com cartão | O XML traz `<card><tpIntegra>2</tpIntegra></card>` |
-
-### 7.4 Contingência e falhas
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 7.4.1 | Simular SEFAZ fora (endpoint inacessível) | Nota sai em `CONTINGENCIA` com `tpEmis 9`; **a venda não trava** |
-| 7.4.2 | Restabelecer e aguardar o worker | Transmite sozinha e vira `AUTORIZADA` |
-| 7.4.3 | Provocar rejeição definitiva (ex.: IE inválida) | Status `REJEITADA`, e **e-mail sai na hora** para os administradores |
-| 7.4.4 | Reemitir a venda depois da rejeição | Nova nota é criada, com número novo |
-
-### 7.5 Eventos
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 7.5.1 | Cancelar nota autorizada com justificativa de 10 caracteres | Recusado — mínimo 15 |
-| 7.5.2 | Cancelar dentro de 30 minutos com justificativa válida | Evento registrado; nota vira `CANCELADA` |
-| 7.5.3 | Cancelar depois de 30 minutos | Recusado, explicando a alternativa contábil |
-| 7.5.4 | Carta de correção | Registrada, com sequência incrementando |
-| 7.5.5 | Inutilizar faixa que contém nota autorizada | Recusado |
-| 7.5.6 | Inutilizar faixa livre | Registrada; documentos da faixa viram `INUTILIZADA` |
-
-> **Sem certificado A1 não dá para executar 7.2 em diante.** Nesse caso, marque como
-> não executado e rode a validação estrutural: gerar o XML pelo código e conferir
-> contra os XSD oficiais 4.00 com `xmllint --schema`.
+| 18.1 | `GET /api/health/live` | 200 sempre que o processo está de pé |
+| 18.2 | `GET /api/health/ready` | 200 só com o banco acessível |
+| 18.3 | Derrubar o MySQL e chamar `ready` | Falha, e o container é reiniciado pelo orquestrador |
+| 18.4 | `GET /api/health/metrics` sem `METRICS_TOKEN` | Rota desligada |
+| 18.5 | Com token certo | Formato Prometheus |
+| 18.6 | Com token errado | Negado |
+| 18.7 | `APP_ROLE=api` | Log diz que a fila não roda ali |
+| 18.8 | `APP_ROLE=worker` | Jobs rodam; HTTP interno responde ao health |
 
 ---
 
-## 8. Assinatura e pagamento (`/painel/assinatura`)
-
-Preço vigente: **R$ 159,90/mês**, com **7 dias** de teste.
-
-### 8.1 Teste grátis e ativação
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 8.1.1 | Contratar por `/contratar` sem código de revendedor | Empresa criada; teste de 7 dias começa |
-| 8.1.2 | Durante o teste, usar o painel | Tudo liberado, sem cobrança |
-| 8.1.3 | Forçar o fim do teste (ajustar a data no banco) | Painel bloqueado, com a tela de ativação |
-| 8.1.4 | Abrir a tela de ativação | Três formas com o valor de cada uma |
-| 8.1.5 | Escolher **Pix** | Valor **R$ 159,90** |
-| 8.1.6 | Escolher **Boleto** | Valor **R$ 159,90** |
-| 8.1.7 | Escolher **Cartão de crédito** | Valor **R$ 165,33** (taxa por dentro; líquido volta a R$ 159,90) |
-| 8.1.8 | Gerar a fatura | Abre no Asaas travada na forma escolhida |
-
-### 8.2 Troca de forma de pagamento
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 8.2.1 | Com fatura em aberto, trocar de cartão para Pix | Valor da fatura cai para R$ 159,90 e a fatura é reaberta atualizada |
-| 8.2.2 | Conferir a assinatura no Asaas | Próximas cobranças seguem a nova forma |
-| 8.2.3 | Trocar a forma com a fatura **já paga** | A fatura paga não é alterada; só as futuras |
-
-### 8.3 Pagamento e liberação
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 8.3.1 | Pagar por Pix | Acesso liberado em segundos (webhook `PAYMENT_RECEIVED`) |
-| 8.3.2 | Pagar por cartão | Acesso liberado com `PAYMENT_CONFIRMED`, **antes** de o dinheiro compensar |
-| 8.3.3 | Simular perda do webhook | A conciliação do worker libera assim mesmo, sem intervenção |
-| 8.3.4 | Deixar vencer sem pagar | Acesso bloqueado ao fim do período |
-| 8.3.5 | Pagar depois de vencido | Acesso volta |
-
-> **Regra de ordem no worker:** se a conciliação de pagamentos do Asaas falhar numa
-> rodada, o corte de acesso por vencimento **não** roda naquela rodada. Confirme no
-> log a mensagem "Corte de acesso por vencimento adiado".
-
-### 8.4 Consumo variável
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 8.4.1 | Gerar uso de IA/WhatsApp | Registro no razão de uso |
-| 8.4.2 | Fechar o ciclo | Consumo entra na fatura seguinte, **fora** da base de comissão |
-
----
-
-## 9. Revendedor
-
-### 9.1 Candidatura e aprovação
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 9.1.1 | Enviar candidatura por `/revenda` | Registro criado, status pendente |
-| 9.1.2 | Como SUPER_ADMIN, aprovar em `/super-admin/revendedores` | Perfil criado com **código único** e taxa de 30% |
-| 9.1.3 | Reprovar outra candidatura | Sem perfil criado; motivo registrado |
-| 9.1.4 | Login do revendedor | Cai em `/revendedor/dashboard` |
-
-### 9.2 Onboarding de recebimento
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 9.2.1 | Iniciar cadastro da subconta Asaas | Formulário/redirecionamento conforme o provedor |
-| 9.2.2 | Tentar sacar antes de concluir | Recusado, explicando o que falta |
-
-### 9.3 Indicação com desconto
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 9.3.1 | Contratar em `/contratar` **usando o código** do revendedor | Assinatura nasce vinculada ao revendedor |
-| 9.3.2 | Conferir a tela de ativação do novo cliente | Pix/boleto **R$ 135,92**; cartão **R$ 140,61** |
-| 9.3.3 | Conferir `/painel/assinatura` do cliente | Mostra o código e a data de fim do desconto |
-| 9.3.4 | Avançar 3 meses (ajustar `discountEndsAt`) e rodar o worker | Assinatura volta para R$ 159,90 no Asaas; `discountRemovedAt` preenchido |
-| 9.3.5 | Rodar o worker de novo | Não repete a atualização |
-
-### 9.4 Comissão
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 9.4.1 | Cliente indicado paga a 1ª mensalidade (com desconto) | Comissão de **R$ 40,78** (30% de 135,92) |
-| 9.4.2 | Conferir o status logo após `PAYMENT_CONFIRMED` | Comissão existe, mas **não** liberada para saque |
-| 9.4.3 | Após `PAYMENT_RECEIVED` | Passa para "Disponível para saque" |
-| 9.4.4 | Cliente paga já sem desconto | Comissão de **R$ 47,97** (30% de 159,90) |
-| 9.4.5 | Fatura com consumo além do plano | Comissão para na mensalidade, não acompanha o total |
-| 9.4.6 | Cliente contesta o pagamento | Valor vai para "em análise" e não pode ser sacado |
-
-### 9.5 Prazos exibidos
-
-Em `/revendedor/financeiro`, confira que a tabela mostra:
-
-| Forma | Prazo |
-|---|---|
-| Pix | no mesmo dia |
-| Boleto | 1 a 2 dias úteis |
-| Cartão de débito | até 3 dias úteis |
-| Cartão de crédito | 32 dias corridos |
-
-### 9.6 Saque
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 9.6.1 | Solicitar com saldo abaixo de R$ 10 | Recusado |
-| 9.6.2 | Solicitar com saldo suficiente | Lote criado; comissões travam em `PROCESSANDO`; e-mail de confirmação |
-| 9.6.3 | Solicitar de novo com um lote em andamento | Recusado |
-| 9.6.4 | Duas solicitações simultâneas | Só uma vence; a outra recebe conflito |
-| 9.6.5 | Transferência confirmada | Comissões viram `PAGA`, com data |
-
-### 9.7 Leads e prospects
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 9.7.1 | Cadastrar prospect em `/revendedor/clientes` | Aparece na lista do próprio revendedor |
-| 9.7.2 | Reivindicar um lead em `/revendedor/leads` | Lead fica vinculado a quem reivindicou |
-| 9.7.3 | Outro revendedor tenta reivindicar o mesmo | Recusado |
-| 9.7.4 | Lead vira cliente | Status `CONVERTIDO` |
-| 9.7.5 | Perguntar ao assistente sobre o código | Responde o código e a regra de 15% por 3 meses |
-
----
-
-## 10. Super admin
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 10.1 | `/super-admin/dashboard` | Números consolidados da plataforma |
-| 10.2 | `/super-admin/empresas` e abrir uma | Dados da empresa, sem precisar de senha dela |
-| 10.3 | `/super-admin/empresas/nova` | Empresa criada já como comercial (`isTestOnly = false`) |
-| 10.4 | `/super-admin/planos` | Alterar preço reflete em nova contratação, **não** nas assinaturas existentes |
-| 10.5 | `/super-admin/aprovacoes` | Aprovar/reprovar candidaturas |
-| 10.6 | `/super-admin/operacao` | Fila de eventos e dead-letters |
-| 10.7 | `/super-admin/suporte` | Abrir acesso de suporte a uma empresa |
-
-### 10.8 Acesso assumido (suporte)
-
-| # | Passo | Resultado esperado |
-|---|---|---|
-| 10.8.1 | Gerar link de acesso a uma empresa | Link com validade curta |
-| 10.8.2 | Abrir o link | Entra no painel **daquela empresa**, vendo produtos e pedidos dela |
-| 10.8.3 | Conferir o token | Papel e `companyId` são da empresa assumida; `sub` continua sendo o super admin |
-| 10.8.4 | Reutilizar o link já consumido | Recusado |
-| 10.8.5 | Encerrar a sessão de suporte | Acesso volta ao super admin |
-| 10.8.6 | Acesso assumido de revendedor | Mesma checagem, com escrita bloqueada onde a regra exige |
-
----
-
-## 11. Checklist rápido de regressão
-
-Antes de qualquer deploy, o mínimo:
+## 19. Checklist rápido de regressão
 
 1. `npm run verify` — exit 0
 2. `npm run test:e2e` — exit 0
-3. Login de cada papel abre a rota certa e nega a errada (6.2)
-4. Pedido do consumidor até `ENTREGUE` (4.2 + 5.1)
-5. Emitir uma NFC-e e abrir o DANFE (7.3.1, 7.3.5)
-6. Tela de ativação mostrando os três valores (8.1.4–8.1.7)
-7. Isolamento multiempresa (6.3)
+3. Cada papel abre o que deve e é negado no que não deve (7.2)
+4. Isolamento multiempresa (7.4)
+5. Pedido do consumidor até `ENTREGUE`, com motoboy (5.3 + 6.1 + 8.1)
+6. Emitir NFC-e e abrir o DANFE (13.3.1, 13.3.5)
+7. Ativação mostrando os três valores (14.1.4–14.1.7)
+8. Um evento de websocket chegando sem recarregar (17)
 
 ---
 
-## 12. O que não dá para testar sozinho
+## 20. O que não dá para testar sozinho
 
 Registre como **não executado**, nunca como aprovado.
 
-| Assunto | Por quê | O que dá para fazer |
+| Assunto | Por quê | Alternativa |
 |---|---|---|
-| Emissão real na SEFAZ | Exige certificado A1 e credenciamento da empresa | Validar o XML contra os XSD oficiais 4.00 e usar o botão "Testar conexão" |
-| Cobrança real no Asaas | Exige conta e chave de produção | Usar o ambiente de teste do Asaas e os testes automatizados de webhook |
-| Recebimento em conta de revendedor | Exige subconta Asaas real | Conferir que o lote é criado e a transferência é chamada |
-| Envio de WhatsApp | Exige Gupshup configurado | Testes de formato e invariantes de schema |
-| Publicação no Security do GitHub | Exige Advanced Security no plano | O portão de CVE roda e falha sozinho, sem a publicação |
+| Emissão real na SEFAZ | Certificado A1 e credenciamento | XSD oficial + "Testar conexão" |
+| Cobrança real no Asaas | Conta e chave de produção | Ambiente de teste do Asaas + testes de webhook |
+| Recebimento do revendedor | Subconta Asaas real | Conferir criação do lote e chamada da transferência |
+| WhatsApp de verdade | Gupshup configurado e número aprovado | Testes de formato e invariantes de schema |
+| Assistentes de IA | `DEEPSEEK_API_KEY` | Testes de intenção de busca e de cozinha |
+| Rota real | OSRM público pode limitar | Subir OSRM local em `ROUTING_BASE_URL` |
+| Security do GitHub | Advanced Security no plano | O portão de CVE roda e falha sozinho |
 
 ---
 
-## 13. Pendências conhecidas
+## 21. Pendências conhecidas
 
-Não são falhas de teste — são coisas que já sabemos e que podem aparecer durante a execução.
+Não são falhas novas — não reporte como se fossem.
 
-- **Grupo IBS/CBS da Reforma Tributária não é emitido.** Hoje não rejeita: as regras
-  foram suspensas em 01/08/2026. Simples Nacional passa a dever em 01/01/2027.
+- **Grupo IBS/CBS da Reforma não é emitido.** Rejeições suspensas em 01/08/2026;
+  Simples Nacional passa a dever em 01/01/2027.
 - **Loja com assinatura vencida continua no catálogo.** O painel do lojista é
   bloqueado, mas a vitrine segue aceitando pedido. Decisão de produto em aberto.
 - **Cidade compara por igualdade.** Cidade vizinha não aparece mesmo que a loja
