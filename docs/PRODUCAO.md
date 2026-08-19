@@ -282,6 +282,29 @@ Cancelamento vale por 30 minutos após a autorização. Passou disso, é procedi
 Toda nota rejeitada queima um número: use **Inutilizar numeração** em Painel > Notas fiscais,
 senão a sequência fica com buracos que a fiscalização cobra.
 
+### Zerar a base antes de entrar com clientes reais
+
+`apps/api/prisma/reset-data.js` apaga os dados operacionais e preserva o super
+administrador, as permissões, os planos e as tarifas de consumo. As migrations
+continuam aplicadas — o schema não é recriado.
+
+```sh
+# no Shell do serviço, dentro de /app — só mostra o que seria apagado
+node apps/api/prisma/reset-data.js
+
+# executa; o nome tem de bater com o banco ao qual a conexão chegou
+node apps/api/prisma/reset-data.js --confirmar=<nome-do-banco>
+```
+
+A confirmação por nome existe porque `DATABASE_URL` é variável de ambiente: o
+comando certo apontando para o banco errado é o acidente que este script tem de
+impedir. Sem o parâmetro, ele nunca escreve nada.
+
+A ordem de exclusão é lida do `information_schema` a cada execução, então tabela
+nova entra sozinha — não há lista para manter desatualizada.
+
+**Não há desfazer.** Faça o backup antes, sempre.
+
 ### Observabilidade
 
 `GET /api/health/metrics?token=$METRICS_TOKEN` expõe o formato Prometheus. Sem
