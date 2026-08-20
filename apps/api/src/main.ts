@@ -12,8 +12,12 @@ import { AppModule } from "./app.module";
 import { HttpExceptionFilter } from "./common/filters/http-exception.filter";
 import { validationMessages } from "./common/validation/validation-errors";
 import { appRole } from "./common/config/app-role";
+import { encerrarRelatoDeErros, iniciarRelatoDeErros, relatarErro } from "./common/observability/error-reporting";
 
 async function bootstrap() {
+  // Antes de tudo: um erro na subida do próprio Nest também precisa ser relatado,
+  // e é justamente o que ninguém vê — o container reinicia e o log se perde.
+  iniciarRelatoDeErros();
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     cors: false,
     rawBody: true,
@@ -119,6 +123,24 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
+
+  /**
+   * Falha fora do ciclo de uma requisição.
+   *
+   * `unhandledRejection` e `uncaughtException` são o que derruba o processo sem
+   * deixar rastro em nenhuma resposta HTTP. Aqui elas ao menos saem relatadas.
+   * A exceção não capturada continua encerrando o processo, porque seguir de pé
+   * depois dela é rodar com estado desconhecido.
+   */
+  process.on("unhandledRejection", (motivo) => {
+    logger.error(`Promessa rejeitada sem tratamento: ${motivo instanceof Error ? motivo.stack : String(motivo)}`);
+    relatarErro(motivo, { origem: "unhandledRejection" });
+  });
+  process.on("uncaughtException", (erro) => {
+    logger.error(`Exceção não capturada: ${erro.stack ?? erro.message}`);
+    relatarErro(erro, { origem: "uncaughtException" });
+    void encerrarRelatoDeErros().finally(() => process.exit(1));
+  });
 
   if (process.env.NODE_ENV !== "production" || process.env.ENABLE_SWAGGER === "true") {
     // A CSP global bloqueia script; o Swagger UI depende de script inline.

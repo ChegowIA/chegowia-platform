@@ -381,6 +381,29 @@ CONFIRM_RESTORE=YES BACKUP_DIR=/srv/chegowia/backups/AAAA... \
   /bin/sh infra/restore.sh
 ```
 
+## 8.1 Saber do erro antes do cliente
+
+Sem `SENTRY_DSN` o erro fica só no log do container — e quem descobre a falha é o
+cliente, ligando, quando o log já rodou no rodízio.
+
+```sh
+SENTRY_DSN=https://...@....ingest.sentry.io/...
+SENTRY_ENVIRONMENT=producao
+APP_VERSION=          # opcional; agrupa os erros por versão publicada
+```
+
+O que **não** sai da máquina: corpo de requisição, cabeçalho, cookie, parâmetro
+de consulta, dado de usuário e qualquer campo cujo nome pareça sensível (senha,
+token, CPF, CNPJ, cartão, chave, certificado). O que viaja é o rastro de pilha e
+o `requestId`, que é o que liga o relato à linha do log guardada aqui.
+
+Erro de tela também chega: a página manda para `POST /api/observability/client-error`
+e a API repassa. Isso evita colocar a chave do serviço no navegador e mantém a
+limpeza de dado num único lugar.
+
+Rastreamento de desempenho fica desligado (`tracesSampleRate: 0`). Ligar é uma
+decisão separada, porque abre um segundo canal de dados.
+
 ## 9. Atualizações e rollback
 
 Antes de cada atualização:
