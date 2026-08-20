@@ -80,6 +80,8 @@ type BillingData = {
   manageable?: boolean;
   payableInvoice?: { id: string; url: string; dueDate: string | null; value: number } | null;
   accessRestricted?: boolean;
+  /** Situação da loja na vitrine: sair do catálogo é o efeito que faz o lojista parar de vender. */
+  catalog?: { visible: boolean; hiddenAt: string | null; daysRemaining: number | null; graceDays?: number };
   activationAvailable?: boolean;
   currentPeriodEnd?: string | null;
   nextBillingEstimate?: {
@@ -276,6 +278,27 @@ export default function SubscriptionPage() {
           </div>
 
           {currentTrial && trial && <TrialNotice trial={trial} planPrice={Number(data?.plan?.monthlyPrice ?? 159.9)} />}
+          {/*
+            O bloqueio do painel já aparecia. Sair do catálogo é o efeito que
+            faz o lojista parar de vender, e ele precisa ver o prazo antes de
+            acontecer — não descobrir quando o pedido para de entrar.
+          */}
+          {data?.catalog && !data.catalog.visible && (
+            <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm leading-6 text-rose-950 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-100">
+              <p className="font-black">Sua loja está fora do catálogo.</p>
+              <p className="mt-1">Ela não aparece na busca nem aceita pedidos novos enquanto a mensalidade estiver em aberto. Assim que o pagamento for confirmado, a loja volta sozinha.</p>
+            </div>
+          )}
+          {data?.catalog?.visible && data.catalog.daysRemaining !== null && data.catalog.daysRemaining <= (data.catalog.graceDays ?? 7) && (
+            <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/25 dark:text-amber-100">
+              <p className="font-black">
+                {data.catalog.daysRemaining === 0
+                  ? "Sua loja sai do catálogo hoje."
+                  : `Sua loja sai do catálogo em ${data.catalog.daysRemaining} ${data.catalog.daysRemaining === 1 ? "dia" : "dias"}.`}
+              </p>
+              <p className="mt-1">Depois disso ela deixa de aparecer na busca e de aceitar pedidos até a mensalidade ser quitada.</p>
+            </div>
+          )}
           {data?.currentPeriodEnd && <p className="mt-5 text-xs text-slate-500 dark:text-slate-400">Período atual até {formatDate(data.currentPeriodEnd)}.</p>}
           {nextBilling && <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/25 dark:text-emerald-100">
             <p className="font-black">O período atual já está quitado.</p>

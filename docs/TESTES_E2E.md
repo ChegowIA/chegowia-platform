@@ -824,6 +824,25 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 
 ## 14. Assinatura e pagamento
 
+### 14.0 Carência de 7 dias no catálogo
+
+A loja sai do ar 7 dias depois de a assinatura vencer, e volta sozinha quando o
+pagamento entra. Cortar no mesmo dia tiraria a loja do ar por um Pix que demorou
+algumas horas; não cortar nunca deixava quem parou de pagar vendendo para sempre.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 14.0.1 | Assinatura em dia | Loja no diretório, no sitemap, na home e aceitando pedido |
+| 14.0.2 | Vencida há 3 dias | Tudo continua funcionando; painel do lojista avisa que faltam 4 dias |
+| 14.0.3 | Vencida há 8 dias | Fora do diretório, do sitemap e da home; a página da loja dá 404 |
+| 14.0.4 | Cotação de entrega com a loja fora do ar | Recusada com "loja temporariamente indisponível" |
+| 14.0.5 | Pedido pelo link direto com a loja fora do ar | Recusado — esconder do catálogo não bastava |
+| 14.0.6 | Pedido montado pelo WhatsApp da loja fora do ar | Recusado pelo mesmo motivo |
+| 14.0.7 | Pagamento confirmado | Loja volta imediatamente, sem intervenção |
+| 14.0.8 | Teste gratuito vencido há mais de 7 dias sem pagar | Mesma regra do período pago |
+| 14.0.9 | Empresa criada pelo super admin, sem assinatura | Continua visível: nunca passou pelo cadastro com plano |
+| 14.0.10 | Painel do lojista com a loja já fora | Aviso vermelho dizendo que ela não aparece nem aceita pedido |
+
 R$ 159,90/mês, 7 dias de teste.
 
 ### 14.1 Teste e ativação
@@ -1043,8 +1062,6 @@ Não são falhas novas — não reporte como se fossem.
 
 - **Grupo IBS/CBS da Reforma não é emitido.** Rejeições suspensas em 01/08/2026;
   Simples Nacional passa a dever em 01/01/2027.
-- **Loja com assinatura vencida continua no catálogo.** O painel do lojista é
-  bloqueado, mas a vitrine segue aceitando pedido. Decisão de produto em aberto.
 - **Cidade compara por igualdade.** Cidade vizinha não aparece mesmo que a loja
   entregue lá; o raio de entrega não entra nesse filtro.
 - **Prospecção depende de modelo aprovado pela Meta.** Sem um modelo aprovado

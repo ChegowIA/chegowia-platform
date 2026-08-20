@@ -21,6 +21,7 @@ import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { NfceService } from "../fiscal/nfce/nfce.service";
 import { CreateOrderDto } from "./dto/create-order.dto";
 import { DeliveryQuoteDto } from "./dto/delivery-quote.dto";
+import { LOJA_INDISPONIVEL_POR_ASSINATURA, assinaturaDentroDaCarencia } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 const ORDER_INCLUDE = {
@@ -155,9 +156,17 @@ export class OrdersService {
         isActive: true,
         ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(customerId) ?? { isTestOnly: false }),
       },
-      include: { settings: true },
+      include: {
+        settings: true,
+        subscription: { select: { currentPeriodEnd: true, trialEndsAt: true } },
+      },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");
+    // Esconder do catálogo não impede o pedido: quem tem o link direto ou o
+    // carrinho aberto continuaria comprando de uma loja que parou de pagar.
+    if (!assinaturaDentroDaCarencia(company.subscription)) {
+      throw new NotFoundException(LOJA_INDISPONIVEL_POR_ASSINATURA);
+    }
 
     const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });
     if (!address) throw new NotFoundException("Endereço não encontrado.");
@@ -263,8 +272,14 @@ export class OrdersService {
         isActive: true,
         ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(customerId) ?? { isTestOnly: false }),
       },
+      include: { subscription: { select: { currentPeriodEnd: true, trialEndsAt: true } } },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");
+    // A cotação vem antes do pedido: recusar aqui evita o cliente montar o
+    // carrinho inteiro para ser barrado no fim.
+    if (!assinaturaDentroDaCarencia(company.subscription)) {
+      throw new NotFoundException(LOJA_INDISPONIVEL_POR_ASSINATURA);
+    }
     const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });
     if (!address) throw new NotFoundException("Endereço não encontrado.");
     return this.calculateDeliveryQuote(company, address);
@@ -688,9 +703,17 @@ export class OrdersService {
   private async getActiveCompanyForWhatsApp(companyId: string) {
     const company = await this.db().company.findFirst({
       where: { id: companyId, isActive: true },
-      include: { settings: true },
+      include: {
+        settings: true,
+        subscription: { select: { currentPeriodEnd: true, trialEndsAt: true } },
+      },
     });
     if (!company) throw new NotFoundException("Loja não encontrada ou indisponível.");
+    // O WhatsApp da loja é o terceiro caminho de venda, e sem esta checagem
+    // seria o que sobraria funcionando para quem parou de pagar.
+    if (!assinaturaDentroDaCarencia(company.subscription)) {
+      throw new NotFoundException(LOJA_INDISPONIVEL_POR_ASSINATURA);
+    }
     return company;
   }
 

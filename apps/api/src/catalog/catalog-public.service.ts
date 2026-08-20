@@ -5,6 +5,7 @@ import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
+import { assinaturaPermiteAparecerNoCatalogo } from "../common/public-visibility/subscription-grace";
 
 /** Teto do varrimento da home. Ver o comentário de `getMarketplace`. */
 const MARKETPLACE_SCAN_LIMIT = 600;
@@ -42,6 +43,9 @@ export class CatalogPublicService {
     return {
       isActive: true,
       ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+      // Assinatura vencida há mais de uma semana sai do ar. Antes o painel do
+      // lojista era bloqueado e a vitrine seguia vendendo.
+      ...assinaturaPermiteAparecerNoCatalogo(),
     };
   }
 

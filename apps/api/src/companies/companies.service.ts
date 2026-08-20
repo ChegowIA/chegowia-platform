@@ -15,6 +15,7 @@ import { AuthService } from "../auth/auth.service";
 import { isStoreOpen } from "../common/utils/store-hours";
 import { LocalStorageService } from "../common/storage/local-storage.service";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
+import { assinaturaPermiteAparecerNoCatalogo } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 @Injectable()
@@ -290,6 +291,7 @@ export class CompaniesService {
     const where: any = {
       isActive: true,
       ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+      ...assinaturaPermiteAparecerNoCatalogo(),
     };
     if (params.city) where.city = { contains: params.city };
     if (params.search) where.name = { contains: params.search };
@@ -324,6 +326,7 @@ export class CompaniesService {
         slug,
         isActive: true,
         ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+        ...assinaturaPermiteAparecerNoCatalogo(),
       },
       select: {
         id: true,
