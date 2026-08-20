@@ -366,9 +366,23 @@ código 2 — para o cron reclamar em vez de a ausência da cópia passar meses 
 ninguém notar. Depois de enviar, o script confere o que chegou (`rclone check`):
 cópia truncada por queda de rede não dá sintoma.
 
-`infra/check-production.sh` passou a falhar quando o último envio externo tem
-mais de 48 horas. É a forma de descobrir que o agendamento nunca foi instalado
-antes de precisar dele.
+### Ficar só com o backup local
+
+É uma decisão possível, e ela tem de ser dita em voz alta:
+
+```sh
+BACKUP_ALLOW_LOCAL_ONLY=true
+```
+
+Aí o script termina com sucesso, mas repete o risco a cada execução: banco e
+cópia no mesmo disco, e documento fiscal autorizado com guarda obrigatória de
+cinco anos. A alternativa a esse aceite explícito seria conviver com um cron
+vermelho toda noite — o que treina a ignorar exatamente o aviso que um dia vai
+importar.
+
+`infra/check-production.sh` falha quando o último backup tem mais de 48 horas, e
+é assim que se descobre que o agendamento nunca foi instalado antes de precisar
+dele. Com backup somente local ele passa, mas imprime o aviso junto do resultado.
 
 O backup contém dump consistente do MySQL, imagens, currículos, manifesto e
 checksums. A retenção padrão é 14 dias (`BACKUP_RETENTION_DAYS`).

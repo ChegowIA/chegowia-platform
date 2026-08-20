@@ -39,18 +39,28 @@ fi
 # sobre o arquivo que o último envio externo deixou, não sobre a intenção.
 file_backup_root=$(read_env_value BACKUP_ROOT "$ENV_FILE")
 BACKUP_ROOT=${BACKUP_ROOT:-${file_backup_root:-/srv/chegowia/backups}}
-marca="$BACKUP_ROOT/ULTIMO_ENVIO_EXTERNO"
+marca="$BACKUP_ROOT/ULTIMO_BACKUP"
 if [ ! -f "$marca" ]; then
-  echo "Nenhum backup foi enviado para fora do servidor ainda ($marca não existe)." >&2
+  echo "Nenhum backup foi registrado ainda ($marca não existe)." >&2
   echo "  Rode 'sh infra/backup.sh' e confira o agendamento no crontab." >&2
   exit 1
 fi
 if [ -n "$(find "$marca" -mtime +2 2>/dev/null)" ]; then
-  echo "O último backup externo tem mais de 48 horas (veja $marca)." >&2
+  echo "O último backup tem mais de 48 horas (veja $marca)." >&2
   echo "  O agendamento provavelmente parou de rodar." >&2
   exit 1
 fi
-echo "Último backup externo: $(cat "$marca")"
+backup_stamp=$(sed -n 's/^stamp=//p' "$marca")
+backup_externo=$(sed -n 's/^externo=//p' "$marca")
+if [ "$backup_externo" = "sim" ]; then
+  echo "Último backup: $backup_stamp (com cópia fora do servidor)"
+else
+  # Aviso, e não falha: ficar só com o backup local é uma decisão possível, e
+  # transformá-la em erro diário treinaria a pessoa a ignorar o alerta. Mas o
+  # risco continua sendo dito em voz alta a cada verificação.
+  echo "Último backup: $backup_stamp — SOMENTE LOCAL, no mesmo disco do banco."
+  echo "  Perder a máquina perde o banco e a cópia juntos."
+fi
 
 curl --fail --silent --show-error "https://$DOMAIN/api/health/live" >/dev/null
 curl --fail --silent --show-error "https://$DOMAIN/api/health/ready" >/dev/null

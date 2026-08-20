@@ -18,12 +18,14 @@ file_retention_days=$(read_env_value BACKUP_RETENTION_DAYS "$ENV_FILE")
 file_mysql_database=$(read_env_value MYSQL_DATABASE "$ENV_FILE")
 file_backup_remote=$(read_env_value BACKUP_REMOTE "$ENV_FILE")
 file_backup_rsync=$(read_env_value BACKUP_RSYNC_TARGET "$ENV_FILE")
+file_backup_local_only=$(read_env_value BACKUP_ALLOW_LOCAL_ONLY "$ENV_FILE")
 DATA_ROOT=${DATA_ROOT:-${file_data_root:-/srv/chegowia/data}}
 BACKUP_ROOT=${BACKUP_ROOT:-${file_backup_root:-/srv/chegowia/backups}}
 RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-${file_retention_days:-14}}
 MYSQL_DATABASE_NAME=${MYSQL_DATABASE:-${file_mysql_database:-chegowia}}
 BACKUP_REMOTE=${BACKUP_REMOTE:-${file_backup_remote:-}}
 BACKUP_RSYNC_TARGET=${BACKUP_RSYNC_TARGET:-${file_backup_rsync:-}}
+BACKUP_ALLOW_LOCAL_ONLY=${BACKUP_ALLOW_LOCAL_ONLY:-${file_backup_local_only:-}}
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 TARGET="$BACKUP_ROOT/$STAMP"
 
@@ -44,6 +46,14 @@ esac
 
 umask 077
 mkdir -p "$TARGET"
+
+# Registro do último backup: quando aconteceu e se saiu da máquina. É o que o
+# check-production.sh lê para dizer se o agendamento está de fato rodando — a
+# linha de cron podia nunca ter sido instalada, e isso não dá sintoma até o dia
+# em que o backup é necessário.
+registrar_marca() {
+  printf 'stamp=%s\nexterno=%s\n' "$STAMP" "$externo" > "$BACKUP_ROOT/ULTIMO_BACKUP"
+}
 
 # Marca o backup como imprestável em vez de deixá-lo parecendo bom.
 abortar() {
@@ -102,12 +112,32 @@ echo "Backup local concluído em $TARGET"
 # recomendada, porque um remoto do tipo `crypt` cifra antes de sair da máquina) ou
 # `BACKUP_RSYNC_TARGET` para outra máquina por SSH. Sem nenhum dos dois o script
 # avisa em vez de fingir que guardou.
+externo="nao"
 if [ -z "$BACKUP_REMOTE" ] && [ -z "$BACKUP_RSYNC_TARGET" ]; then
-  echo "" >&2
-  echo "ATENÇÃO: nenhuma cópia externa configurada." >&2
-  echo "  Este backup existe apenas em $BACKUP_ROOT, no mesmo servidor do banco." >&2
-  echo "  Configure BACKUP_REMOTE (rclone) ou BACKUP_RSYNC_TARGET (ssh) em $ENV_FILE." >&2
-  exit 2
+  # Sem destino externo há dois casos, e eles não podem terminar igual.
+  #
+  # Quem nunca configurou precisa ser incomodado: o código 2 faz o cron reclamar
+  # toda noite em vez de a ausência da cópia passar meses sem ninguém notar.
+  #
+  # Quem decidiu ficar só com o backup local precisa dizer isso em voz alta
+  # (BACKUP_ALLOW_LOCAL_ONLY=true). Sem essa saída explícita, a alternativa real
+  # é comentar a checagem ou conviver com um cron vermelho — e conviver com
+  # alerta vermelho de backup é o pior hábito possível, porque treina a pessoa a
+  # ignorar exatamente o aviso que um dia vai importar.
+  if [ "$BACKUP_ALLOW_LOCAL_ONLY" = "true" ]; then
+    echo "" >&2
+    echo "Backup somente local, aceito por BACKUP_ALLOW_LOCAL_ONLY=true." >&2
+    echo "  Ele está em $BACKUP_ROOT, no mesmo disco do banco: perder a máquina perde os dois." >&2
+    echo "  Lembre que documento fiscal autorizado tem guarda obrigatória de cinco anos." >&2
+  else
+    echo "" >&2
+    echo "ATENÇÃO: nenhuma cópia externa configurada." >&2
+    echo "  Este backup existe apenas em $BACKUP_ROOT, no mesmo servidor do banco." >&2
+    echo "  Configure BACKUP_REMOTE (rclone) ou BACKUP_RSYNC_TARGET (ssh) em $ENV_FILE," >&2
+    echo "  ou aceite o risco explicitamente com BACKUP_ALLOW_LOCAL_ONLY=true." >&2
+    registrar_marca
+    exit 2
+  fi
 fi
 
 # Falha no envio não apaga o que já foi gerado: o backup local continua válido, e
@@ -119,6 +149,7 @@ if [ -n "$BACKUP_REMOTE" ]; then
   rclone copy --checksum "$TARGET" "$BACKUP_REMOTE/$STAMP"
   # Conferir depois de enviar: cópia truncada por queda de rede é silenciosa.
   rclone check --checksum "$TARGET" "$BACKUP_REMOTE/$STAMP"
+  externo="sim"
   echo "Cópia externa verificada em $BACKUP_REMOTE/$STAMP"
 fi
 
@@ -126,10 +157,9 @@ if [ -n "$BACKUP_RSYNC_TARGET" ]; then
   command -v rsync >/dev/null 2>&1 || { echo "rsync não encontrado, mas BACKUP_RSYNC_TARGET está definido." >&2; exit 1; }
   echo "Enviando para $BACKUP_RSYNC_TARGET/$STAMP..."
   rsync -a --checksum "$TARGET/" "$BACKUP_RSYNC_TARGET/$STAMP/"
+  externo="sim"
   echo "Cópia externa enviada para $BACKUP_RSYNC_TARGET/$STAMP"
 fi
 
-# Registro do último envio bem-sucedido. É o que o check-production.sh lê para
-# dizer se o agendamento está de fato rodando.
-printf '%s\n' "$STAMP" > "$BACKUP_ROOT/ULTIMO_ENVIO_EXTERNO"
+registrar_marca
 echo "Backup concluído."
