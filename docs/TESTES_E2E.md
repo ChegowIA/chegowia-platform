@@ -649,6 +649,8 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.5.6 | Número na lista de não contatar | Recusa nomeando o número; nada é enviado |
 | 10.5.7 | Número inválido (DDD inexistente, 9 dígitos sem DDD) | 400 antes de chegar ao provedor |
 | 10.5.8 | Conversa criada à mão | Nasce em modo humano: a IA não responde por cima do superadmin |
+| 10.5.9 | Responder no inbox uma conversa fora da janela de 24h | 400 explicando a regra; a caixa de texto fica desabilitada com o aviso |
+| 10.5.10 | Responder dentro da janela | Envia normalmente |
 
 ### 10.6 Prospecção em lista
 
@@ -677,9 +679,37 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.6.21 | Cancelar | Pendentes viram `DESCARTADO`; enviados permanecem no relatório |
 | 10.6.22 | Fila esvaziada | Vira `CONCLUIDA` sozinho |
 | 10.6.23 | Reiniciar o processo da API no meio do disparo | Retoma sem reenviar nem atropelar o intervalo |
-| 10.6.24 | Falha momentânea do provedor | Primeira falha mantém o contato na fila; segunda marca `FALHOU` |
-| 10.6.25 | Modelo recusado pela Meta (erro em série) | Pausa automática com o motivo e o último erro; não queima a lista inteira |
-| 10.6.26 | Conferir o consumo depois de um disparo | Mensagens contam como `WHATSAPP_TEMPLATE_MARKETING` no consumo da plataforma |
+| 10.6.24 | Falha no envio | Uma tentativa por contato: marca `FALHOU` com o erro, sem repetir sozinho |
+| 10.6.25 | Modelo recusado pela Meta (erro em série) | Pausa automática após 5 falhas sem nenhum envio, com o motivo e o último erro |
+| 10.6.26 | Recolar um número que falhou | Aceito: falha não torna o contato inalcançável |
+| 10.6.27 | Recolar um número que recebeu de verdade | Descartado: "já existe conversa com este número" |
+| 10.6.28 | Conferir o consumo depois de um disparo | Mensagens contam como `WHATSAPP_TEMPLATE_MARKETING` no consumo da plataforma |
+| 10.6.29 | Dois disparos ativos ao mesmo tempo | Um envio por giro **no total**, alternando entre eles — não um por disparo |
+| 10.6.30 | Teto de 24h do número (`WHATSAPP_OUTREACH_DAILY_CAP`, padrão 250) | Todos os disparos reagendam; nada sai até a janela rolar |
+| 10.6.31 | Intervalo pedido abaixo de 10s | Elevado ao piso, que é o giro do worker |
+| 10.6.32 | Réplica com `APP_ROLE=api` | Não dispara: só o processo de worker envia |
+| 10.6.33 | Banco fora do ar durante um giro | Erro registrado no log; o processo não cai |
+| 10.6.34 | Lista de 2 mil números | Criada em menos de 1s; conferência devolve 50 exemplos com o total ao lado |
+
+### 10.6.1 Leitura da lista: casos que já falharam
+
+| # | Linha colada | Esperado |
+|---|---|---|
+| a | `Pizzaria X - CNPJ 12.345.678/0001-90 - (62) 99999-8888` | Lê o telefone. O rabo do CNPJ já engoliu o número real uma vez |
+| b | `Ticket médio R$ 1.500,00 - 62 99999-8888` | Lê o telefone |
+| c | `Rua 5, 74000-000 - Goiânia - 62 99999-8888` | Lê o telefone; CEP não confunde |
+| d | `Pedido 123456789012 - Bar - 62 99999-8888` | Lê o telefone |
+| e | `12.345.678/0001-90` sozinho | Recusado: CNPJ não vira telefone |
+| f | `62 9999-8888` (8 dígitos) | **Recusado** com "confira se falta o 9". Completar mandaria a mensagem para outra pessoa |
+| g | `62 3212-4545` | Aceito e sinalizado como possível fixo |
+| h | `062 99999-8888` e `+55 (062) 99999-8888` | Aceitos: prefixo de interurbano é retirado |
+| i | `005562999998888` | Aceito: prefixo internacional é retirado |
+| j | `Pizzaria do Zé` + tabulação + número + tabulação + `Goiânia` | Nome e cidade em campos separados |
+| k | `Nome,Telefone,Cidade` (cabeçalho) | Vira linha recusada, não contato |
+| l | `+1 415 555 2671` | Recusado: não é número brasileiro |
+| m | `62999998888 62988887777` | Dois contatos |
+| n | `Padaria - 62 3212-4545 ramal 22` | Nome "Padaria", sem o ramal |
+| o | 50 mil caracteres de dígitos e espaços | Responde em milissegundos (sem travamento de expressão regular) |
 
 ### 10.7 Resposta de quem foi abordado
 

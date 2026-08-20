@@ -29,7 +29,7 @@ function construir(opcoes: {
   alvos?: Alvo[];
   canal?: Record<string, unknown> | null;
   bloqueios?: { phone: string }[];
-  conversas?: { customerPhone: string }[];
+  conversas?: { customerPhone: string; lastMessageText?: string | null; lastInboundAt?: Date | null }[];
   alvosAnteriores?: { phone: string }[];
   empresas?: { phone: string | null; whatsapp: string | null }[];
   abrirConversa?: jest.Mock;
@@ -66,6 +66,7 @@ function construir(opcoes: {
         Object.assign(campanha, resolverIncrementos(campanha, data));
         return Promise.resolve({ ...campanha });
       }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     platformOutreachTarget: {
       findFirst: jest.fn().mockImplementation(({ where }: any) =>
@@ -77,7 +78,20 @@ function construir(opcoes: {
         Object.assign(alvo, resolverIncrementos(alvo, data));
         return Promise.resolve({ ...alvo });
       }),
-      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      // A reserva do contato é um updateMany condicionado a id, status e número
+      // de tentativas. O mock precisa aplicá-la de verdade, senão o worker
+      // desiste do envio achando que outro processo levou o contato.
+      updateMany: jest.fn().mockImplementation(({ where, data }: any) => {
+        const alvo = alvos.find((item) => item.id === where.id
+          && (where.status === undefined || item.status === where.status)
+          && (where.attempts === undefined || (item.attempts ?? 0) === where.attempts));
+        if (!alvo) return Promise.resolve({ count: 0 });
+        Object.assign(alvo, resolverIncrementos(alvo, data));
+        return Promise.resolve({ count: 1 });
+      }),
+      groupBy: jest.fn().mockImplementation(() => Promise.resolve(
+        [{ campaignId: campanha.id, _count: { _all: alvos.filter((alvo) => alvo.status === "PENDENTE").length } }],
+      )),
     },
     platformOutreachBlock: {
       findMany: jest.fn().mockResolvedValue(opcoes.bloqueios ?? []),
@@ -90,7 +104,11 @@ function construir(opcoes: {
       findUnique: jest.fn().mockResolvedValue(canal),
     },
     platformWhatsAppConversation: {
-      findMany: jest.fn().mockResolvedValue(opcoes.conversas ?? []),
+      findMany: jest.fn().mockResolvedValue((opcoes.conversas ?? []).map((conversa) => ({
+        lastMessageText: "conversa de verdade",
+        lastInboundAt: null,
+        ...conversa,
+      }))),
     },
     company: { findMany: jest.fn().mockResolvedValue(opcoes.empresas ?? []) },
     user: { findUnique: jest.fn().mockResolvedValue({ id: "u-1", name: "Thiago" }) },
@@ -197,6 +215,24 @@ describe("criação do disparo", () => {
     expect(dados.minIntervalSeconds).toBe(60);
     expect(dados.maxIntervalSeconds).toBe(60);
   });
+
+  it("intervalo abaixo do giro do worker é elevado ao piso", async () => {
+    // Aceitar 5 segundos e entregar 10 é pior que declarar o piso: o disparo
+    // pareceria mais lento do que foi configurado, sem explicação.
+    const { service, prisma } = construir();
+    jest.spyOn(service, "detalharCampanha").mockResolvedValue({ id: "camp-nova" });
+
+    await service.criarCampanha("u-1", {
+      name: "Rapido demais",
+      contacts: "62 99999-8888",
+      minIntervalSeconds: 5,
+      maxIntervalSeconds: 6,
+    });
+
+    const dados = prisma.platformOutreachCampaign.create.mock.calls[0][0].data;
+    expect(dados.minIntervalSeconds).toBe(10);
+    expect(dados.maxIntervalSeconds).toBe(10);
+  });
 });
 
 describe("começar o disparo", () => {
@@ -239,6 +275,9 @@ describe("ritmo do disparo", () => {
     await service.processarDisparos(agora);
 
     expect(platform.openConversationWith).toHaveBeenCalledTimes(1);
+    // O giro engole exceção de propósito (quem chama é setInterval), então o
+    // caminho normal precisa provar que não houve erro engolido.
+    expect(service.logger.error).not.toHaveBeenCalled();
     const agendamento = prisma.platformOutreachCampaign.update.mock.calls.at(-1)![0].data.nextSendAt as Date;
     const esperaSegundos = (agendamento.getTime() - agora.getTime()) / 1000;
     expect(esperaSegundos).toBeGreaterThanOrEqual(15);
@@ -305,29 +344,46 @@ describe("ritmo do disparo", () => {
 });
 
 describe("falha no envio", () => {
-  it("primeira falha não desiste do contato", async () => {
-    const { service, alvos } = construir({
+  it("uma tentativa por contato: falha não é repetida sozinha", async () => {
+    // Falha ambígua (tempo esgotado, resposta ilegível) pode ter sido entregue
+    // pelo provedor. Insistir mandaria a mesma abordagem duas vezes para um
+    // desconhecido; recolar o número numa lista nova continua possível.
+    const { service, alvos, campanha } = construir({
       alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
       abrirConversa: jest.fn().mockRejectedValue(new Error("Gupshup fora do ar")),
     });
 
     await service.processarDisparos(new Date("2026-08-20T13:00:00Z"));
 
-    expect(alvos[0].status).toBe("PENDENTE");
-    expect(alvos[0].attempts).toBe(1);
+    expect(alvos[0].status).toBe("FALHOU");
     expect(alvos[0].errorMessage).toContain("Gupshup fora do ar");
+    expect(campanha.failedCount).toBe(1);
   });
 
-  it("segunda falha marca o contato como falho", async () => {
-    const { service, alvos, campanha } = construir({
-      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE", attempts: 1 }],
-      abrirConversa: jest.fn().mockRejectedValue(new Error("modelo não aprovado")),
+  it("contato que falhou pode voltar em uma lista nova", async () => {
+    // Sem isso, uma queda do provedor tornaria aqueles números inalcançáveis
+    // para sempre: a lista nova os descartaria como "já entrou em outro disparo".
+    const { service, prisma } = construir();
+    jest.spyOn(service, "detalharCampanha").mockResolvedValue({ id: "camp-nova" });
+
+    await service.criarCampanha("u-1", { name: "Segunda chance", contacts: "62 99999-8888" });
+
+    const consulta = prisma.platformOutreachTarget.findMany.mock.calls[0][0];
+    expect(consulta.where.status).toEqual({ not: "FALHOU" });
+  });
+
+  it("conversa que só existe por causa de uma falha não bloqueia a lista", async () => {
+    // A conversa é criada antes do envio. Se o envio falha, sobra uma casca sem
+    // mensagem entregue e sem resposta — e ela não pode contar como contato.
+    const { service, prisma } = construir({
+      conversas: [{ customerPhone: "5562999998888", lastMessageText: null, lastInboundAt: null }],
     });
+    jest.spyOn(service, "detalharCampanha").mockResolvedValue({ id: "camp-nova" });
 
-    await service.processarDisparos(new Date("2026-08-20T13:00:00Z"));
+    await service.criarCampanha("u-1", { name: "Depois da falha", contacts: "62 99999-8888" });
 
-    expect(alvos[0].status).toBe("FALHOU");
-    expect(campanha.failedCount).toBe(1);
+    const dados = prisma.platformOutreachCampaign.create.mock.calls[0][0].data;
+    expect(dados.totalTargets).toBe(1);
   });
 
   it("nada funcionando pausa o disparo sozinho", async () => {
@@ -376,5 +432,157 @@ describe("cancelamento", () => {
       where: { campaignId: "camp-1", status: "PENDENTE" },
       data: { status: "DESCARTADO", discardReason: "disparo cancelado" },
     }));
+  });
+});
+
+/**
+ * Travas que valem para o número, não para o disparo.
+ *
+ * O que a Meta observa é o número institucional. Limite por disparo não protege
+ * disso: três disparos de 200 somam 600 no mesmo número, e conversa iniciada
+ * pela empresa tem teto por faixa — um número novo começa em 250 por 24h.
+ */
+describe("teto do número institucional", () => {
+  it("um envio por giro no total, mesmo com vários disparos ativos", async () => {
+    const { service, prisma, platform } = construir({
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
+    });
+    prisma.platformOutreachCampaign.findMany.mockResolvedValue([
+      { id: "camp-1", channelId: "canal-1", name: "A", respectBusinessHours: false, dailyLimit: 200, minIntervalSeconds: 15, maxIntervalSeconds: 30, sentCount: 0, failedCount: 0, totalTargets: 1, attempts: 0 },
+      { id: "camp-2", channelId: "canal-1", name: "B", respectBusinessHours: false, dailyLimit: 200, minIntervalSeconds: 15, maxIntervalSeconds: 30, sentCount: 0, failedCount: 0, totalTargets: 1, attempts: 0 },
+    ]);
+
+    await service.processarDisparos(new Date("2026-08-20T13:00:00Z"));
+
+    // Sem isso, N disparos ativos mandariam N mensagens a cada 10 segundos e o
+    // intervalo configurado em cada um não significaria nada.
+    expect(platform.openConversationWith).toHaveBeenCalledTimes(1);
+  });
+
+  it("teto de 24h do número reagenda todos os disparos", async () => {
+    const { service, prisma, platform } = construir({
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
+    });
+    prisma.platformOutreachTarget.count.mockResolvedValue(250);
+
+    await service.processarDisparos(new Date("2026-08-20T13:00:00Z"));
+
+    expect(platform.openConversationWith).not.toHaveBeenCalled();
+    expect(prisma.platformOutreachCampaign.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { status: "ENVIANDO" },
+    }));
+  });
+
+  it("o limite conta em janela rolante de 24h, não desde a meia-noite", async () => {
+    const agora = new Date("2026-08-20T13:00:00Z");
+    const { service, prisma } = construir({
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
+    });
+
+    await service.processarDisparos(agora);
+
+    const janela = prisma.platformOutreachTarget.count.mock.calls[0][0].where.sentAt.gte as Date;
+    expect(Math.round((agora.getTime() - janela.getTime()) / 3_600_000)).toBe(24);
+  });
+
+  it("banco indisponível no meio do giro não vira rejeição não tratada", async () => {
+    // Quem chama é um setInterval sem ninguém esperando a promessa: rejeição
+    // aqui derrubaria o processo por causa de uma queda momentânea do banco.
+    const { service, prisma } = construir({
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
+    });
+    prisma.platformOutreachCampaign.findMany.mockRejectedValue(new Error("banco indisponível"));
+
+    await expect(service.processarDisparos(new Date("2026-08-20T13:00:00Z"))).resolves.toBeUndefined();
+  });
+});
+
+describe("reserva do contato antes de enviar", () => {
+  it("contato tomado por outro processo não recebe segunda mensagem", async () => {
+    const { service, prisma, platform } = construir({
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
+    });
+    // Simula o outro processo tendo levado o contato entre a busca e a reserva.
+    prisma.platformOutreachTarget.updateMany.mockResolvedValue({ count: 0 });
+
+    await service.processarDisparos(new Date("2026-08-20T13:00:00Z"));
+
+    expect(platform.openConversationWith).not.toHaveBeenCalled();
+  });
+
+  it("a reserva exige o mesmo número de tentativas que foi lido", async () => {
+    const { service, prisma } = construir({
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE", attempts: 1 }],
+    });
+
+    await service.processarDisparos(new Date("2026-08-20T13:00:00Z"));
+
+    expect(prisma.platformOutreachTarget.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "a-1", status: "PENDENTE", attempts: 1 },
+      data: { attempts: 2 },
+    }));
+  });
+});
+
+describe("fila mostrada na tela", () => {
+  it("pendentes vêm do banco, não de subtração", async () => {
+    // Bloquear um número transforma os pendentes dele em descartados. Subtrair
+    // enviados e falhos do total mostrava fila cheia numa campanha já encerrada.
+    const { service, prisma } = construir({
+      campanha: { totalTargets: 10, sentCount: 2, failedCount: 1 },
+      alvos: [{ id: "a-1", phone: "5562999998888", status: "PENDENTE" }],
+    });
+
+    const [resumo] = await service.listarCampanhas();
+
+    expect(resumo.pendingCount).toBe(1);
+    expect(prisma.platformOutreachTarget.groupBy).toHaveBeenCalled();
+  });
+});
+
+describe("resposta das ações", () => {
+  it("cancelar devolve a fila já zerada", async () => {
+    // A tela pinta com o que a ação devolve. Sem conferir no banco, cancelar
+    // respondia com a fila antiga: dois contatos "na fila" que acabavam de
+    // virar descartados.
+    const { service, prisma, alvos } = construir({
+      campanha: { totalTargets: 3, sentCount: 1 },
+      alvos: [
+        { id: "a-1", phone: "5562999998888", status: "ENVIADO" },
+        { id: "a-2", phone: "5562988887777", status: "PENDENTE" },
+        { id: "a-3", phone: "5562977776666", status: "PENDENTE" },
+      ],
+    });
+    prisma.$transaction = jest.fn().mockImplementation(async (fn: any) => {
+      const tx = {
+        platformOutreachTarget: {
+          updateMany: jest.fn().mockImplementation(() => {
+            for (const alvo of alvos) if (alvo.status === "PENDENTE") alvo.status = "DESCARTADO";
+            return Promise.resolve({ count: 2 });
+          }),
+        },
+        platformOutreachCampaign: {
+          update: jest.fn().mockResolvedValue({ id: "camp-1", status: "CANCELADA", totalTargets: 3, sentCount: 1, failedCount: 0, repliedCount: 0 }),
+        },
+      };
+      return fn(tx);
+    });
+
+    const resultado = await service.cancelar("camp-1");
+
+    expect(resultado.status).toBe("CANCELADA");
+    expect(resultado.pendingCount).toBe(0);
+  });
+
+  it("pausar também devolve a fila conferida", async () => {
+    const { service } = construir({
+      campanha: { totalTargets: 3, sentCount: 1 },
+      alvos: [{ id: "a-1", phone: "5562988887777", status: "PENDENTE" }],
+    });
+
+    const resultado = await service.pausar("camp-1");
+
+    expect(resultado.status).toBe("PAUSADA");
+    expect(resultado.pendingCount).toBe(1);
   });
 });

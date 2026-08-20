@@ -59,10 +59,14 @@ type Bloqueio = {
 type Conferencia = {
   total: number;
   aptos: number;
+  amostra: { phone: string; name: string | null; city: string | null }[];
   repetidosNaLista: number;
   recusados: { texto: string; motivo: string }[];
+  recusadosTotal: number;
   possiveisFixos: string[];
+  possiveisFixosTotal: number;
   descartados: { phone: string; motivo: string }[];
+  descartadosTotal: number;
 };
 
 const VARIAVEIS = ["nome", "empresa", "cidade"] as const;
@@ -361,11 +365,12 @@ export function PlatformOutreachPanel() {
             <FormField label="Máximo por dia">
               <Input type="number" min={1} max={1000} value={limiteDiario} onChange={(evento) => setLimiteDiario(Number(evento.target.value))} />
             </FormField>
+            {/* Dez segundos é o giro do worker: abaixo disso o intervalo pedido não seria cumprido. */}
             <FormField label="Intervalo mínimo (s)">
-              <Input type="number" min={5} value={intervaloMinimo} onChange={(evento) => setIntervaloMinimo(Number(evento.target.value))} />
+              <Input type="number" min={10} value={intervaloMinimo} onChange={(evento) => setIntervaloMinimo(Number(evento.target.value))} />
             </FormField>
             <FormField label="Intervalo máximo (s)">
-              <Input type="number" min={5} value={intervaloMaximo} onChange={(evento) => setIntervaloMaximo(Number(evento.target.value))} />
+              <Input type="number" min={10} value={intervaloMaximo} onChange={(evento) => setIntervaloMaximo(Number(evento.target.value))} />
             </FormField>
           </div>
           <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
@@ -385,31 +390,49 @@ export function PlatformOutreachPanel() {
                 {conferencia.aptos} de {conferencia.total} número(s) vão receber
               </p>
               <div className="mt-2 space-y-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
-                {conferencia.repetidosNaLista > 0 && <p>{conferencia.repetidosNaLista} repetido(s) na própria lista, contados uma vez só.</p>}
-                {conferencia.descartados.length > 0 && (
+                {/*
+                  Mostrar como cada contato foi lido é o que evita um rótulo
+                  absurdo entrar no {{1}} do modelo aprovado. Nenhuma regra de
+                  leitura acerta toda linha escrita à mão.
+                */}
+                {conferencia.amostra?.length > 0 && (
                   <div>
-                    <p className="font-semibold">Fora do disparo:</p>
+                    <p className="font-semibold">Como ficou a leitura{conferencia.aptos > conferencia.amostra.length ? ` (primeiros ${conferencia.amostra.length})` : ""}:</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {conferencia.amostra.map((contato) => (
+                        <li key={contato.phone}>
+                          {contato.phone} — {contato.name ? `"${contato.name}"` : "sem nome"}
+                          {contato.city ? ` · ${contato.city}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {conferencia.repetidosNaLista > 0 && <p>{conferencia.repetidosNaLista} repetido(s) na própria lista, contados uma vez só.</p>}
+                {conferencia.descartadosTotal > 0 && (
+                  <div>
+                    <p className="font-semibold">Fora do disparo ({conferencia.descartadosTotal}):</p>
                     <ul className="mt-1 space-y-0.5">
                       {conferencia.descartados.slice(0, 12).map((item) => (
                         <li key={item.phone}>{item.phone} — {item.motivo}</li>
                       ))}
                     </ul>
-                    {conferencia.descartados.length > 12 && <p className="mt-1">e outros {conferencia.descartados.length - 12}.</p>}
+                    {conferencia.descartadosTotal > 12 && <p className="mt-1">e outros {conferencia.descartadosTotal - 12}.</p>}
                   </div>
                 )}
-                {conferencia.recusados.length > 0 && (
+                {conferencia.recusadosTotal > 0 && (
                   <div>
-                    <p className="font-semibold text-rose-700 dark:text-rose-300">Não deu para ler:</p>
+                    <p className="font-semibold text-rose-700 dark:text-rose-300">Não deu para ler ({conferencia.recusadosTotal}):</p>
                     <ul className="mt-1 space-y-0.5">
                       {conferencia.recusados.slice(0, 12).map((item, indice) => (
                         <li key={`${item.texto}-${indice}`}>“{item.texto}” — {item.motivo}</li>
                       ))}
                     </ul>
-                    {conferencia.recusados.length > 12 && <p className="mt-1">e outras {conferencia.recusados.length - 12} linha(s).</p>}
+                    {conferencia.recusadosTotal > 12 && <p className="mt-1">e outras {conferencia.recusadosTotal - 12} linha(s).</p>}
                   </div>
                 )}
-                {conferencia.possiveisFixos.length > 0 && (
-                  <p>{conferencia.possiveisFixos.length} parece(m) telefone fixo, que quase nunca tem WhatsApp: {conferencia.possiveisFixos.slice(0, 6).join(", ")}.</p>
+                {conferencia.possiveisFixosTotal > 0 && (
+                  <p>{conferencia.possiveisFixosTotal} parece(m) telefone fixo, que quase nunca tem WhatsApp: {conferencia.possiveisFixos.slice(0, 6).join(", ")}.</p>
                 )}
               </div>
             </div>

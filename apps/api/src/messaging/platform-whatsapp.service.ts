@@ -427,7 +427,14 @@ export class PlatformWhatsAppService {
     }
   }
 
-  /** Valores das variáveis na ordem em que o modelo aprovado as declara. */
+  /**
+   * Valores das variáveis na ordem em que o modelo aprovado as declara.
+   *
+   * Cada variável tem a sua própria reserva. Usar o tratamento de nome para
+   * todas produzia mensagem sem sentido — o modelo "aqui é a ChegowIA em {{2}}"
+   * saía como "aqui é a ChegowIA em tudo bem" para todo contato sem cidade, o
+   * que é a lista inteira quando ela vem só com números.
+   */
   private variaveisDoModelo(
     channel: any,
     contato: { name?: string | null; company?: string | null; city?: string | null; fallbackName?: string | null },
@@ -437,14 +444,15 @@ export class PlatformWhatsAppService {
       : [];
     // Parâmetro vazio faz a Meta recusar o envio inteiro, então cada variável
     // sempre sai com algum valor.
-    const reserva = contato.fallbackName?.trim() || "tudo bem";
+    const reservaDeNome = contato.fallbackName?.trim() || "tudo bem";
     return configurados.map((campo: string) => {
-      const valor = campo === "empresa"
-        ? contato.company ?? contato.name
-        : campo === "cidade"
-          ? contato.city
-          : contato.name;
-      return (valor ?? "").trim() || reserva;
+      if (campo === "empresa") {
+        return (contato.company ?? contato.name ?? "").trim() || "seu negócio";
+      }
+      if (campo === "cidade") {
+        return (contato.city ?? "").trim() || "sua região";
+      }
+      return (contato.name ?? "").trim() || reservaDeNome;
     });
   }
 
@@ -479,7 +487,10 @@ export class PlatformWhatsAppService {
       },
     });
     if (!conversation) throw new NotFoundException("Conversa institucional não encontrada.");
-    return conversation;
+    // A janela de texto livre sai calculada daqui: é a mesma conta que barra o
+    // envio, e deixar a tela recalculá-la abriria espaço para a regra divergir
+    // entre o que a interface mostra e o que o servidor aceita.
+    return { ...conversation, freeTextWindowOpen: janelaDeTextoLivreAberta(conversation) };
   }
 
   async updateConversation(id: string, dto: UpdatePlatformWhatsAppConversationDto) {
@@ -512,6 +523,20 @@ export class PlatformWhatsAppService {
 
   async sendHumanMessage(userId: string, conversationId: string, content: string) {
     const conversation = await this.getConversation(conversationId);
+    /**
+     * Fora da janela de 24h o provedor recusa texto livre.
+     *
+     * Antes a mensagem era tentada e voltava com o erro cru do Gupshup dentro da
+     * conversa, o que parecia falha do sistema. A recusa aqui diz o que fazer:
+     * esperar a pessoa escrever. Vale para prospecção e para suporte — a regra é
+     * do WhatsApp, não da origem da conversa.
+     */
+    if (!janelaDeTextoLivreAberta(conversation)) {
+      throw new BadRequestException(
+        "O WhatsApp só aceita mensagem livre até 24 horas depois da última mensagem da pessoa. "
+        + "Para reabrir a conversa é preciso que ela escreva primeiro.",
+      );
+    }
     const user = await this.db().user.findUnique({
       where: { id: userId },
       select: { id: true, name: true },

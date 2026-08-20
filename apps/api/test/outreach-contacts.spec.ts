@@ -33,8 +33,71 @@ describe("leitura da lista de contatos", () => {
     expect(normalizarTelefoneBrasileiro("não tenho")).toBeNull();
   });
 
-  it("aceita a numeração antiga de oito dígitos", () => {
-    expect(normalizarTelefoneBrasileiro("(62) 8888-7777")).toBe("556288887777");
+  it("celular de oito dígitos é recusado, não completado", () => {
+    // Completar com o 9 transformaria uma digitação faltando um dígito no número
+    // real de outra pessoa, que receberia oferta comercial sem estar em lista
+    // nenhuma. O nono dígito é obrigatório desde 2016: o que chega com oito é
+    // erro de digitação, não numeração antiga.
+    expect(normalizarTelefoneBrasileiro("(62) 8888-7777")).toBeNull();
+    const { contatos, recusados } = lerListaDeContatos("62 9999-8888");
+    expect(contatos).toHaveLength(0);
+    expect(recusados[0].motivo).toBe("celular com 8 dígitos: confira se falta o 9");
+  });
+
+  it("telefone fixo não ganha nono dígito", () => {
+    expect(normalizarTelefoneBrasileiro("(62) 3212-4545")).toBe("556232124545");
+  });
+
+  it("aceita os prefixos de discagem que vêm colados", () => {
+    // "0" de interurbano e "00" de internacional aparecem em lista copiada de
+    // agenda antiga; recusar por tamanho não explicava nada a quem colou.
+    expect(normalizarTelefoneBrasileiro("062 99999-8888")).toBe("5562999998888");
+    expect(normalizarTelefoneBrasileiro("005562999998888")).toBe("5562999998888");
+  });
+
+  it("não perde o telefone por causa de um número antes dele na linha", () => {
+    // Este era o pior caso: o rabo do CNPJ colava no telefone, o bloco não
+    // fechava em número nenhum e a linha inteira era recusada — com um contato
+    // válido dentro dela.
+    const comCnpj = lerListaDeContatos("Pizzaria X - CNPJ 12.345.678/0001-90 - (62) 99999-8888");
+    expect(comCnpj.contatos.map((contato) => contato.phone)).toEqual(["5562999998888"]);
+
+    const comPreco = lerListaDeContatos("Ticket médio R$ 1.500,00 - 62 99999-8888");
+    expect(comPreco.contatos.map((contato) => contato.phone)).toEqual(["5562999998888"]);
+
+    const comCep = lerListaDeContatos("Rua 5, 74000-000 - Goiânia - 62 99999-8888");
+    expect(comCep.contatos.map((contato) => contato.phone)).toEqual(["5562999998888"]);
+
+    const comPedido = lerListaDeContatos("Pedido 123456789012 - Bar do Zé - 62 99999-8888");
+    expect(comPedido.contatos.map((contato) => contato.phone)).toEqual(["5562999998888"]);
+  });
+
+  it("CNPJ sozinho não vira telefone", () => {
+    const { contatos, recusados } = lerListaDeContatos("12.345.678/0001-90");
+    expect(contatos).toHaveLength(0);
+    expect(recusados).toHaveLength(1);
+  });
+
+  it("colunas de planilha separadas por tabulação não viram um nome só", () => {
+    const { contatos } = lerListaDeContatos("Pizzaria do Zé\t62999998888\tGoiânia");
+    expect(contatos[0]).toEqual({ phone: "5562999998888", name: "Pizzaria do Zé", city: "Goiânia" });
+  });
+
+  it("cabeçalho de planilha vira linha recusada, não contato", () => {
+    const { contatos, recusados } = lerListaDeContatos("Nome,Telefone,Cidade\nPizzaria,62999998888,Goiânia");
+    expect(contatos).toHaveLength(1);
+    expect(recusados[0].texto).toBe("Nome,Telefone,Cidade");
+  });
+
+  it("telefone de outro país é recusado", () => {
+    const { contatos, recusados } = lerListaDeContatos("+1 415 555 2671");
+    expect(contatos).toHaveLength(0);
+    expect(recusados).toHaveLength(1);
+  });
+
+  it("ramal não entra no nome", () => {
+    const { contatos } = lerListaDeContatos("Padaria - 62 3212-4545 ramal 22");
+    expect(contatos[0].name).toBe("Padaria");
   });
 
   it("separa nome e cidade do telefone", () => {

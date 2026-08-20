@@ -66,6 +66,8 @@ type PlatformConversationDetail = PlatformConversation & {
     automationEnabled: boolean;
   };
   messages: PlatformMessage[];
+  /** O WhatsApp só aceita texto livre até 24h depois da última mensagem da pessoa. */
+  freeTextWindowOpen: boolean;
 };
 
 const MODE_LABEL: Record<WhatsAppConversationMode, string> = {
@@ -242,6 +244,10 @@ export default function SuperAdminAtendimentoPage() {
     onError: (cause) => setError(apiErrorMessage(cause)),
   });
 
+  // Quem decide se ainda cabe texto livre é o servidor: é a mesma conta que
+  // barra o envio, e recalcular aqui deixaria a tela e a API discordarem.
+  const janelaAberta = conversation?.freeTextWindowOpen !== false;
+
   const waitingForTeam = conversations.filter((item) => item.mode === WhatsAppConversationMode.HUMANO && item.status === WhatsAppConversationStatus.ABERTA).length;
 
   return (
@@ -338,8 +344,15 @@ export default function SuperAdminAtendimentoPage() {
                 setError(null);
                 sendMessage.mutate(content);
               }}>
-                <div className="flex items-end gap-2 rounded-2xl border border-slate-200 p-2 shadow-sm dark:border-slate-800"><Textarea rows={2} className="min-h-[48px] flex-1 resize-none border-0 px-2 py-2 shadow-none focus:ring-0" placeholder="Responder como equipe ChegowIA…" value={draft} onChange={(event) => setDraft(event.target.value)} /><Button type="submit" className="h-11 shrink-0" disabled={!draft.trim() || sendMessage.isPending || !channel?.connected} isLoading={sendMessage.isPending}>Enviar</Button></div>
-                <p className="mt-2 text-[11px] text-slate-400">Ao responder, a conversa muda para equipe humana e a IA comercial fica pausada.</p>
+                <div className="flex items-end gap-2 rounded-2xl border border-slate-200 p-2 shadow-sm dark:border-slate-800"><Textarea rows={2} className="min-h-[48px] flex-1 resize-none border-0 px-2 py-2 shadow-none focus:ring-0" placeholder={janelaAberta ? "Responder como equipe ChegowIA…" : "Aguardando a pessoa escrever para poder responder"} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={!janelaAberta} /><Button type="submit" className="h-11 shrink-0" disabled={!draft.trim() || sendMessage.isPending || !channel?.connected || !janelaAberta} isLoading={sendMessage.isPending}>Enviar</Button></div>
+                {/*
+                  A janela de 24h é regra do WhatsApp, não nossa. Sem dizer isso
+                  aqui, a pessoa escrevia, tomava erro do provedor no meio da
+                  conversa e concluía que o envio estava quebrado.
+                */}
+                {janelaAberta
+                  ? <p className="mt-2 text-[11px] text-slate-400">Ao responder, a conversa muda para equipe humana e a IA comercial fica pausada.</p>
+                  : <p className="mt-2 text-[11px] leading-4 text-amber-700 dark:text-amber-300">O WhatsApp só aceita mensagem livre até 24 horas depois da última mensagem da pessoa. Esta conversa está fora dessa janela: é preciso que ela escreva primeiro.</p>}
               </form>
             </div>}
           </Card>

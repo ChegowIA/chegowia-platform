@@ -12,6 +12,7 @@ import {
   OutreachTargetStatus,
   WhatsAppConversationMode,
 } from "@prisma/client";
+import { runsBackgroundJobs } from "../common/config/app-role";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
@@ -24,8 +25,23 @@ import {
   normalizarTelefoneBrasileiro,
 } from "./outreach-contacts";
 
+/** Quantos exemplos de recusa e descarte a conferência devolve. */
+const LIMITE_DE_EXEMPLOS = 50;
+
+/** Quantos contatos o detalhe do disparo carrega de uma vez. */
+const LIMITE_DE_ALVOS_NO_DETALHE = 500;
+
 /** De quanto em quanto tempo o processo olha se há envio vencido. */
 const INTERVALO_DO_WORKER_MS = 10_000;
+
+/**
+ * Quanto esperar quando um limite de volume trava o envio.
+ *
+ * A janela é rolante, então em algum ponto os envios mais antigos saem da conta
+ * e a fila volta a andar sozinha. Reconferir de 15 em 15 minutos custa uma
+ * consulta e evita o worker girar a cada 10 segundos batendo no mesmo limite.
+ */
+const ESPERA_APOS_TETO_MS = 15 * 60 * 1000;
 
 /**
  * Janela em que uma abordagem comercial é aceitável.
@@ -36,6 +52,19 @@ const INTERVALO_DO_WORKER_MS = 10_000;
  */
 const HORA_INICIAL_PADRAO = 9;
 const HORA_FINAL_PADRAO = 20;
+
+/**
+ * Teto de conversas iniciadas por nós em 24h, somando todos os disparos.
+ *
+ * A Meta limita conversa iniciada pela empresa por faixas — um número novo
+ * começa em 250 por 24h e sobe conforme a qualidade. Passar do teto faz o
+ * provedor recusar, e recusa em série derruba a reputação. O limite por disparo
+ * não protege disso: três disparos de 200 somam 600 no mesmo número.
+ */
+function tetoDiarioDoNumero() {
+  const configurado = Number(process.env.WHATSAPP_OUTREACH_DAILY_CAP ?? "");
+  return Number.isFinite(configurado) && configurado > 0 ? Math.floor(configurado) : 250;
+}
 
 /** Acima disso o disparo para sozinho: erro em série é configuração errada. */
 const FALHAS_SEGUIDAS_PARA_PAUSAR = 5;
@@ -66,7 +95,16 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    // Réplica de HTTP puro não dispara. Sem isto, cada réplica de API rodaria o
+    // mesmo worker: o intervalo entre mensagens ficaria dividido pelo número de
+    // réplicas e a mesma pessoa poderia receber duas abordagens. Ver
+    // common/config/app-role.ts.
+    if (!runsBackgroundJobs()) {
+      this.logger.log("Processo em papel de API: prospecção não dispara aqui.");
+      return;
+    }
     this.timer = setInterval(() => void this.processarDisparos(), INTERVALO_DO_WORKER_MS);
+    this.timer.unref();
     void this.processarDisparos();
   }
 
@@ -91,16 +129,36 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   async analisarLista(bruto: string) {
     const leitura = lerListaDeContatos(bruto);
     const descartes = await this.classificarDescartes(leitura.contatos);
+    const aptos = leitura.contatos.filter((contato) => !descartes.has(contato.phone));
     return {
       total: leitura.contatos.length,
-      aptos: leitura.contatos.filter((contato) => !descartes.has(contato.phone)).length,
+      aptos: aptos.length,
+      /**
+       * Como os primeiros contatos foram entendidos.
+       *
+       * Nenhuma heurística acerta todo rótulo: "liguei pro 62999998888 ontem"
+       * deixa a frase no lugar do nome, e essa frase entraria no {{1}} do modelo
+       * aprovado. Mostrar a leitura antes do disparo resolve o que adivinhar não
+       * resolve — quem colou reconhece o absurdo em um olhar.
+       */
+      amostra: aptos.slice(0, 10).map((contato) => ({
+        phone: formatarTelefoneParaExibicao(contato.phone),
+        name: contato.name,
+        city: contato.city,
+      })),
       repetidosNaLista: leitura.repetidos,
-      recusados: leitura.recusados,
-      possiveisFixos: leitura.possiveisFixos.map(formatarTelefoneParaExibicao),
-      descartados: [...descartes.entries()].map(([phone, motivo]) => ({
+      // Listas de 2 mil números geram 2 mil descartes, e mandar tudo isso para a
+      // tela só engorda a resposta. O total vem separado para o corte aparecer
+      // em vez de parecer que só existem esses.
+      recusados: leitura.recusados.slice(0, LIMITE_DE_EXEMPLOS),
+      recusadosTotal: leitura.recusados.length,
+      possiveisFixos: leitura.possiveisFixos.slice(0, LIMITE_DE_EXEMPLOS).map(formatarTelefoneParaExibicao),
+      possiveisFixosTotal: leitura.possiveisFixos.length,
+      descartados: [...descartes.entries()].slice(0, LIMITE_DE_EXEMPLOS).map(([phone, motivo]) => ({
         phone: formatarTelefoneParaExibicao(phone),
         motivo,
       })),
+      descartadosTotal: descartes.size,
     };
   }
 
@@ -124,10 +182,13 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       }),
       this.db().platformWhatsAppConversation.findMany({
         where: { customerPhone: { in: numeros } },
-        select: { customerPhone: true },
+        select: { customerPhone: true, lastMessageText: true, lastInboundAt: true },
       }),
+      // Alvo que falhou não conta: se contasse, uma queda do provedor deixaria
+      // aqueles números inalcançáveis para sempre, porque a lista nova os
+      // descartaria como "já entrou em outro disparo".
       this.db().platformOutreachTarget.findMany({
-        where: { phone: { in: numeros } },
+        where: { phone: { in: numeros }, status: { not: OutreachTargetStatus.FALHOU } },
         select: { phone: true },
       }),
       // Telefone de empresa é campo livre, então a comparação precisa ser feita
@@ -139,8 +200,14 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     for (const { phone } of bloqueios) motivos.set(phone, "pediu para não receber");
-    for (const { customerPhone } of conversas) {
-      if (!motivos.has(customerPhone)) motivos.set(customerPhone, "já existe conversa com este número");
+    for (const conversa of conversas) {
+      // Conversa que existe só porque uma tentativa falhou não é conversa: nada
+      // foi entregue e ninguém respondeu. Tratá-la como conversa real também
+      // deixava o número inalcançável depois de um erro de configuração.
+      const houveContato = Boolean(conversa.lastMessageText || conversa.lastInboundAt);
+      if (houveContato && !motivos.has(conversa.customerPhone)) {
+        motivos.set(conversa.customerPhone, "já existe conversa com este número");
+      }
     }
     for (const { phone } of alvosAnteriores) {
       if (!motivos.has(phone)) motivos.set(phone, "já entrou em outro disparo");
@@ -183,7 +250,10 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     }
 
     const user = await this.db().user.findUnique({ where: { id: userId }, select: { id: true, name: true } });
-    const minimo = Math.max(dto.minIntervalSeconds ?? 15, 5);
+    // O piso é o giro do worker: pedir 5 segundos não faria a mensagem sair em
+    // 5, e um intervalo que a configuração aceita mas o sistema não cumpre é
+    // pior do que um limite declarado.
+    const minimo = Math.max(dto.minIntervalSeconds ?? 15, INTERVALO_DO_WORKER_MS / 1000);
     const campanha = await this.db().platformOutreachCampaign.create({
       data: {
         channelId: channel.id,
@@ -230,7 +300,39 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
-    return campanhas.map((campanha: any) => this.resumoDaCampanha(campanha));
+    const pendentes = await this.pendentesPorCampanha(campanhas.map((campanha: any) => campanha.id));
+    return campanhas.map((campanha: any) => this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0));
+  }
+
+  /**
+   * Quantos contatos ainda vão receber, contados no banco.
+   *
+   * Subtrair enviados e falhos do total dava número errado assim que alguém
+   * pedia para não receber: os pendentes daquele número viram descartados, e a
+   * campanha aparecia com fila cheia depois de já ter acabado.
+   */
+  /**
+   * Resumo com a fila conferida no banco.
+   *
+   * As ações (começar, pausar, cancelar) devolvem o disparo para a tela pintar
+   * na hora. Sem passar pela contagem real, cancelar respondia com a fila antiga
+   * — dois contatos "na fila" que acabavam de virar descartados.
+   */
+  private async resumoComFila(campanha: any) {
+    const pendentes = await this.pendentesPorCampanha([campanha.id]);
+    return this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0);
+  }
+
+  private async pendentesPorCampanha(ids: string[]) {
+    const mapa = new Map<string, number>();
+    if (!ids.length) return mapa;
+    const grupos = await this.db().platformOutreachTarget.groupBy({
+      by: ["campaignId"],
+      where: { campaignId: { in: ids }, status: OutreachTargetStatus.PENDENTE },
+      _count: { _all: true },
+    });
+    for (const grupo of grupos) mapa.set(grupo.campaignId, grupo._count._all);
+    return mapa;
   }
 
   async detalharCampanha(id: string) {
@@ -238,8 +340,12 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       where: { id },
       include: {
         targets: {
-          orderBy: [{ status: "asc" }, { createdAt: "asc" }],
-          take: 500,
+          // Quem respondeu primeiro, depois o que saiu mais recente. Ordenar por
+          // status punha os pendentes na frente, e num disparo de 2 mil contatos
+          // as 500 linhas carregadas eram todas "na fila" — justamente as que não
+          // têm nada para contar. Em MySQL, DESC já joga o nulo para o fim.
+          orderBy: [{ repliedAt: "desc" }, { sentAt: "desc" }, { createdAt: "asc" }],
+          take: LIMITE_DE_ALVOS_NO_DETALHE,
           select: {
             id: true,
             phone: true,
@@ -256,8 +362,15 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       },
     });
     if (!campanha) throw new NotFoundException("Disparo não encontrado.");
+    const pendentes = await this.pendentesPorCampanha([campanha.id]);
+    // O total dos contatos carregados sai junto: uma lista de 2 mil aparecia
+    // cortada em 500 sem nada dizendo que havia mais.
+    const alvosNoTotal = await this.db().platformOutreachTarget.count({
+      where: { campaignId: campanha.id },
+    });
     return {
-      ...this.resumoDaCampanha(campanha),
+      ...this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0),
+      targetsTotal: alvosNoTotal,
       targets: campanha.targets.map((alvo: any) => ({
         ...alvo,
         phoneFormatted: formatarTelefoneParaExibicao(alvo.phone),
@@ -265,11 +378,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private resumoDaCampanha(campanha: any) {
-    const pendentes = Math.max(
-      campanha.totalTargets - campanha.sentCount - campanha.failedCount,
-      0,
-    );
+  private resumoDaCampanha(campanha: any, pendentes?: number) {
     return {
       id: campanha.id,
       name: campanha.name,
@@ -278,7 +387,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       sentCount: campanha.sentCount,
       repliedCount: campanha.repliedCount,
       failedCount: campanha.failedCount,
-      pendingCount: pendentes,
+      pendingCount: pendentes ?? Math.max(campanha.totalTargets - campanha.sentCount - campanha.failedCount, 0),
       dailyLimit: campanha.dailyLimit,
       minIntervalSeconds: campanha.minIntervalSeconds,
       maxIntervalSeconds: campanha.maxIntervalSeconds,
@@ -314,7 +423,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       },
     });
     this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
-    return this.resumoDaCampanha(atualizada);
+    return this.resumoComFila(atualizada);
   }
 
   async pausar(id: string, motivo = "pausado pela equipe") {
@@ -324,7 +433,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       data: { status: OutreachCampaignStatus.PAUSADA, pausedReason: motivo, nextSendAt: null },
     });
     this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
-    return this.resumoDaCampanha(campanha);
+    return this.resumoComFila(campanha);
   }
 
   async cancelar(id: string) {
@@ -346,7 +455,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       });
     });
     this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
-    return this.resumoDaCampanha(campanha);
+    return this.resumoComFila(campanha);
   }
 
   private async buscarCampanha(id: string) {
@@ -412,40 +521,74 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     if (this.processando) return;
     this.processando = true;
     try {
-      const campanhas = await this.db().platformOutreachCampaign.findMany({
-        where: { status: OutreachCampaignStatus.ENVIANDO },
-        include: { channel: true },
-      });
-      for (const campanha of campanhas) {
-        try {
-          await this.avancarCampanha(campanha, agora);
-        } catch (error) {
-          // Uma campanha com problema não pode parar as outras.
-          this.logger.error(
-            `Falha ao avançar o disparo ${campanha.id}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
+      await this.girar(agora);
+    } catch (error) {
+      // Quem chama é o `setInterval`, sem ninguém para esperar a promessa: uma
+      // exceção aqui viraria rejeição não tratada e derrubaria o processo por
+      // causa de uma indisponibilidade momentânea do banco.
+      this.logger.error(
+        `Falha no giro da prospecção: ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
       this.processando = false;
     }
   }
 
-  private async avancarCampanha(campanha: any, agora: Date) {
-    if (campanha.nextSendAt && new Date(campanha.nextSendAt).getTime() > agora.getTime()) return;
-    if (campanha.respectBusinessHours && !dentroDoHorarioComercial(agora)) return;
-
-    const enviadosHoje = await this.db().platformOutreachTarget.count({
-      where: { campaignId: campanha.id, sentAt: { gte: inicioDoDia(agora) } },
+  private async girar(agora: Date) {
+    const campanhas = await this.db().platformOutreachCampaign.findMany({
+      where: { status: OutreachCampaignStatus.ENVIANDO },
+      orderBy: { nextSendAt: "asc" },
+      include: { channel: true },
     });
-    if (enviadosHoje >= campanha.dailyLimit) {
-      // Volta amanhã: sem isso o worker giraria a cada 10 segundos batendo no
-      // limite e consultando o banco à toa.
+    if (!campanhas.length) return;
+
+    const enviadosNoNumero = await this.db().platformOutreachTarget.count({
+      where: { sentAt: { gte: inicioDaJanelaRolante(agora) } },
+    });
+    if (enviadosNoNumero >= tetoDiarioDoNumero()) {
+      // Reagenda em vez de girar a cada 10 segundos consultando o banco.
+      await this.db().platformOutreachCampaign.updateMany({
+        where: { status: OutreachCampaignStatus.ENVIANDO },
+        data: { nextSendAt: new Date(agora.getTime() + ESPERA_APOS_TETO_MS) },
+      });
+      this.logger.warn(
+        `Teto de ${tetoDiarioDoNumero()} conversas iniciadas em 24h alcançado no número institucional. Disparos reagendados.`,
+      );
+      return;
+    }
+
+    for (const campanha of campanhas) {
+      try {
+        // Um envio por giro no total, não por campanha: o que a Meta observa é
+        // o número, e ele é o mesmo para todos os disparos.
+        if (await this.avancarCampanha(campanha, agora)) break;
+      } catch (error) {
+        // Uma campanha com problema não pode parar as outras.
+        this.logger.error(
+          `Falha ao avançar o disparo ${campanha.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
+  /** Devolve true quando um envio saiu, para o giro parar aí. */
+  private async avancarCampanha(campanha: any, agora: Date): Promise<boolean> {
+    if (campanha.nextSendAt && new Date(campanha.nextSendAt).getTime() > agora.getTime()) return false;
+    if (campanha.respectBusinessHours && !dentroDoHorarioComercial(agora)) return false;
+
+    // Janela rolante de 24h, e não "hoje": é assim que a Meta conta, e evita a
+    // virada de dia do fuso do servidor liberar o dobro de envios de uma vez.
+    const enviadosNaJanela = await this.db().platformOutreachTarget.count({
+      where: { campaignId: campanha.id, sentAt: { gte: inicioDaJanelaRolante(agora) } },
+    });
+    if (enviadosNaJanela >= campanha.dailyLimit) {
+      // Reagenda: sem isso o worker giraria a cada 10 segundos batendo no limite
+      // e consultando o banco à toa.
       await this.db().platformOutreachCampaign.update({
         where: { id: campanha.id },
-        data: { nextSendAt: proximoDia(agora) },
+        data: { nextSendAt: new Date(agora.getTime() + ESPERA_APOS_TETO_MS) },
       });
-      return;
+      return false;
     }
 
     const alvo = await this.db().platformOutreachTarget.findFirst({
@@ -463,15 +606,33 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       });
       this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
       this.logger.log(`Disparo "${campanha.name}" concluído.`);
-      return;
+      return false;
     }
 
-    await this.enviarParaAlvo(campanha, alvo);
+    /**
+     * Reserva o contato antes de enviar.
+     *
+     * O incremento condicionado ao número de tentativas que acabamos de ler é
+     * uma trava otimista: se outro processo tomou o mesmo contato entre a busca
+     * e aqui, a contagem volta zero e este giro desiste em vez de mandar a
+     * segunda mensagem para a mesma pessoa. Vale também para o giro que demora
+     * mais que o intervalo do worker.
+     */
+    const tentativasAntes = alvo.attempts ?? 0;
+    const tentativa = tentativasAntes + 1;
+    const reserva = await this.db().platformOutreachTarget.updateMany({
+      where: { id: alvo.id, status: OutreachTargetStatus.PENDENTE, attempts: tentativasAntes },
+      data: { attempts: tentativa },
+    });
+    if (reserva.count !== 1) return false;
+
+    await this.enviarParaAlvo(campanha, { ...alvo, attempts: tentativa });
     await this.db().platformOutreachCampaign.update({
       where: { id: campanha.id },
       data: { nextSendAt: new Date(agora.getTime() + sorteioDeIntervaloMs(campanha)) },
     });
     this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
+    return true;
   }
 
   private async enviarParaAlvo(campanha: any, alvo: any) {
@@ -492,7 +653,6 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
           status: OutreachTargetStatus.ENVIADO,
           conversationId: conversation.id,
           sentAt: new Date(),
-          attempts: { increment: 1 },
           errorMessage: null,
         },
       });
@@ -502,25 +662,24 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (error) {
       const mensagem = error instanceof Error ? error.message : String(error);
-      const tentativas = (alvo.attempts ?? 0) + 1;
-      // Uma segunda tentativa cobre queda momentânea do provedor. Além disso, o
-      // problema é do número ou da configuração, e insistir só gasta mensagem.
-      const desistir = tentativas >= 2;
+      /**
+       * Uma tentativa por contato, e o erro fica registrado.
+       *
+       * A retentativa automática parecia cuidado e era risco: quando a falha é
+       * ambígua — tempo esgotado, resposta ilegível — o provedor pode ter
+       * entregado a mensagem, e insistir manda a mesma abordagem duas vezes para
+       * um desconhecido. Recolar o número numa lista nova continua funcionando, e
+       * aí a decisão de repetir é de quem leu o erro.
+       */
       await this.db().platformOutreachTarget.update({
         where: { id: alvo.id },
-        data: {
-          attempts: tentativas,
-          errorMessage: mensagem.slice(0, 500),
-          ...(desistir ? { status: OutreachTargetStatus.FALHOU } : {}),
-        },
+        data: { status: OutreachTargetStatus.FALHOU, errorMessage: mensagem.slice(0, 500) },
       });
-      if (desistir) {
-        const atualizada = await this.db().platformOutreachCampaign.update({
-          where: { id: campanha.id },
-          data: { failedCount: { increment: 1 } },
-        });
-        await this.pausarSeEstiverFalhandoDemais(atualizada, mensagem);
-      }
+      const atualizada = await this.db().platformOutreachCampaign.update({
+        where: { id: campanha.id },
+        data: { failedCount: { increment: 1 } },
+      });
+      await this.pausarSeEstiverFalhandoDemais(atualizada, mensagem);
       this.logger.warn(`Falha ao abordar ${alvo.phone} no disparo ${campanha.id}: ${mensagem}`);
     }
   }
@@ -583,15 +742,13 @@ export function dentroDoHorarioComercial(momento = new Date()) {
   return hora >= HORA_INICIAL_PADRAO && hora < HORA_FINAL_PADRAO;
 }
 
-function inicioDoDia(momento: Date) {
-  const inicio = new Date(momento);
-  inicio.setHours(0, 0, 0, 0);
-  return inicio;
-}
-
-function proximoDia(momento: Date) {
-  const amanha = inicioDoDia(momento);
-  amanha.setDate(amanha.getDate() + 1);
-  amanha.setHours(HORA_INICIAL_PADRAO, 0, 0, 0);
-  return amanha;
+/**
+ * Início da janela de 24h que conta para os limites.
+ *
+ * Rolante, e não "desde a meia-noite": é como a Meta conta, e a meia-noite do
+ * fuso do servidor liberaria o limite inteiro de uma vez no meio da tarde
+ * brasileira.
+ */
+function inicioDaJanelaRolante(momento: Date) {
+  return new Date(momento.getTime() - 24 * 60 * 60 * 1000);
 }

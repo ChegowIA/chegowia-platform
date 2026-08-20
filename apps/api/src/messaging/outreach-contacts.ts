@@ -26,7 +26,7 @@ const DDDS_VALIDOS = new Set([
 ]);
 
 /** Rótulos que aparecem antes do número e não são nome de ninguém. */
-const RUIDO_DE_ROTULO = /\b(tel|telefone|fone|cel|celular|whats(app)?|zap|contato|numero|número)\b\s*:?\s*/gi;
+const RUIDO_DE_ROTULO = /\b(tel|telefone|fone|cel|celular|whats(app)?|zap|contato|numero|número|ramal\s*\d*)\b\s*:?\s*/gi;
 
 /** Separadores entre nome, cidade e outros pedaços de um mesmo contato. */
 const SEPARADORES_DE_ROTULO = /[-–—|/;,\t]+/;
@@ -58,19 +58,51 @@ export type LeituraDeContatos = {
  * chamador precisa distinguir "não é telefone" de "é telefone e está pronto".
  */
 export function normalizarTelefoneBrasileiro(bruto: string): string | null {
-  const digitos = bruto.replace(/\D/g, "");
-  const semCodigoPais = digitos.length >= 12 && digitos.startsWith("55")
+  let digitos = bruto.replace(/\D/g, "");
+  // Prefixos de discagem que as pessoas copiam junto: "00" de internacional e
+  // "0" de interurbano ("062 99999-8888"). Sem tirá-los, o número era recusado
+  // por tamanho, e quem colou não entendia o motivo.
+  if (digitos.length > 12 && digitos.startsWith("00")) digitos = digitos.slice(2);
+  let semCodigoPais = digitos.length >= 12 && digitos.startsWith("55")
     ? digitos.slice(2)
     : digitos;
+  // O "0" de interurbano pode vir antes ou depois do código do país, porque as
+  // duas formas são escritas à mão: "062 99999-8888" e "+55 (062) 99999-8888".
+  if (semCodigoPais.length === 12 && semCodigoPais.startsWith("0")) semCodigoPais = semCodigoPais.slice(1);
+  if (semCodigoPais.length === 11 && semCodigoPais.startsWith("0")) semCodigoPais = semCodigoPais.slice(1);
   if (semCodigoPais.length !== 10 && semCodigoPais.length !== 11) return null;
   const ddd = Number(semCodigoPais.slice(0, 2));
   if (!DDDS_VALIDOS.has(ddd)) return null;
   const assinante = semCodigoPais.slice(2);
-  // Celular de 9 dígitos começa em 9; de 8 dígitos (numeração antiga) começa
-  // entre 6 e 9. Fixo começa entre 2 e 5 e passa igual, só sinalizado depois.
+  // Celular de 9 dígitos começa em 9. Fixo começa entre 2 e 5.
   if (assinante.length === 9 && !/^9/.test(assinante)) return null;
   if (!/^[2-9]/.test(assinante)) return null;
+  /**
+   * Oito dígitos começando em 6–9 é recusado.
+   *
+   * Poderia ser um celular da numeração antiga, e o provedor até acrescenta o
+   * nono dígito sozinho no envio. Mas desde 2016 o nono é obrigatório, então na
+   * prática o que chega assim é digitação faltando um dígito — e acrescentar o 9
+   * transformaria "62 9999-8888" no número real de *outra* pessoa, que receberia
+   * uma oferta comercial sem nunca ter entrado em lista nenhuma. Fixo (2–5)
+   * continua passando, porque ali oito dígitos é o formato correto.
+   */
+  if (assinante.length === 8 && /^[6-9]/.test(assinante)) return null;
   return `55${semCodigoPais}`;
+}
+
+/**
+ * Por que um bloco de dígitos foi recusado.
+ *
+ * Genérico ("formato inválido") fazia quem colou conferir a lista inteira à
+ * procura do erro. O caso mais comum tem nome: falta o nono dígito.
+ */
+export function motivoDaRecusa(digitos: string) {
+  const semPais = digitos.length >= 12 && digitos.startsWith("55") ? digitos.slice(2) : digitos;
+  if (semPais.length === 10 && /^[6-9]/.test(semPais.slice(2))) {
+    return "celular com 8 dígitos: confira se falta o 9";
+  }
+  return "número fora de um formato brasileiro válido";
 }
 
 /** Fixo não recebe mensagem de WhatsApp na quase totalidade dos casos. */
@@ -104,23 +136,36 @@ function fatiarSequenciaDeTelefones(digitos: string): string[] | null {
 
 /** Nome e cidade do que sobrou da linha depois de tirar os números. */
 function lerRotulo(resto: string): { name: string | null; city: string | null } {
+  // A ordem importa: colapsar espaço antes de separar transformava a tabulação
+  // de uma planilha em espaço, e as colunas "Pizzaria" e "Goiânia" viravam um
+  // nome só.
   const limpo = resto
     .replace(RUIDO_DE_ROTULO, " ")
     .replace(/https?:\/\/\S+/gi, " ")
-    .replace(/\s+/g, " ")
     .trim();
   if (!limpo) return { name: null, city: null };
   const pedacos = limpo
     .split(SEPARADORES_DE_ROTULO)
+    .map((pedaco) => pedaco.replace(/\s+/g, " "))
     // Aspas e a pontuação que sobra de "Padaria Central: 62 …" não fazem parte
     // do nome, e entrariam no {{1}} do modelo aprovado do jeito que estivessem.
     .map((pedaco) => pedaco.trim().replace(/^["'`:.\s]+|["'`:.\s]+$/g, "").trim())
     // Sobra de pontuação ("-", ":") não é nome nem cidade.
     .filter((pedaco) => pedaco.length > 1 && /[a-zà-ú]/i.test(pedaco));
   if (!pedacos.length) return { name: null, city: null };
+  /**
+   * Pedaço comprido demais é frase, não nome.
+   *
+   * Linha como "liguei pro 62999998888 ontem e não atenderam" deixava a frase
+   * inteira como nome, e ela entraria no {{1}} do modelo aprovado: "Oi liguei
+   * pro ontem e não atenderam". Sem nome o disparo usa o tratamento reserva, que
+   * ao menos faz sentido lido em voz alta.
+   */
+  const parecemNome = pedacos.filter((pedaco) => pedaco.split(/\s+/).length <= 6);
+  if (!parecemNome.length) return { name: null, city: null };
   return {
-    name: pedacos[0].slice(0, 120),
-    city: pedacos[1] ? pedacos[1].slice(0, 80) : null,
+    name: parecemNome[0].slice(0, 120),
+    city: parecemNome[1] ? parecemNome[1].slice(0, 80) : null,
   };
 }
 
@@ -141,10 +186,18 @@ export function lerListaDeContatos(bruto: string): LeituraDeContatos {
     const linha = linhaBruta.trim();
     if (!linha) continue;
 
-    // Blocos que podem ser telefone: dígitos com a pontuação que costuma
-    // acompanhá-los. O `+` fica fora do grupo interno para não colar dois
-    // números escritos como "+5562... +5562...".
-    const blocos = linha.match(/\+?\d[\d\s().-]{7,}\d/g) ?? [];
+    /**
+     * Blocos que podem ser telefone.
+     *
+     * O limite de dois separadores entre dígitos é o que impede um bloco de
+     * atravessar " - " e colar coisas diferentes. A versão anterior aceitava
+     * qualquer quantidade, então em "CNPJ 12.345.678/0001-90 - (62) 99999-8888"
+     * o rabo do CNPJ engolia o telefone de verdade: o bloco virava
+     * "0001-90 - (62) 99999-8888", não fechava em telefone nenhum, e a linha
+     * inteira era recusada com o contato válido dentro dela. Dois separadores
+     * ainda cobrem ") " e " (", que aparecem em telefone escrito à mão.
+     */
+    const blocos = linha.match(/\+?\d(?:[ ./()-]{0,2}\d){7,}/g) ?? [];
     const telefonesDaLinha: string[] = [];
     for (const bloco of blocos) {
       const digitos = bloco.replace(/\D/g, "");
@@ -161,7 +214,7 @@ export function lerListaDeContatos(bruto: string): LeituraDeContatos {
       recusados.push({
         texto: linha.slice(0, 120),
         motivo: blocos.length
-          ? "número fora de um formato brasileiro válido"
+          ? motivoDaRecusa(blocos[blocos.length - 1].replace(/\D/g, ""))
           : "linha sem telefone",
       });
       continue;

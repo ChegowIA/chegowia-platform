@@ -267,3 +267,73 @@ describe("resposta de quem foi abordado", () => {
     expect(prisma.platformOutreachBlock.upsert).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Resposta da equipe no inbox.
+ *
+ * A janela de 24h vale para qualquer conversa do canal, não só para prospecção.
+ * Antes a mensagem era tentada e voltava com o erro cru do provedor dentro do
+ * histórico, o que parecia falha do sistema em vez de regra do WhatsApp.
+ */
+describe("responder pelo inbox", () => {
+  function construirEnvio(lastInboundAt: Date | null) {
+    const conversation = {
+      id: "conv-1",
+      customerPhone: "5562999998888",
+      lastInboundAt,
+      channel: { id: "canal-1", status: "ATIVO", automationEnabled: true },
+      messages: [],
+    };
+    const prisma: any = {
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue(conversation),
+        update: jest.fn().mockResolvedValue({
+          ...conversation,
+          channel: {
+            id: "canal-1",
+            status: "ATIVO",
+            gupshupAppName: "chegowia",
+            config: { number: "5562990000000" },
+          },
+        }),
+      },
+      platformWhatsAppMessage: { create: jest.fn().mockResolvedValue({ id: "msg-1" }) },
+      platformWhatsAppChannel: { update: jest.fn().mockResolvedValue({}) },
+      platformUsageLedger: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
+      usageRate: { findUnique: jest.fn().mockResolvedValue(null) },
+      user: { findUnique: jest.fn().mockResolvedValue({ id: "u-1", name: "Thiago" }) },
+    };
+    const gupshup = { sendText: jest.fn().mockResolvedValue({ messageId: "prov-1", raw: {} }) };
+    const service = buildPlatformWhatsAppService({
+      prisma,
+      gupshup,
+      realtime: { emitToSuperAdmins: jest.fn() },
+    }) as any;
+    service.gupshupAppTokenFor = jest.fn().mockResolvedValue("token");
+    return { service, gupshup };
+  }
+
+  it("fora da janela recusa antes de chamar o provedor", async () => {
+    const { service, gupshup } = construirEnvio(new Date(Date.now() - 30 * 60 * 60 * 1000));
+
+    await expect(service.sendHumanMessage("u-1", "conv-1", "oi")).rejects.toThrow(/24 horas/);
+    expect(gupshup.sendText).not.toHaveBeenCalled();
+  });
+
+  it("conversa que a pessoa nunca respondeu também recusa", async () => {
+    const { service, gupshup } = construirEnvio(null);
+
+    await expect(service.sendHumanMessage("u-1", "conv-1", "oi")).rejects.toThrow(/escreva primeiro/);
+    expect(gupshup.sendText).not.toHaveBeenCalled();
+  });
+
+  it("dentro da janela envia normalmente", async () => {
+    const { service, gupshup } = construirEnvio(new Date(Date.now() - 60 * 60 * 1000));
+
+    await service.sendHumanMessage("u-1", "conv-1", "seguindo nossa conversa");
+
+    expect(gupshup.sendText).toHaveBeenCalledWith(expect.objectContaining({
+      body: "seguindo nossa conversa",
+    }));
+  });
+});

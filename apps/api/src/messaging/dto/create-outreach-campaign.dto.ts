@@ -31,15 +31,16 @@ export class CreateOutreachCampaignDto {
   @Max(1000)
   dailyLimit?: number;
 
+  /** Dez segundos é o giro do worker: abaixo disso o intervalo não seria cumprido. */
   @IsOptional()
   @IsInt()
-  @Min(5)
+  @Min(10)
   @Max(3600)
   minIntervalSeconds?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(5)
+  @Min(10)
   @Max(7200)
   maxIntervalSeconds?: number;
 
