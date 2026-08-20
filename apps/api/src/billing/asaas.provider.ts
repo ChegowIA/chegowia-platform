@@ -1,5 +1,50 @@
 import { BadGatewayException, Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
 
+/**
+ * Recusa do Asaas, com a natureza da recusa preservada.
+ *
+ * Até aqui toda falha virava `BadGatewayException` com uma frase, e quem chamava
+ * não tinha como distinguir "o Asaas entendeu o pedido e disse não" de "o Asaas
+ * não respondeu". A diferença é o que decide se vale tentar de novo — e sem ela
+ * um job em segundo plano repetia a cada cinco segundos, para sempre, uma
+ * alteração que o Asaas nunca ia aceitar.
+ *
+ * Continua sendo um `BadGatewayException`, então nada que já capturava esse tipo
+ * deixa de funcionar.
+ */
+export class AsaasRecusaException extends BadGatewayException {
+  constructor(
+    message: string,
+    /** Status HTTP; 0 quando a recusa veio com 200 e `errors` no corpo. */
+    readonly httpStatus: number,
+    readonly codigos: string[],
+    readonly descricoes: string[],
+  ) {
+    super(message);
+  }
+
+  /**
+   * Repetir o mesmo pedido vai dar o mesmo resultado.
+   *
+   * 4xx significa que o Asaas leu, entendeu e recusou; erro de negócio com HTTP
+   * 200 é a mesma coisa. Rede indisponível e 5xx ficam de fora de propósito:
+   * ali repetir é exatamente o certo.
+   */
+  get permanente() {
+    return this.httpStatus === 0 || (this.httpStatus >= 400 && this.httpStatus < 500);
+  }
+
+  /** Se algum código ou descrição contém o trecho, sem acento e sem caixa. */
+  contem(trecho: string) {
+    const alvo = normalizarTexto(trecho);
+    return [...this.codigos, ...this.descricoes].some((item) => normalizarTexto(item).includes(alvo));
+  }
+}
+
+function normalizarTexto(valor: string) {
+  return valor.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 export type AsaasBillingType = "PIX" | "BOLETO" | "CREDIT_CARD" | "UNDEFINED";
 
 export type AsaasCustomer = {
@@ -341,25 +386,30 @@ export class AsaasProvider {
     if (response.status === 404 && init.notFoundAsNull) return null;
 
     if (!response.ok) {
-      // O Asaas devolve os problemas em `errors[]`, com código e descrição.
-      const detail = Array.isArray(payload?.errors)
-        ? payload.errors.map((item: any) => item?.description).filter(Boolean).join("; ")
-        : null;
       this.logger.error(`Asaas recusou ${init.method} ${path}: ${response.status} ${rawText.slice(0, 400)}`);
-      throw new BadGatewayException(
-        detail && detail.length < 300 ? `O Asaas recusou a operação: ${detail}` : "O Asaas recusou a operação.",
-      );
+      throw this.recusa(payload, response.status);
     }
 
     // Erro de negócio também pode vir com HTTP 200 e `errors` no corpo.
     if (Array.isArray(payload?.errors) && payload.errors.length) {
-      const detail = payload.errors.map((item: any) => item?.description).filter(Boolean).join("; ");
       this.logger.error(`Asaas respondeu 200 com erro em ${init.method} ${path}: ${rawText.slice(0, 400)}`);
-      throw new BadGatewayException(
-        detail && detail.length < 300 ? `O Asaas recusou a operação: ${detail}` : "O Asaas recusou a operação.",
-      );
+      throw this.recusa(payload, 0);
     }
 
     return payload;
+  }
+
+  /** O Asaas devolve os problemas em `errors[]`, com código e descrição. */
+  private recusa(payload: any, httpStatus: number) {
+    const itens = Array.isArray(payload?.errors) ? payload.errors : [];
+    const codigos = itens.map((item: any) => String(item?.code ?? "")).filter(Boolean);
+    const descricoes = itens.map((item: any) => String(item?.description ?? "")).filter(Boolean);
+    const detalhe = descricoes.join("; ");
+    return new AsaasRecusaException(
+      detalhe && detalhe.length < 300 ? `O Asaas recusou a operação: ${detalhe}` : "O Asaas recusou a operação.",
+      httpStatus,
+      codigos,
+      descricoes,
+    );
   }
 }
