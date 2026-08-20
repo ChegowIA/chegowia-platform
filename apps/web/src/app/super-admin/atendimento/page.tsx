@@ -14,10 +14,11 @@ import { formatDateTime } from "@/lib/format";
 import { connectSocket } from "@/lib/socket-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardActions, CardContent } from "@/components/ui/card";
-import { FormField, Textarea } from "@/components/ui/input";
+import { FormField, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PlatformGupshupLink } from "@/components/messaging/platform-gupshup-link";
 import { WhatsAppProfileSettings } from "@/components/messaging/whatsapp-profile-settings";
+import { PlatformOutreachPanel } from "@/components/messaging/platform-outreach-panel";
 
 type PlatformChannel = {
   id: string | null;
@@ -26,6 +27,7 @@ type PlatformChannel = {
   automationEnabled: boolean;
   welcomeMessage: string | null;
   salesInstructions: string | null;
+  outreachTemplate?: { configured: boolean };
   connected: boolean;
   integration: {
     connectedAt?: string | null;
@@ -90,6 +92,10 @@ export default function SuperAdminAtendimentoPage() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [novaConversaAberta, setNovaConversaAberta] = useState(false);
+  const [novoNumero, setNovoNumero] = useState("");
+  const [novoNome, setNovoNome] = useState("");
+  const [primeiraMensagem, setPrimeiraMensagem] = useState("");
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
 
   const { data: channel, isLoading: loadingChannel } = useQuery({
@@ -199,6 +205,32 @@ export default function SuperAdminAtendimentoPage() {
     onError: (cause) => setError(apiErrorMessage(cause)),
   });
 
+  /**
+   * Conversa iniciada por nós.
+   *
+   * O texto digitado só sai se a pessoa tiver escrito nas últimas 24 horas; fora
+   * disso o servidor manda o modelo aprovado. A resposta diz qual dos dois foi,
+   * porque é a diferença entre a pessoa receber o que você escreveu e receber o
+   * texto aprovado na Meta.
+   */
+  const startConversation = useMutation({
+    mutationFn: async () => (await api.post("/platform/whatsapp/conversations", {
+      phone: novoNumero,
+      name: novoNome || undefined,
+      message: primeiraMensagem || undefined,
+    })).data as { conversationId: string; via: "texto" | "modelo" },
+    onSuccess: (resultado) => {
+      setError(null);
+      setNovaConversaAberta(false);
+      setNovoNumero("");
+      setNovoNome("");
+      setPrimeiraMensagem("");
+      setSelectedId(resultado.conversationId);
+      void queryClient.invalidateQueries({ queryKey: ["platform-whatsapp-conversations"] });
+    },
+    onError: (cause) => setError(apiErrorMessage(cause)),
+  });
+
   const clearConversation = useMutation({
     mutationFn: async (conversationId: string) => (await api.delete(`/platform/whatsapp/conversations/${conversationId}/messages`)).data,
     onSuccess: () => {
@@ -287,7 +319,7 @@ export default function SuperAdminAtendimentoPage() {
       </section>
 
       <section className="space-y-4">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">Inbox isolado</p><h2 className="mt-1 text-2xl font-black text-slate-950 dark:text-slate-100">Conversas de interessados</h2></div><p className="text-sm font-semibold text-slate-500 dark:text-slate-400">{waitingForTeam} aguardando equipe humana</p></div>
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">Inbox isolado</p><h2 className="mt-1 text-2xl font-black text-slate-950 dark:text-slate-100">Conversas de interessados</h2></div><div className="flex flex-wrap items-center gap-3"><p className="text-sm font-semibold text-slate-500 dark:text-slate-400">{waitingForTeam} aguardando equipe humana</p><Button type="button" size="sm" disabled={!channel?.connected} onClick={() => setNovaConversaAberta(true)}>Nova conversa</Button></div></div>
         <div className="grid min-h-[680px] gap-5 xl:h-[calc(100dvh-15rem)] xl:min-h-[560px] xl:max-h-[780px] xl:grid-cols-[320px_minmax(0,1fr)_260px]">
           <ConversationList conversations={conversations} selectedId={selectedId} loading={loadingConversations} onSelect={setSelectedId} />
           <Card className="min-h-[620px] overflow-hidden xl:h-full xl:min-h-0">
@@ -314,6 +346,35 @@ export default function SuperAdminAtendimentoPage() {
           <AssistantContext conversation={conversation} channel={channel} />
         </div>
       </section>
+
+      <PlatformOutreachPanel />
+
+      <Modal open={novaConversaAberta} onClose={() => !startConversation.isPending && setNovaConversaAberta(false)} title="Começar uma conversa">
+        <div className="space-y-4">
+          <FormField label="Número com DDD">
+            <Input value={novoNumero} placeholder="(62) 99999-8888" onChange={(event) => setNovoNumero(event.target.value)} />
+          </FormField>
+          <FormField label="Nome ou estabelecimento (opcional)">
+            <Input value={novoNome} placeholder="Pizzaria do Zé" onChange={(event) => setNovoNome(event.target.value)} />
+          </FormField>
+          <FormField label="Mensagem (só vale se a pessoa já escreveu nas últimas 24h)">
+            <Textarea rows={3} className="min-h-[86px]" value={primeiraMensagem} placeholder="Oi! Passando para retomar nossa conversa…" onChange={(event) => setPrimeiraMensagem(event.target.value)} />
+          </FormField>
+          {/*
+            Dizer isto aqui evita a conclusão errada mais provável: a pessoa
+            digita um texto, recebe outro, e acha que o sistema trocou a
+            mensagem por conta própria.
+          */}
+          <p className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300">
+            Para um número que nunca escreveu, o WhatsApp só aceita o modelo aprovado na Meta — o texto acima é ignorado
+            e a abertura sai pelo modelo cadastrado em Prospecção ativa.
+          </p>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" disabled={startConversation.isPending} onClick={() => setNovaConversaAberta(false)}>Cancelar</Button>
+            <Button type="button" isLoading={startConversation.isPending} disabled={novoNumero.replace(/\D/g, "").length < 10} onClick={() => startConversation.mutate()}>Enviar e abrir conversa</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={clearDialogOpen && Boolean(conversation)} onClose={() => !clearConversation.isPending && setClearDialogOpen(false)} title="Limpar conversa comercial">
         <div className="space-y-5"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"><p className="font-black">Isso reinicia o contexto para o próximo contato.</p><p className="mt-1">As mensagens saem apenas deste inbox institucional. Nenhum dado de empresa cliente é afetado.</p></div><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={() => setClearDialogOpen(false)} disabled={clearConversation.isPending}>Cancelar</Button><Button type="button" variant="danger" isLoading={clearConversation.isPending} onClick={() => selectedId && clearConversation.mutate(selectedId)}>Limpar histórico</Button></div></div>

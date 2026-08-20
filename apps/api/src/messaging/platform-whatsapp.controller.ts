@@ -10,7 +10,13 @@ import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { SendWhatsAppMessageDto } from "./dto/send-whatsapp-message.dto";
 import { UpdatePlatformWhatsAppAutomationDto } from "./dto/update-platform-whatsapp-automation.dto";
 import { UpdatePlatformWhatsAppConversationDto } from "./dto/update-platform-whatsapp-conversation.dto";
+import { UpdatePlatformOutreachTemplateDto } from "./dto/update-platform-outreach-template.dto";
+import { StartPlatformConversationDto } from "./dto/start-platform-conversation.dto";
+import { CreateOutreachCampaignDto } from "./dto/create-outreach-campaign.dto";
+import { AnalyzeOutreachListDto } from "./dto/analyze-outreach-list.dto";
+import { BlockOutreachPhoneDto } from "./dto/block-outreach-phone.dto";
 import { PlatformWhatsAppService } from "./platform-whatsapp.service";
+import { PlatformOutreachService } from "./platform-outreach.service";
 
 /**
  * Canal institucional da ChegowIA.
@@ -23,7 +29,10 @@ import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 @Roles(Role.SUPER_ADMIN)
 @Controller("platform/whatsapp")
 export class PlatformWhatsAppController {
-  constructor(private readonly platformWhatsApp: PlatformWhatsAppService) {}
+  constructor(
+    private readonly platformWhatsApp: PlatformWhatsAppService,
+    private readonly outreach: PlatformOutreachService,
+  ) {}
 
   @Get("channel")
   channel() {
@@ -74,9 +83,30 @@ export class PlatformWhatsAppController {
     return this.platformWhatsApp.updateAutomation(dto);
   }
 
+  /** Modelo aprovado na Meta, usado para abrir conversa com número novo. */
+  @Patch("outreach/template")
+  updateOutreachTemplate(@Body() dto: UpdatePlatformOutreachTemplateDto) {
+    return this.platformWhatsApp.updateOutreachTemplate(dto);
+  }
+
   @Get("conversations")
   conversations() {
     return this.platformWhatsApp.listConversations();
+  }
+
+  /**
+   * Abre conversa com um número digitado.
+   *
+   * Limite baixo de propósito: é a rota que manda mensagem para quem nunca
+   * escreveu, e um erro de laço aqui custa a reputação do número.
+   */
+  @Post("conversations")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  startConversation(
+    @CurrentUser("sub") userId: string,
+    @Body() dto: StartPlatformConversationDto,
+  ) {
+    return this.platformWhatsApp.startConversation(userId, dto);
   }
 
   @Get("conversations/:id")
@@ -102,5 +132,61 @@ export class PlatformWhatsAppController {
     @Body() dto: SendWhatsAppMessageDto,
   ) {
     return this.platformWhatsApp.sendHumanMessage(userId, id, dto.content);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Prospecção em lista
+  // ---------------------------------------------------------------------------
+
+  /** Confere a lista colada sem criar disparo nem enviar nada. */
+  @Post("outreach/analyze")
+  analyzeList(@Body() dto: AnalyzeOutreachListDto) {
+    return this.outreach.analisarLista(dto.contacts);
+  }
+
+  @Get("outreach/campaigns")
+  campaigns() {
+    return this.outreach.listarCampanhas();
+  }
+
+  @Post("outreach/campaigns")
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  createCampaign(@CurrentUser("sub") userId: string, @Body() dto: CreateOutreachCampaignDto) {
+    return this.outreach.criarCampanha(userId, dto);
+  }
+
+  @Get("outreach/campaigns/:id")
+  campaign(@Param("id") id: string) {
+    return this.outreach.detalharCampanha(id);
+  }
+
+  @Post("outreach/campaigns/:id/start")
+  startCampaign(@Param("id") id: string) {
+    return this.outreach.iniciar(id);
+  }
+
+  @Post("outreach/campaigns/:id/pause")
+  pauseCampaign(@Param("id") id: string) {
+    return this.outreach.pausar(id);
+  }
+
+  @Delete("outreach/campaigns/:id")
+  cancelCampaign(@Param("id") id: string) {
+    return this.outreach.cancelar(id);
+  }
+
+  @Get("outreach/blocks")
+  blocks() {
+    return this.outreach.listarBloqueios();
+  }
+
+  @Post("outreach/blocks")
+  block(@CurrentUser("sub") userId: string, @Body() dto: BlockOutreachPhoneDto) {
+    return this.outreach.bloquear(dto, userId);
+  }
+
+  @Delete("outreach/blocks/:id")
+  unblock(@Param("id") id: string) {
+    return this.outreach.desbloquear(id);
   }
 }

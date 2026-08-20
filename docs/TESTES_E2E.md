@@ -47,7 +47,8 @@ o que apareceu na tela, no log da API e no banco, **sem consertar antes de repor
 | `/super-admin/planos` · `/super-admin/aprovacoes` · `/super-admin/operacao` · `/super-admin/conta` | 16 |
 | `/super-admin/relatorios` | 16.8 |
 | `/super-admin/revendedores` | 15.1 |
-| `/super-admin/atendimento` · `/super-admin/suporte` | 11 |
+| `/super-admin/atendimento` | 10.4, 10.5, 10.6, 10.7 |
+| `/super-admin/suporte` | 11 |
 
 ---
 
@@ -130,7 +131,7 @@ nos roteiros 6.6 e 15.
 **`verify` não inclui os e2e** — são comandos separados, e o CI roda os dois.
 
 ```sh
-npm run verify     # lint, dark mode, glifos, typecheck, 604 testes, audit, build
+npm run verify     # lint, dark mode, glifos, typecheck, 669 testes, audit, build
 npm run test:e2e   # AppModule inteiro contra MySQL real
 ```
 
@@ -620,7 +621,7 @@ Rascunho: `MONTANDO → AGUARDANDO_CONFIRMACAO → CONCLUIDO` (ou `CANCELADO`).
 | 10.3.6 | Pedir produto inexistente | Assistente não inventa item |
 | 10.3.7 | Endereço fora da área | Avisa antes de fechar |
 
-### 10.4 Canal institucional (`/api/platform/whatsapp`, 11 rotas)
+### 10.4 Canal institucional (`/api/platform/whatsapp`, 23 rotas)
 
 | # | Passo | Esperado |
 |---|---|---|
@@ -630,6 +631,70 @@ Rascunho: `MONTANDO → AGUARDANDO_CONFIRMACAO → CONCLUIDO` (ou `CANCELADO`).
 | 10.4.4 | Conferir isolamento | Mensagem institucional não aparece para nenhuma empresa |
 | 10.4.5 | Perfil e foto do canal institucional | Atualizam sem afetar o canal das empresas |
 | 10.4.6 | Automação institucional | Liga e desliga de forma independente |
+
+### 10.5 Conversa iniciada pelo super admin
+
+O WhatsApp só aceita texto livre nas 24h seguintes à **última mensagem da
+pessoa**. Fora dessa janela, apenas modelo aprovado pela Meta. Um teste que ignore
+isso passa na tela e falha no aparelho: o provedor aceita a requisição, não
+entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.5.1 | Nova conversa com número que nunca escreveu, sem modelo cadastrado | Recusa explicando a janela de 24h; nada é enviado |
+| 10.5.2 | Cadastrar o modelo (`PATCH outreach/template`) e repetir | Abertura sai pelo modelo; resposta traz `via: "modelo"` |
+| 10.5.3 | Conferir o inbox depois do envio | A mensagem aparece com o texto do modelo já preenchido, não com `{{1}}` |
+| 10.5.4 | Nova conversa com número que respondeu há 1 hora | Texto digitado sai como está; resposta traz `via: "texto"` |
+| 10.5.5 | Nova conversa com número que respondeu há 30 horas | Volta ao modelo, porque a janela fechou |
+| 10.5.6 | Número na lista de não contatar | Recusa nomeando o número; nada é enviado |
+| 10.5.7 | Número inválido (DDD inexistente, 9 dígitos sem DDD) | 400 antes de chegar ao provedor |
+| 10.5.8 | Conversa criada à mão | Nasce em modo humano: a IA não responde por cima do superadmin |
+
+### 10.6 Prospecção em lista
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.6.1 | Colar lista mista e conferir (`POST outreach/analyze`) | Relatório com aptos, repetidos, recusados e descartados; nada é criado |
+| 10.6.2 | Linha "Pizzaria do Zé - Goiânia - (62) 99999-8888" | Nome e cidade separados do telefone |
+| 10.6.3 | Linha só com o número, coluna colada de planilha | Aceita, sem nome |
+| 10.6.4 | Mesmo número em três formatos diferentes | Conta uma vez; `repetidosNaLista` = 2 |
+| 10.6.5 | Linha sem telefone e DDD inexistente | Voltam em `recusados` com o trecho original e o motivo |
+| 10.6.6 | Telefone fixo na lista | Sinalizado em `possiveisFixos` (fixo quase nunca tem WhatsApp) |
+| 10.6.7 | Número que já tem conversa no canal | Descartado: "já existe conversa com este número" |
+| 10.6.8 | Número de empresa que já é cliente | Descartado: "número de uma empresa que já é cliente" |
+| 10.6.9 | Número já usado em outro disparo | Descartado: "já entrou em outro disparo" |
+| 10.6.10 | Número na lista de não contatar | Descartado: "pediu para não receber" |
+| 10.6.11 | Criar o disparo | Nasce em `RASCUNHO`; **nenhuma** mensagem sai ainda |
+| 10.6.12 | Começar sem modelo aprovado | Recusa antes do primeiro envio |
+| 10.6.13 | Começar com modelo | Vira `ENVIANDO`; primeiro envio no próximo giro do worker |
+| 10.6.14 | Acompanhar dois envios seguidos | Intervalo entre eles cai na faixa configurada, e varia |
+| 10.6.15 | Limite diário alcançado | Fica parado e reagenda para o dia seguinte, sem consultar o banco em laço |
+| 10.6.16 | Disparo com horário comercial e teste às 3h | Nada sai; retoma sozinho às 9h |
+| 10.6.17 | Domingo | Nada sai, mesmo dentro do horário |
+| 10.6.18 | Desligar o respeito ao horário | Envia na hora, independente do relógio |
+| 10.6.19 | Pausar no meio | Para na hora; a fila continua registrada |
+| 10.6.20 | Retomar | Segue de onde parou, sem reenviar quem já recebeu |
+| 10.6.21 | Cancelar | Pendentes viram `DESCARTADO`; enviados permanecem no relatório |
+| 10.6.22 | Fila esvaziada | Vira `CONCLUIDA` sozinho |
+| 10.6.23 | Reiniciar o processo da API no meio do disparo | Retoma sem reenviar nem atropelar o intervalo |
+| 10.6.24 | Falha momentânea do provedor | Primeira falha mantém o contato na fila; segunda marca `FALHOU` |
+| 10.6.25 | Modelo recusado pela Meta (erro em série) | Pausa automática com o motivo e o último erro; não queima a lista inteira |
+| 10.6.26 | Conferir o consumo depois de um disparo | Mensagens contam como `WHATSAPP_TEMPLATE_MARKETING` no consumo da plataforma |
+
+### 10.7 Resposta de quem foi abordado
+
+| # | Passo | Esperado |
+|---|---|---|
+| 10.7.1 | Contato responde a uma abordagem | Alvo vira `RESPONDEU`; contador de respostas do disparo sobe |
+| 10.7.2 | Mesma pessoa manda a segunda mensagem | Contador **não** sobe de novo |
+| 10.7.3 | Ler a resposta do assistente | Reconhece que o contato partiu de nós, faz **uma** pergunta e não se apresenta em lista |
+| 10.7.4 | Dizer "não tenho interesse" | Assistente agradece e encerra; não argumenta nem oferece desconto |
+| 10.7.5 | Perguntar de onde veio o número | Diz a verdade (prospecção da ChegowIA), sem afirmar que a pessoa pediu contato |
+| 10.7.6 | Dizer "me tira dessa lista" | Confirma por escrito, bloqueia o número e encerra a conversa |
+| 10.7.7 | Conferir a fila dos outros disparos depois do pedido | Pendentes daquele número viram `DESCARTADO` em **todos** os disparos |
+| 10.7.8 | Colar o número bloqueado numa lista nova | Descartado na conferência, antes de qualquer envio |
+| 10.7.9 | Remover o bloqueio à mão e recolar | Volta a ser aceito |
+| 10.7.10 | Pedir para falar com humano | Vai para a equipe, como em qualquer conversa do canal |
 
 ---
 
@@ -952,3 +1017,7 @@ Não são falhas novas — não reporte como se fossem.
   bloqueado, mas a vitrine segue aceitando pedido. Decisão de produto em aberto.
 - **Cidade compara por igualdade.** Cidade vizinha não aparece mesmo que a loja
   entregue lá; o raio de entrega não entra nesse filtro.
+- **Prospecção depende de modelo aprovado pela Meta.** Sem um modelo aprovado
+  cadastrado, nenhuma abordagem a número novo sai — e isso não é defeito, é
+  regra da API oficial. A aprovação é feita no painel do Gupshup e leva de
+  minutos a alguns dias.

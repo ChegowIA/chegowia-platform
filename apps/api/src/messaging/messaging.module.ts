@@ -7,6 +7,7 @@ import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { PlatformWhatsAppController } from "./platform-whatsapp.controller";
 import { PlatformWhatsAppService } from "./platform-whatsapp.service";
+import { PlatformOutreachService } from "./platform-outreach.service";
 import { AiModule } from "../ai/ai.module";
 import { RealtimeModule } from "../realtime/realtime.module";
 import { UsageModule } from "../usage/usage.module";
@@ -24,8 +25,9 @@ const messagingProviderFactory = {
     GupshupWhatsAppProvider,
     MessagingSecretsService,
     PlatformWhatsAppService,
+    PlatformOutreachService,
     MessagingService,
   ],
-  exports: [MessagingService, PlatformWhatsAppService],
+  exports: [MessagingService, PlatformWhatsAppService, PlatformOutreachService],
 })
 export class MessagingModule {}
