@@ -29,6 +29,29 @@ if [ "$api_replicas" -gt 1 ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# O backup está de fato rodando?
+# ---------------------------------------------------------------------------
+#
+# A linha de cron está documentada, mas documentação não é crontab. Um
+# agendamento que nunca foi instalado — ou que quebrou meses atrás — não dá
+# nenhum sintoma até o dia em que o backup é necessário. Aqui a verificação é
+# sobre o arquivo que o último envio externo deixou, não sobre a intenção.
+file_backup_root=$(read_env_value BACKUP_ROOT "$ENV_FILE")
+BACKUP_ROOT=${BACKUP_ROOT:-${file_backup_root:-/srv/chegowia/backups}}
+marca="$BACKUP_ROOT/ULTIMO_ENVIO_EXTERNO"
+if [ ! -f "$marca" ]; then
+  echo "Nenhum backup foi enviado para fora do servidor ainda ($marca não existe)." >&2
+  echo "  Rode 'sh infra/backup.sh' e confira o agendamento no crontab." >&2
+  exit 1
+fi
+if [ -n "$(find "$marca" -mtime +2 2>/dev/null)" ]; then
+  echo "O último backup externo tem mais de 48 horas (veja $marca)." >&2
+  echo "  O agendamento provavelmente parou de rodar." >&2
+  exit 1
+fi
+echo "Último backup externo: $(cat "$marca")"
+
 curl --fail --silent --show-error "https://$DOMAIN/api/health/live" >/dev/null
 curl --fail --silent --show-error "https://$DOMAIN/api/health/ready" >/dev/null
 curl --fail --silent --show-error "https://$DOMAIN/" >/dev/null

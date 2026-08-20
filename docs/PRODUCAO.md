@@ -346,12 +346,35 @@ Agende diariamente:
 17 3 * * * cd /caminho/chegowia && /bin/sh infra/backup.sh >> /var/log/chegowia-backup.log 2>&1
 ```
 
-O backup contém dump consistente do MySQL, imagens, currículos, manifesto e
-checksums. A retenção padrão é 14 dias (`BACKUP_RETENTION_DAYS`). Guarde uma
-segunda cópia criptografada em outro disco ou outro servidor: permanecer no
-mesmo disco não protege contra perda física.
+### A cópia precisa sair do servidor
 
-Teste a restauração periodicamente em uma máquina separada:
+Backup que mora no mesmo disco do banco não é backup. Disco morto, incêndio ou
+conta encerrada no provedor levam o dado e a cópia juntos — e aqui há nota fiscal
+autorizada, com guarda obrigatória de cinco anos.
+
+Configure um destino em `.env.production`:
+
+```sh
+# rclone (recomendado: um remoto `crypt` cifra antes de a cópia sair daqui)
+BACKUP_REMOTE=chegowia-cripto:backups
+# ou outra máquina por SSH
+BACKUP_RSYNC_TARGET=backup@outrohost:/srv/chegowia-backups
+```
+
+Sem nenhum dos dois, `infra/backup.sh` gera o backup local, avisa e sai com
+código 2 — para o cron reclamar em vez de a ausência da cópia passar meses sem
+ninguém notar. Depois de enviar, o script confere o que chegou (`rclone check`):
+cópia truncada por queda de rede não dá sintoma.
+
+`infra/check-production.sh` passou a falhar quando o último envio externo tem
+mais de 48 horas. É a forma de descobrir que o agendamento nunca foi instalado
+antes de precisar dele.
+
+O backup contém dump consistente do MySQL, imagens, currículos, manifesto e
+checksums. A retenção padrão é 14 dias (`BACKUP_RETENTION_DAYS`).
+
+**Restaure uma vez antes de precisar.** Backup que ninguém restaurou é suposição,
+não cópia de segurança. Faça em uma máquina separada:
 
 ```bash
 CONFIRM_RESTORE=YES BACKUP_DIR=/srv/chegowia/backups/AAAA... \
