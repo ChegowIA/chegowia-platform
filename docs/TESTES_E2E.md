@@ -824,6 +824,20 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 
 ## 14. Assinatura e pagamento
 
+### 13.9 Filtro de cidade na vitrine
+
+| # | Passo | Esperado |
+|---|---|---|
+| 13.9.1 | Buscar pela cidade da sede | Loja aparece |
+| 13.9.2 | Buscar pela cidade vizinha onde a loja cadastrou área de entrega | Loja aparece — era o caso que faltava |
+| 13.9.3 | Área de entrega desativada naquela cidade | Loja não aparece |
+| 13.9.4 | Cidade sem acento ("sao paulo") | Aparece: a collation da coluna ignora acento e caixa |
+| 13.9.5 | Cidade que contém o nome ("São Paulo Capital") | **Não** aparece: a comparação é por igualdade, não substring |
+| 13.9.6 | Cidade sem relação nenhuma | Não aparece |
+| 13.9.7 | `city` em branco ou só espaços | Não vira filtro vazio; devolve o catálogo inteiro |
+
+---
+
 ### 14.0 Carência de 7 dias no catálogo
 
 A loja sai do ar 7 dias depois de a assinatura vencer, e volta sozinha quando o
@@ -1062,8 +1076,6 @@ Não são falhas novas — não reporte como se fossem.
 
 - **Grupo IBS/CBS da Reforma não é emitido.** Rejeições suspensas em 01/08/2026;
   Simples Nacional passa a dever em 01/01/2027.
-- **Cidade compara por igualdade.** Cidade vizinha não aparece mesmo que a loja
-  entregue lá; o raio de entrega não entra nesse filtro.
 - **Prospecção depende de modelo aprovado pela Meta.** Sem um modelo aprovado
   cadastrado, nenhuma abordagem a número novo sai — e isso não é defeito, é
   regra da API oficial. A aprovação é feita no painel do Gupshup e leva de

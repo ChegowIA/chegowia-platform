@@ -15,7 +15,7 @@ import { AuthService } from "../auth/auth.service";
 import { isStoreOpen } from "../common/utils/store-hours";
 import { LocalStorageService } from "../common/storage/local-storage.service";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { assinaturaPermiteAparecerNoCatalogo } from "../common/public-visibility/subscription-grace";
+import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 @Injectable()
@@ -291,9 +291,11 @@ export class CompaniesService {
     const where: any = {
       isActive: true,
       ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
-      ...assinaturaPermiteAparecerNoCatalogo(),
+      // `contains` era o filtro aqui, e casava "Rio Branco" com "Rio Branco do
+      // Sul", em outro estado. A comparação passou a ser por igualdade, somada à
+      // loja que cadastrou área de entrega naquela cidade.
+      ...filtroPublicoDeEmpresa({ cidade: params.city }),
     };
-    if (params.city) where.city = { contains: params.city };
     if (params.search) where.name = { contains: params.search };
 
     return this.db().company.findMany({
@@ -326,7 +328,7 @@ export class CompaniesService {
         slug,
         isActive: true,
         ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
-        ...assinaturaPermiteAparecerNoCatalogo(),
+        ...filtroPublicoDeEmpresa(),
       },
       select: {
         id: true,

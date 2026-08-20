@@ -65,3 +65,40 @@ export function assinaturaDentroDaCarencia(
 /** Mesma frase nos três pontos de venda, para o cliente não receber explicações diferentes. */
 export const LOJA_INDISPONIVEL_POR_ASSINATURA =
   "Esta loja está temporariamente indisponível. Tente novamente mais tarde.";
+
+/**
+ * Cidade atendida, e não apenas cidade da sede.
+ *
+ * Comparar só `company.city` esconde a loja da cidade vizinha mesmo quando ela
+ * entrega lá — e é o caso comum em região metropolitana, onde o cliente de
+ * Aparecida pede de um restaurante de Goiânia todos os dias. Usar `contains`
+ * resolveria isso pelo motivo errado: "Rio Branco" casaria com "Rio Branco do
+ * Sul", em outro estado.
+ *
+ * A resposta certa é o que o próprio lojista cadastrou: as áreas de entrega. Se
+ * existe área ativa naquela cidade, a loja aparece. A comparação continua por
+ * igualdade e já ignora acento e caixa pela collation da coluna.
+ */
+export function cidadeAtendidaWhere(cidade: string) {
+  return {
+    OR: [
+      { city: cidade },
+      { deliveryAreas: { some: { city: cidade, isActive: true } } },
+    ],
+  };
+}
+
+/**
+ * Filtro único das consultas públicas de empresa.
+ *
+ * Devolve tudo dentro de um `AND` porque as duas regras — carência da assinatura
+ * e cidade atendida — usam `OR`. Espalhadas no mesmo objeto, uma sobrescreveria
+ * a outra em silêncio, e o resultado seria loja vencida aparecendo ou loja da
+ * cidade certa desaparecendo, sem erro nenhum no caminho.
+ */
+export function filtroPublicoDeEmpresa(opcoes: { cidade?: string | null; agora?: Date } = {}) {
+  const condicoes: unknown[] = [assinaturaPermiteAparecerNoCatalogo(opcoes.agora)];
+  const cidade = opcoes.cidade?.trim();
+  if (cidade) condicoes.push(cidadeAtendidaWhere(cidade));
+  return { AND: condicoes };
+}

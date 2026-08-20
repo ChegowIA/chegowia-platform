@@ -3,7 +3,7 @@ import { PromotionStatus } from "@prisma/client";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
-import { assinaturaPermiteAparecerNoCatalogo } from "../common/public-visibility/subscription-grace";
+import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 
 @Injectable()
@@ -31,12 +31,8 @@ export class PromotionsService {
     const companyWhere: any = {
       isActive: true,
       ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
-      ...assinaturaPermiteAparecerNoCatalogo(),
+      ...filtroPublicoDeEmpresa({ cidade: city }),
     };
-    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
-    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
-    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
-    if (city) companyWhere.city = city;
     return this.db().promotion.findMany({
       where: {
         status: PromotionStatus.ATIVA,

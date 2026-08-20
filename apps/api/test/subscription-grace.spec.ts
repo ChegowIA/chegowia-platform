@@ -2,6 +2,8 @@ import {
   DIAS_DE_CARENCIA_NO_CATALOGO,
   assinaturaDentroDaCarencia,
   assinaturaPermiteAparecerNoCatalogo,
+  cidadeAtendidaWhere,
+  filtroPublicoDeEmpresa,
 } from "../src/common/public-visibility/subscription-grace";
 import { BillingService } from "../src/billing/billing.service";
 
@@ -138,5 +140,51 @@ describe("prazo mostrado no painel do lojista", () => {
     const vencidaNoLimite = { currentPeriodEnd: dias(-DIAS_DE_CARENCIA_NO_CATALOGO - 1), trialEndsAt: null };
     expect(situacao(vencidaNoLimite).visible).toBe(false);
     expect(assinaturaDentroDaCarencia(vencidaNoLimite, agora)).toBe(false);
+  });
+});
+
+/**
+ * Cidade atendida, não só cidade da sede.
+ *
+ * Em região metropolitana o cliente de Aparecida pede de um restaurante de
+ * Goiânia todos os dias. Comparar só `company.city` escondia essa loja. Trocar
+ * por `contains` resolveria pelo motivo errado: "Rio Branco" casaria com "Rio
+ * Branco do Sul", em outro estado.
+ */
+describe("filtro de cidade", () => {
+  it("aceita a sede e quem cadastrou área de entrega na cidade", () => {
+    expect(cidadeAtendidaWhere("Goiânia")).toEqual({
+      OR: [
+        { city: "Goiânia" },
+        { deliveryAreas: { some: { city: "Goiânia", isActive: true } } },
+      ],
+    });
+  });
+
+  it("área de entrega desativada não conta", () => {
+    const filtro = cidadeAtendidaWhere("Goiânia") as any;
+    expect(filtro.OR[1].deliveryAreas.some.isActive).toBe(true);
+  });
+
+  it("as duas regras ficam num AND, e não se sobrescrevem", () => {
+    // Este é o erro que o `AND` evita: carência e cidade usam `OR`, e no mesmo
+    // objeto a segunda apagaria a primeira sem erro nenhum — loja vencida
+    // voltaria a aparecer, ou loja da cidade certa desapareceria.
+    const filtro = filtroPublicoDeEmpresa({ cidade: "Goiânia" }) as any;
+    expect(filtro.AND).toHaveLength(2);
+    expect(filtro.AND[0].OR[0]).toEqual({ subscription: { is: null } });
+    expect(filtro.AND[1].OR[0]).toEqual({ city: "Goiânia" });
+  });
+
+  it("sem cidade só a carência entra", () => {
+    const filtro = filtroPublicoDeEmpresa() as any;
+    expect(filtro.AND).toHaveLength(1);
+  });
+
+  it("cidade em branco não vira filtro vazio", () => {
+    // `city=""` ou `city="   "` chegaria como filtro por cidade vazia e não
+    // devolveria loja nenhuma.
+    expect((filtroPublicoDeEmpresa({ cidade: "   " }) as any).AND).toHaveLength(1);
+    expect((filtroPublicoDeEmpresa({ cidade: "" }) as any).AND).toHaveLength(1);
   });
 });
