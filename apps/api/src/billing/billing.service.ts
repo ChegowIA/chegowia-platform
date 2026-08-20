@@ -33,7 +33,7 @@ import { ClientApplicationDto } from "./dto/client-application.dto";
 import { normalizeBrazilDocument } from "../common/validators/brazil-document.validator";
 import { AuthService } from "../auth/auth.service";
 import {
-  AsaasBillingType, AsaasProvider, AsaasPayment, AsaasTransfer } from "./asaas.provider";
+  AsaasBillingType, AsaasProvider, AsaasPayment, AsaasRecusaException, AsaasTransfer } from "./asaas.provider";
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
@@ -52,6 +52,18 @@ const FREE_TRIAL_DAYS = 7;
 const ASAAS_OVERDUE_RECHECK_INTERVAL_MS = 60_000;
 /** A baixa do consumo é rechecada rapidamente quando não houver webhook. */
 const ASAAS_USAGE_RECHECK_INTERVAL_MS = 60_000;
+
+/**
+ * De quanto em quanto tempo o consumo de uma empresa é levado à fatura.
+ *
+ * A rodada de jobs gira a cada 5 segundos, e nessa cadência uma empresa com
+ * consumo pendente rendia duas chamadas ao Asaas a cada 5 segundos para fazer
+ * sempre a mesma coisa. Cinco minutos é a troca consciente: o consumo que
+ * aparecer nesse intervalo antes de o cliente pagar entra na fatura seguinte —
+ * que é o comportamento já previsto para consumo depois do fechamento, não uma
+ * perda.
+ */
+const ASAAS_USAGE_SYNC_INTERVAL_MS = 5 * 60_000;
 /** Uma transferência interna que não voltou como concluída é conferida logo. */
 const ASAAS_PAYOUT_RECHECK_INTERVAL_MS = 60_000;
 /** Consulta de contingência, caso o webhook de antecipação não tenha chegado. */
@@ -119,6 +131,19 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * mais, e não vale uma coluna no banco.
    */
   private readonly ultimaConferencia = new Map<string, number>();
+
+  /**
+   * Cobranças que o Asaas se recusou a alterar, e vai recusar de novo.
+   *
+   * A partir do momento em que o cliente digita o cartão na fatura, o Asaas
+   * trava o valor daquela cobrança. Sem esta memória o job escolhia a mesma
+   * cobrança a cada rodada e repetia a mesma recusa a cada cinco segundos, para
+   * sempre — enchendo o log, gastando chamada e escondendo erro de verdade.
+   *
+   * Em memória pela mesma razão de `ultimaConferencia`: perder no restart custa
+   * uma chamada a mais, e não vale uma coluna no banco.
+   */
+  private readonly cobrancasComValorTravado = new Set<string>();
 
   private deveConferir(chave: string, intervaloMs: number) {
     const anterior = this.ultimaConferencia.get(chave) ?? 0;
@@ -3000,14 +3025,43 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const [companyId, entries] of porEmpresa) {
+      if (!this.deveConferir(`consumo-asaas:${companyId}`, ASAAS_USAGE_SYNC_INTERVAL_MS)) continue;
+
       const subscription = await this.db().clientSubscription.findUnique({
         where: { companyId },
-        select: { asaasSubscriptionId: true, asaasCustomerId: true, status: true },
+        select: {
+          asaasSubscriptionId: true,
+          asaasCustomerId: true,
+          status: true,
+          company: { select: { isActive: true } },
+        },
       });
       if (!subscription?.asaasSubscriptionId || subscription.status !== SubscriptionStatus.ATIVA) continue;
 
       const total = Math.round(entries.reduce((sum, entry) => sum + Number(entry.billableAmount), 0) * 100) / 100;
       if (total <= 0) continue;
+
+      /**
+       * Empresa desativada não tem consumo levado à fatura.
+       *
+       * O status da assinatura não bastava: desativar a empresa no super admin
+       * deixava a assinatura ATIVA até a correção que passou a cancelá-la, então
+       * uma conta desligada continuava sendo tratada aqui como cliente pagante.
+       * Mesmo com o cancelamento em vigor, depender de um segundo registro para
+       * decidir é frágil — quem manda é a empresa estar ativa.
+       *
+       * O lançamento fica PENDENTE, como registro. Se a conta voltar e contratar
+       * de novo, o consumo antigo entra na fatura; é o mesmo tratamento de quem
+       * ficou sem mensalidade em aberto.
+       */
+      if (subscription.company?.isActive === false) {
+        if (this.deveConferir(`consumo-empresa-inativa:${companyId}`, 6 * 60 * 60_000)) {
+          this.logger.log(
+            `Empresa ${companyId} está desativada; ${total.toFixed(2)} de consumo não vai para a fatura.`,
+          );
+        }
+        continue;
+      }
 
       const detalhe = entries
         .map((entry) => `${usageMetricLabel(entry.metric)} ${formatUsageQuantity(Number(entry.quantity))}`)
@@ -3015,9 +3069,20 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
       try {
         const cobrancas = await this.asaas.listSubscriptionPayments(subscription.asaasSubscriptionId);
-        // Só cobrança ainda em aberto aceita mudança de valor.
+        /**
+         * Só cobrança em aberto e destravada aceita mudança de valor.
+         *
+         * `AWAITING_RISK_ANALYSIS` ficou de fora: para uma cobrança chegar em
+         * análise de risco o cliente já enviou os dados do cartão, e é
+         * exatamente isso que faz o Asaas travar o valor. Incluí-la garantia
+         * recusa.
+         *
+         * `PENDING` também pode estar travada — basta o cliente ter digitado o
+         * cartão sem concluir — e isso não aparece na listagem. Aí só se descobre
+         * tentando, e a recusa fica registrada para não repetir.
+         */
         const emAberto = cobrancas
-          .filter((item) => ["PENDING", "AWAITING_RISK_ANALYSIS"].includes(item.status))
+          .filter((item) => item.status === "PENDING" && !this.cobrancasComValorTravado.has(item.id))
           .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)))[0];
 
         // Nunca uma cobrança à parte: a regra é uma cobrança só, com o total.
@@ -3040,6 +3105,24 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           data: { status: UsageLedgerStatus.SINCRONIZADO, asaasPaymentId: cobrancaId },
         });
       } catch (error) {
+        /**
+         * Recusa definitiva não é falha para repetir.
+         *
+         * O caso real é o valor travado por cartão já informado. Ali o consumo
+         * simplesmente entra na próxima cobrança — o mesmo comportamento de
+         * quando não existe mensalidade em aberto, que o código acima já trata
+         * como normal. Insistir era o defeito.
+         */
+        if (error instanceof AsaasRecusaException && error.permanente) {
+          const cobrancaId = (error as any).cobrancaId as string | undefined;
+          if (cobrancaId) this.cobrancasComValorTravado.add(cobrancaId);
+          this.logger.warn(
+            `Cobrança do Asaas da empresa ${companyId} não aceita alteração de valor `
+            + `(${error.descricoes.join("; ") || "recusa sem descrição"}). `
+            + `${total.toFixed(2)} de consumo entra na próxima cobrança.`,
+          );
+          continue;
+        }
         this.logger.error(
           `Não foi possível somar o consumo variável da empresa ${companyId} à cobrança do Asaas.`,
           this.stripeErrorForLog(error),
@@ -3099,10 +3182,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
   /** Consumo somado à cobrança da mensalidade: uma fatura só, sempre. */
   private async addUsageToOpenPayment(cobranca: { id: string; value: number }, total: number, detalhe: string) {
-    await this.asaas.updatePayment(cobranca.id, {
-      value: Math.round((Number(cobranca.value) + total) * 100) / 100,
-      description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
-    });
+    try {
+      await this.asaas.updatePayment(cobranca.id, {
+        value: Math.round((Number(cobranca.value) + total) * 100) / 100,
+        description: `ChegowIA — mensalidade + uso variável (${detalhe})`.slice(0, 500),
+      });
+    } catch (error) {
+      // Qual cobrança recusou é o que permite não escolhê-la de novo. A exceção
+      // vem do provedor, que não conhece esse contexto.
+      if (error instanceof AsaasRecusaException) (error as any).cobrancaId = cobranca.id;
+      throw error;
+    }
     return cobranca.id;
   }
 
