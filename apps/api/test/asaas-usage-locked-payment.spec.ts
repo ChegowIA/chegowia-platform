@@ -175,3 +175,76 @@ describe("natureza da recusa do Asaas", () => {
     expect(erro.contem("saldo insuficiente")).toBe(false);
   });
 });
+
+/**
+ * Empresa desativada não tem consumo levado à fatura.
+ *
+ * Foi o que produziu o laço em produção: a empresa de teste tinha sido desativada
+ * no super admin, mas desativar não cancelava a assinatura, então ela seguia
+ * ATIVA — e o job tratava a conta desligada como cliente pagante. Depender do
+ * status da assinatura para decidir isso é frágil; quem manda é a empresa estar
+ * ativa.
+ */
+describe("empresa desativada no consumo variável", () => {
+  function construirComEmpresa(isActive: boolean) {
+    const usageLedger = { updateMany: jest.fn().mockResolvedValue({ count: 0 }) };
+    const prisma: any = {
+      clientSubscription: {
+        findUnique: jest.fn().mockResolvedValue({
+          asaasSubscriptionId: "sub_1",
+          asaasCustomerId: "cus_1",
+          status: "ATIVA",
+          company: { isActive },
+        }),
+      },
+      usageLedger,
+    };
+    const asaas = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", status: "PENDING", value: 159.9, dueDate: "2026-08-25" },
+      ]),
+      updatePayment: jest.fn().mockResolvedValue({}),
+    };
+    const usage = {
+      pendingBillableEntries: jest.fn().mockResolvedValue([
+        { id: "uso-1", companyId: "emp-1", metric: "WHATSAPP_SERVICO", quantity: 10, billableAmount: 3.5 },
+      ]),
+    };
+    const service = buildBillingService({ prisma, asaas, usage }) as any;
+    service.onModuleDestroy();
+    service.logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    return { service, asaas, usageLedger };
+  }
+
+  it("empresa desativada não chega ao provedor", async () => {
+    const { service, asaas, usageLedger } = construirComEmpresa(false);
+
+    await service.syncVariableUsageToAsaas();
+
+    expect(asaas.listSubscriptionPayments).not.toHaveBeenCalled();
+    expect(asaas.updatePayment).not.toHaveBeenCalled();
+    // O lançamento fica pendente, como registro do que foi consumido.
+    expect(usageLedger.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("o aviso sai uma vez a cada seis horas, não a cada rodada", async () => {
+    const { service } = construirComEmpresa(false);
+
+    await service.syncVariableUsageToAsaas();
+    service.ultimaConferencia.delete("consumo-asaas:emp-1");
+    await service.syncVariableUsageToAsaas();
+    service.ultimaConferencia.delete("consumo-asaas:emp-1");
+    await service.syncVariableUsageToAsaas();
+
+    expect(service.logger.log).toHaveBeenCalledTimes(1);
+  });
+
+  it("empresa ativa segue normalmente", async () => {
+    const { service, asaas } = construirComEmpresa(true);
+
+    await service.syncVariableUsageToAsaas();
+
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 163.4 }));
+  });
+});

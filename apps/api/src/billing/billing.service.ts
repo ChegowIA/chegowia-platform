@@ -3029,12 +3029,39 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
       const subscription = await this.db().clientSubscription.findUnique({
         where: { companyId },
-        select: { asaasSubscriptionId: true, asaasCustomerId: true, status: true },
+        select: {
+          asaasSubscriptionId: true,
+          asaasCustomerId: true,
+          status: true,
+          company: { select: { isActive: true } },
+        },
       });
       if (!subscription?.asaasSubscriptionId || subscription.status !== SubscriptionStatus.ATIVA) continue;
 
       const total = Math.round(entries.reduce((sum, entry) => sum + Number(entry.billableAmount), 0) * 100) / 100;
       if (total <= 0) continue;
+
+      /**
+       * Empresa desativada não tem consumo levado à fatura.
+       *
+       * O status da assinatura não bastava: desativar a empresa no super admin
+       * deixava a assinatura ATIVA até a correção que passou a cancelá-la, então
+       * uma conta desligada continuava sendo tratada aqui como cliente pagante.
+       * Mesmo com o cancelamento em vigor, depender de um segundo registro para
+       * decidir é frágil — quem manda é a empresa estar ativa.
+       *
+       * O lançamento fica PENDENTE, como registro. Se a conta voltar e contratar
+       * de novo, o consumo antigo entra na fatura; é o mesmo tratamento de quem
+       * ficou sem mensalidade em aberto.
+       */
+      if (subscription.company?.isActive === false) {
+        if (this.deveConferir(`consumo-empresa-inativa:${companyId}`, 6 * 60 * 60_000)) {
+          this.logger.log(
+            `Empresa ${companyId} está desativada; ${total.toFixed(2)} de consumo não vai para a fatura.`,
+          );
+        }
+        continue;
+      }
 
       const detalhe = entries
         .map((entry) => `${usageMetricLabel(entry.metric)} ${formatUsageQuantity(Number(entry.quantity))}`)
