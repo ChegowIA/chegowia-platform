@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
@@ -138,8 +138,14 @@ export class PlatformWhatsAppController {
   // Prospecção em lista
   // ---------------------------------------------------------------------------
 
-  /** Confere a lista colada sem criar disparo nem enviar nada. */
+  /**
+   * Confere a lista colada sem criar disparo nem enviar nada.
+   *
+   * `POST` porque a lista é grande demais para caber na URL, mas o status é 200:
+   * nada é criado, e 201 diria o contrário a quem lê a resposta.
+   */
   @Post("outreach/analyze")
+  @HttpCode(HttpStatus.OK)
   analyzeList(@Body() dto: AnalyzeOutreachListDto) {
     return this.outreach.analisarLista(dto.contacts);
   }

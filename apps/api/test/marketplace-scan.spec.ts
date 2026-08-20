@@ -91,14 +91,27 @@ describe("varrimento da home do marketplace", () => {
    * Igualdade, e não `contains`: com substring, um cliente em "Rio Branco"
    * receberia lojas de "Rio Branco do Sul", que fica em outro estado. Acento e
    * caixa continuam sendo ignorados pela collation da coluna.
+   *
+   * E a loja da cidade vizinha que cadastrou área de entrega ali também entra:
+   * em região metropolitana é o caso comum, e comparar só a sede a escondia.
    */
-  it("filtra a cidade por igualdade nas três consultas, sem sobrescrever o filtro da empresa", async () => {
+  it("filtra a cidade nas três consultas, aceitando quem entrega lá, sem sobrescrever o filtro da empresa", async () => {
     const { service, findMany } = build();
 
     await service.getMarketplace({ city: "Belo Horizonte", categoryId: "pizzas" });
 
+    expect(findMany.mock.calls.length).toBeGreaterThan(0);
     for (const [args] of findMany.mock.calls) {
-      expect(args.where.company.is).toMatchObject({ isActive: true, city: "Belo Horizonte" });
+      const empresa = args.where.company.is;
+      expect(empresa.isActive).toBe(true);
+      // As regras ficam num `AND` de propósito: cidade e carência de assinatura
+      // usam `OR`, e espalhadas no mesmo objeto uma sobrescreveria a outra em
+      // silêncio.
+      const porCidade = empresa.AND.find((condicao: any) => condicao.OR?.some((parte: any) => parte.city));
+      expect(porCidade.OR).toEqual([
+        { city: "Belo Horizonte" },
+        { deliveryAreas: { some: { city: "Belo Horizonte", isActive: true } } },
+      ]);
     }
   });
 });

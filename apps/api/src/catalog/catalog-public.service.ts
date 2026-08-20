@@ -5,6 +5,7 @@ import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
+import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
 
 /** Teto do varrimento da home. Ver o comentário de `getMarketplace`. */
 const MARKETPLACE_SCAN_LIMIT = 600;
@@ -38,10 +39,18 @@ export class CatalogPublicService {
     return this.prisma as any;
   }
 
-  private async publicCompanyWhere(viewer?: JwtPayload) {
+  /**
+   * Um só lugar decide quem aparece em qualquer consulta pública.
+   *
+   * `cidade` entra aqui, e não no chamador, porque a regra de cidade e a de
+   * assinatura usam `OR`: montadas separadamente no mesmo objeto, uma
+   * sobrescreveria a outra sem erro nenhum.
+   */
+  private async publicCompanyWhere(viewer?: JwtPayload, cidade?: string | null) {
     return {
       isActive: true,
       ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+      ...filtroPublicoDeEmpresa({ cidade }),
     };
   }
 
@@ -190,11 +199,9 @@ export class CatalogPublicService {
     const city = params.city?.trim();
     const publicTypeId = params.categoryId?.trim();
 
-    const companyFilter: any = await this.publicCompanyWhere(viewer);
-    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
-    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
-    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
-    if (city) companyFilter.city = city;
+    // A cidade vai junto do filtro público: além da sede, vale a loja que
+    // cadastrou área de entrega naquela cidade.
+    const companyFilter: any = await this.publicCompanyWhere(viewer, city);
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },
@@ -330,11 +337,9 @@ export class CatalogPublicService {
     );
     const terms = Array.from(new Set([...params.terms, ...typeKeywords].filter((t) => t && t.length >= 3))).slice(0, 40);
 
-    const companyFilter: any = await this.publicCompanyWhere(viewer);
-    // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
-    // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
-    // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
-    if (city) companyFilter.city = city;
+    // A cidade vai junto do filtro público: além da sede, vale a loja que
+    // cadastrou área de entrega naquela cidade.
+    const companyFilter: any = await this.publicCompanyWhere(viewer, city);
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },

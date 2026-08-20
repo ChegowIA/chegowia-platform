@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { reportClientError } from "@/lib/report-client-error";
 
 export default function GlobalErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
@@ -8,6 +9,9 @@ export default function GlobalErrorPage({ error, reset }: { error: Error & { dig
     // tela genérica em uma causa rastreável no Console, sem mostrar stack ou
     // dados internos para a pessoa usuária.
     console.error("[ChegowIA] Erro global da aplicação.", error);
+    // O console só existe no navegador de quem viu o erro. Sem relatar, quem
+    // descobre a tela quebrada é o cliente, por telefone.
+    reportClientError(error, { digest: error.digest });
   }, [error]);
 
   return (

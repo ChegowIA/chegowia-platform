@@ -1,6 +1,7 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { Response } from "express";
+import { relatarErro } from "../observability/error-reporting";
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -27,6 +28,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     if (!isHttpException) {
       this.logger.error(`${request.method} ${request.url} — ${(exception as Error)?.stack ?? exception}`);
+      // Só o que não era exceção HTTP: 400 e 404 são conversa normal com o
+      // cliente, e relatá-los afogaria o que importa. O `requestId` é o que
+      // liga o relato externo à linha de log acima, que fica na máquina.
+      relatarErro(exception, {
+        requestId: request.requestId,
+        rota: `${request.method} ${String(request.url ?? "").split("?")[0]}`,
+        origem: "http",
+      });
     }
 
     response.status(status).json({

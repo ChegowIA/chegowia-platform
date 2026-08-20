@@ -346,17 +346,77 @@ Agende diariamente:
 17 3 * * * cd /caminho/chegowia && /bin/sh infra/backup.sh >> /var/log/chegowia-backup.log 2>&1
 ```
 
-O backup contém dump consistente do MySQL, imagens, currículos, manifesto e
-checksums. A retenção padrão é 14 dias (`BACKUP_RETENTION_DAYS`). Guarde uma
-segunda cópia criptografada em outro disco ou outro servidor: permanecer no
-mesmo disco não protege contra perda física.
+### A cópia precisa sair do servidor
 
-Teste a restauração periodicamente em uma máquina separada:
+Backup que mora no mesmo disco do banco não é backup. Disco morto, incêndio ou
+conta encerrada no provedor levam o dado e a cópia juntos — e aqui há nota fiscal
+autorizada, com guarda obrigatória de cinco anos.
+
+Configure um destino em `.env.production`:
+
+```sh
+# rclone (recomendado: um remoto `crypt` cifra antes de a cópia sair daqui)
+BACKUP_REMOTE=chegowia-cripto:backups
+# ou outra máquina por SSH
+BACKUP_RSYNC_TARGET=backup@outrohost:/srv/chegowia-backups
+```
+
+Sem nenhum dos dois, `infra/backup.sh` gera o backup local, avisa e sai com
+código 2 — para o cron reclamar em vez de a ausência da cópia passar meses sem
+ninguém notar. Depois de enviar, o script confere o que chegou (`rclone check`):
+cópia truncada por queda de rede não dá sintoma.
+
+### Ficar só com o backup local
+
+É uma decisão possível, e ela tem de ser dita em voz alta:
+
+```sh
+BACKUP_ALLOW_LOCAL_ONLY=true
+```
+
+Aí o script termina com sucesso, mas repete o risco a cada execução: banco e
+cópia no mesmo disco, e documento fiscal autorizado com guarda obrigatória de
+cinco anos. A alternativa a esse aceite explícito seria conviver com um cron
+vermelho toda noite — o que treina a ignorar exatamente o aviso que um dia vai
+importar.
+
+`infra/check-production.sh` falha quando o último backup tem mais de 48 horas, e
+é assim que se descobre que o agendamento nunca foi instalado antes de precisar
+dele. Com backup somente local ele passa, mas imprime o aviso junto do resultado.
+
+O backup contém dump consistente do MySQL, imagens, currículos, manifesto e
+checksums. A retenção padrão é 14 dias (`BACKUP_RETENTION_DAYS`).
+
+**Restaure uma vez antes de precisar.** Backup que ninguém restaurou é suposição,
+não cópia de segurança. Faça em uma máquina separada:
 
 ```bash
 CONFIRM_RESTORE=YES BACKUP_DIR=/srv/chegowia/backups/AAAA... \
   /bin/sh infra/restore.sh
 ```
+
+## 8.1 Saber do erro antes do cliente
+
+Sem `SENTRY_DSN` o erro fica só no log do container — e quem descobre a falha é o
+cliente, ligando, quando o log já rodou no rodízio.
+
+```sh
+SENTRY_DSN=https://...@....ingest.sentry.io/...
+SENTRY_ENVIRONMENT=producao
+APP_VERSION=          # opcional; agrupa os erros por versão publicada
+```
+
+O que **não** sai da máquina: corpo de requisição, cabeçalho, cookie, parâmetro
+de consulta, dado de usuário e qualquer campo cujo nome pareça sensível (senha,
+token, CPF, CNPJ, cartão, chave, certificado). O que viaja é o rastro de pilha e
+o `requestId`, que é o que liga o relato à linha do log guardada aqui.
+
+Erro de tela também chega: a página manda para `POST /api/observability/client-error`
+e a API repassa. Isso evita colocar a chave do serviço no navegador e mantém a
+limpeza de dado num único lugar.
+
+Rastreamento de desempenho fica desligado (`tracesSampleRate: 0`). Ligar é uma
+decisão separada, porque abre um segundo canal de dados.
 
 ## 9. Atualizações e rollback
 

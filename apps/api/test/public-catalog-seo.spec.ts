@@ -52,7 +52,9 @@ describe("catálogo público para SEO", () => {
     await service.getSitemapEntries();
 
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { isActive: true, isTestOnly: false },
+      // A carência da assinatura entra no mesmo `where`: loja vencida há mais de
+      // uma semana não deve continuar sendo indexada por mecanismo de busca.
+      where: expect.objectContaining({ isActive: true, isTestOnly: false, AND: expect.any(Array) }),
       select: expect.objectContaining({
         products: expect.objectContaining({
           where: {

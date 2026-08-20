@@ -37,6 +37,7 @@ import {
 import { UsageService } from "../usage/usage.service";
 import { MailService } from "../common/mail/mail.service";
 import { runsBackgroundJobs } from "../common/config/app-role";
+import { DIAS_DE_CARENCIA_NO_CATALOGO } from "../common/public-visibility/subscription-grace";
 import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
 import { readSecretKey, sealSecret } from "../common/utils/secret-box";
 
@@ -1125,6 +1126,28 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Quando a loja sai (ou saiu) do catálogo por falta de pagamento.
+   *
+   * A conta é a mesma do filtro público — a data mais recente entre fim do
+   * período e fim do teste, mais a carência. Duplicar a regra aqui seria o
+   * caminho para a tela dizer uma coisa e a vitrine fazer outra, então o prazo
+   * vem da constante compartilhada.
+   */
+  private situacaoNoCatalogo(subscription: any, now: Date) {
+    const referencias = [subscription.currentPeriodEnd, subscription.trialEndsAt]
+      .filter((data: Date | null): data is Date => Boolean(data))
+      .map((data: Date) => data.getTime());
+    if (!referencias.length) return { visible: true, hiddenAt: null, daysRemaining: null };
+    const saiDoAr = Math.max(...referencias) + DIAS_DE_CARENCIA_NO_CATALOGO * 24 * 60 * 60 * 1000;
+    return {
+      visible: saiDoAr > now.getTime(),
+      hiddenAt: new Date(saiDoAr),
+      daysRemaining: Math.max(0, Math.ceil((saiDoAr - now.getTime()) / (24 * 60 * 60 * 1000))),
+      graceDays: DIAS_DE_CARENCIA_NO_CATALOGO,
+    };
+  }
+
+  /**
    * Situação de cobrança da empresa.
    *
    * Devolve também se a empresa está ativa: quem entra por acesso de suporte
@@ -1241,6 +1264,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       payableInvoice,
       accessRestricted: trialExpired || (enforcementEnabled && !trialActive && subscription.status !== SubscriptionStatus.ATIVA),
       companyActive,
+      /**
+       * Situação da loja na vitrine.
+       *
+       * O bloqueio do painel já existia, mas a loja sair do catálogo é
+       * consequência nova e muito mais grave para o lojista — ele para de vender.
+       * Avisar com o prazo é o que separa uma regra de uma punição silenciosa.
+       */
+      catalog: this.situacaoNoCatalogo(subscription, now),
       activationAvailable: trialExpired,
       trial: subscription.trialStartedAt || subscription.trialEndsAt
         ? {

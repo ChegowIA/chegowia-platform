@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { BrandLogo } from "@/components/brand/brand-logo";
+import { reportClientError } from "@/lib/report-client-error";
 
 export default function ErrorPage({
   error,
@@ -12,6 +13,7 @@ export default function ErrorPage({
 }) {
   useEffect(() => {
     console.error(error);
+    reportClientError(error, { digest: error.digest });
   }, [error]);
 
   return (
