@@ -8,6 +8,7 @@ import {
 } from "@nestjs/common";
 import {
   MessagingChannelStatus,
+  OutreachTargetStatus,
   WhatsAppConversationMode,
   WhatsAppConversationStatus,
   WhatsAppMessageDirection,
@@ -29,9 +30,27 @@ import { formatForWhatsapp } from "./whatsapp-text-format";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
 import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
+import { UpdatePlatformOutreachTemplateDto } from "./dto/update-platform-outreach-template.dto";
+import { StartPlatformConversationDto } from "./dto/start-platform-conversation.dto";
+import {
+  formatarTelefoneParaExibicao,
+  normalizarTelefoneBrasileiro,
+  pediuParaNaoReceber,
+  renderizarModelo,
+} from "./outreach-contacts";
 
 const PLATFORM_CHANNEL_KEY = "chegowia-institucional";
 const MAX_AI_HISTORY_MESSAGES = 18;
+
+/**
+ * Janela em que a API oficial aceita texto livre: 24h contadas da última
+ * mensagem *da pessoa*. Fora dela só sai modelo aprovado pela Meta, e é por isso
+ * que abrir conversa com número novo depende de ter um modelo cadastrado.
+ */
+const JANELA_TEXTO_LIVRE_MS = 24 * 60 * 60 * 1000;
+
+/** Variáveis que um modelo de prospecção pode usar, em qualquer ordem. */
+export const VARIAVEIS_DE_MODELO = ["nome", "empresa", "cidade"] as const;
 
 /**
  * Central institucional da ChegowIA.
@@ -235,6 +254,208 @@ export class PlatformWhatsAppService {
     return this.channelSummary(channel);
   }
 
+  /**
+   * Cadastra o modelo aprovado usado na prospecção.
+   *
+   * Fica no canal e não na campanha porque é um só: a aprovação é por texto, na
+   * Meta, e trocar de texto exige nova aprovação. Campanha diferente muda a
+   * lista e o ritmo, não a mensagem de abertura.
+   */
+  async updateOutreachTemplate(dto: UpdatePlatformOutreachTemplateDto) {
+    const data = {
+      ...(dto.outreachTemplateId === undefined ? {} : { outreachTemplateId: dto.outreachTemplateId.trim() || null }),
+      ...(dto.outreachTemplateName === undefined ? {} : { outreachTemplateName: dto.outreachTemplateName.trim() || null }),
+      ...(dto.outreachTemplateLanguage === undefined ? {} : { outreachTemplateLanguage: dto.outreachTemplateLanguage.trim() || null }),
+      ...(dto.outreachTemplateBody === undefined ? {} : { outreachTemplateBody: dto.outreachTemplateBody.trim() || null }),
+      ...(dto.outreachTemplateParams === undefined ? {} : { outreachTemplateParams: dto.outreachTemplateParams }),
+    };
+    const channel = await this.db().platformWhatsAppChannel.upsert({
+      where: { key: PLATFORM_CHANNEL_KEY },
+      create: { key: PLATFORM_CHANNEL_KEY, config: {}, ...data },
+      update: data,
+    });
+    return this.channelSummary(channel);
+  }
+
+  /**
+   * Abre conversa com um número digitado pelo superadmin.
+   *
+   * Precisa existir separado do envio comum porque aqui não há conversa: o
+   * número pode nunca ter escrito, e nesse caso a primeira mensagem tem de ser
+   * o modelo aprovado. Deixar isso implícito faria a tela aceitar um texto que o
+   * provedor recusaria depois, sem ninguém entender por quê.
+   */
+  async startConversation(userId: string, dto: StartPlatformConversationDto) {
+    const phone = normalizarTelefoneBrasileiro(dto.phone);
+    if (!phone) {
+      throw new BadRequestException("Número inválido. Use DDD e número, como (62) 99999-8888.");
+    }
+    const user = await this.db().user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true },
+    });
+    if (!user) throw new NotFoundException("Usuário do superadmin não encontrado.");
+
+    const resultado = await this.openConversationWith({
+      phone,
+      name: dto.name?.trim() || null,
+      text: dto.message?.trim() || null,
+      // Quem digitou o número vai conduzir a conversa; o assistente só assume se
+      // o superadmin trocar o modo depois.
+      mode: WhatsAppConversationMode.HUMANO,
+      sentBy: { id: user.id, name: user.name },
+    });
+    return { conversationId: resultado.conversation.id, via: resultado.via };
+  }
+
+  /**
+   * Caminho único de abertura de conversa por iniciativa nossa — usado pela
+   * conversa avulsa e pelo disparo em lista.
+   *
+   * Decide entre texto livre e modelo pela janela de 24h, e não pela existência
+   * da conversa: uma conversa antiga e parada também está fora da janela.
+   */
+  async openConversationWith(params: {
+    phone: string;
+    name?: string | null;
+    company?: string | null;
+    city?: string | null;
+    text?: string | null;
+    mode: WhatsAppConversationMode;
+    sentBy?: { id: string; name: string } | null;
+    fallbackName?: string | null;
+  }) {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({
+      where: { key: PLATFORM_CHANNEL_KEY },
+    });
+    if (!channel) throw new BadRequestException("O WhatsApp institucional ainda não foi configurado.");
+
+    const bloqueio = await this.db().platformOutreachBlock.findUnique({ where: { phone: params.phone } });
+    if (bloqueio) {
+      throw new BadRequestException(
+        `${formatarTelefoneParaExibicao(params.phone)} pediu para não receber mensagens. `
+        + "Para falar com esse número, remova o bloqueio antes.",
+      );
+    }
+
+    const existente = await this.db().platformWhatsAppConversation.findUnique({
+      where: { channelId_customerPhone: { channelId: channel.id, customerPhone: params.phone } },
+    });
+    const conversation = existente ?? await this.db().platformWhatsAppConversation.create({
+      data: {
+        channelId: channel.id,
+        customerPhone: params.phone,
+        customerName: params.name ?? null,
+        mode: params.mode,
+        lastMessageAt: new Date(),
+      },
+    });
+
+    if (janelaDeTextoLivreAberta(conversation) && params.text) {
+      const message = await this.sendText(conversation, channel, params.text, params.sentBy ?? undefined, "text");
+      return { conversation, message, via: "texto" as const };
+    }
+
+    const message = await this.sendTemplate(conversation, channel, {
+      name: params.name,
+      company: params.company,
+      city: params.city,
+      fallbackName: params.fallbackName,
+      sentBy: params.sentBy ?? undefined,
+    });
+    return { conversation, message, via: "modelo" as const };
+  }
+
+  /**
+   * Primeira mensagem por modelo aprovado.
+   *
+   * O texto renderizado é gravado como corpo da mensagem para o inbox mostrar o
+   * que a pessoa recebeu. Sem isso a conversa começaria pela resposta dela, e
+   * quem fosse atender não saberia o que foi dito antes.
+   */
+  private async sendTemplate(
+    conversation: any,
+    channel: any,
+    params: {
+      name?: string | null;
+      company?: string | null;
+      city?: string | null;
+      fallbackName?: string | null;
+      sentBy?: { id: string; name: string };
+    },
+  ) {
+    if (channel.status !== MessagingChannelStatus.ATIVO || !channel.gupshupAppName) {
+      throw new BadRequestException("O WhatsApp institucional ainda não está conectado pelo Gupshup.");
+    }
+    if (!channel.outreachTemplateId && !channel.outreachTemplateName) {
+      throw new BadRequestException(
+        "Para falar com um número que nunca escreveu, cadastre o modelo aprovado na Meta. "
+        + "Fora da janela de 24 horas o WhatsApp só aceita modelo.",
+      );
+    }
+
+    const variaveis = this.variaveisDoModelo(channel, params);
+    const corpo = renderizarModelo(channel.outreachTemplateBody, variaveis)
+      ?? "Mensagem de abertura enviada pelo modelo aprovado.";
+    try {
+      const sent = await this.gupshup.sendTemplate({
+        appId: channel.gupshupAppId ?? "",
+        appToken: await this.gupshupAppTokenFor(channel),
+        source: channelNumber(channel),
+        appName: channel.gupshupAppName,
+        to: conversation.customerPhone,
+        templateId: channel.outreachTemplateId,
+        templateName: channel.outreachTemplateName,
+        languageCode: channel.outreachTemplateLanguage,
+        variables: variaveis,
+      });
+      return this.persistOutbound(conversation, channel, {
+        providerMessageId: sent.messageId,
+        body: corpo,
+        type: "template",
+        sentByUserId: params.sentBy?.id,
+        sentByName: params.sentBy?.name,
+        rawPayload: sent.raw,
+        // Modelo de prospecção é cobrado como marketing, que é a faixa mais
+        // cara. Registrar como serviço subestimaria o custo do disparo até o
+        // webhook de status corrigir.
+        pricingCategory: "marketing",
+      });
+    } catch (error) {
+      await this.persistFailedOutbound(conversation, channel, corpo, "template", error, params.sentBy);
+      throw error;
+    }
+  }
+
+  /**
+   * Valores das variáveis na ordem em que o modelo aprovado as declara.
+   *
+   * Cada variável tem a sua própria reserva. Usar o tratamento de nome para
+   * todas produzia mensagem sem sentido — o modelo "aqui é a ChegowIA em {{2}}"
+   * saía como "aqui é a ChegowIA em tudo bem" para todo contato sem cidade, o
+   * que é a lista inteira quando ela vem só com números.
+   */
+  private variaveisDoModelo(
+    channel: any,
+    contato: { name?: string | null; company?: string | null; city?: string | null; fallbackName?: string | null },
+  ) {
+    const configurados = Array.isArray(channel.outreachTemplateParams)
+      ? channel.outreachTemplateParams.filter((item: unknown): item is string => typeof item === "string")
+      : [];
+    // Parâmetro vazio faz a Meta recusar o envio inteiro, então cada variável
+    // sempre sai com algum valor.
+    const reservaDeNome = contato.fallbackName?.trim() || "tudo bem";
+    return configurados.map((campo: string) => {
+      if (campo === "empresa") {
+        return (contato.company ?? contato.name ?? "").trim() || "seu negócio";
+      }
+      if (campo === "cidade") {
+        return (contato.city ?? "").trim() || "sua região";
+      }
+      return (contato.name ?? "").trim() || reservaDeNome;
+    });
+  }
+
   async listConversations() {
     return this.db().platformWhatsAppConversation.findMany({
       orderBy: { lastMessageAt: "desc" },
@@ -266,7 +487,10 @@ export class PlatformWhatsAppService {
       },
     });
     if (!conversation) throw new NotFoundException("Conversa institucional não encontrada.");
-    return conversation;
+    // A janela de texto livre sai calculada daqui: é a mesma conta que barra o
+    // envio, e deixar a tela recalculá-la abriria espaço para a regra divergir
+    // entre o que a interface mostra e o que o servidor aceita.
+    return { ...conversation, freeTextWindowOpen: janelaDeTextoLivreAberta(conversation) };
   }
 
   async updateConversation(id: string, dto: UpdatePlatformWhatsAppConversationDto) {
@@ -299,6 +523,20 @@ export class PlatformWhatsAppService {
 
   async sendHumanMessage(userId: string, conversationId: string, content: string) {
     const conversation = await this.getConversation(conversationId);
+    /**
+     * Fora da janela de 24h o provedor recusa texto livre.
+     *
+     * Antes a mensagem era tentada e voltava com o erro cru do Gupshup dentro da
+     * conversa, o que parecia falha do sistema. A recusa aqui diz o que fazer:
+     * esperar a pessoa escrever. Vale para prospecção e para suporte — a regra é
+     * do WhatsApp, não da origem da conversa.
+     */
+    if (!janelaDeTextoLivreAberta(conversation)) {
+      throw new BadRequestException(
+        "O WhatsApp só aceita mensagem livre até 24 horas depois da última mensagem da pessoa. "
+        + "Para reabrir a conversa é preciso que ela escreva primeiro.",
+      );
+    }
     const user = await this.db().user.findUnique({
       where: { id: userId },
       select: { id: true, name: true },
@@ -458,6 +696,24 @@ export class PlatformWhatsAppService {
     this.realtime.emitToSuperAdmins("platform.whatsapp.message.received", { conversationId: conversation.id });
     this.realtime.emitToSuperAdmins("platform.whatsapp.conversation.updated", { conversationId: conversation.id });
 
+    const prospeccao = await this.registrarRespostaDeProspeccao(conversation, parsed.text);
+    if (prospeccao.pediuSaida) {
+      // Confirmar por escrito é o que faz a pessoa parar de denunciar o número:
+      // silêncio depois de um "me tira daqui" parece que o pedido foi ignorado.
+      await this.sendText(
+        conversation,
+        channel,
+        "Pronto, não vou mais te procurar por aqui. Se um dia quiser conhecer a ChegowIA, só me escrever.",
+        undefined,
+        "text",
+      ).catch(() => undefined);
+      await this.db().platformWhatsAppConversation.update({
+        where: { id: conversation.id },
+        data: { status: WhatsAppConversationStatus.ENCERRADA },
+      });
+      return;
+    }
+
     if (requestedHuman(parsed.text)) {
       await this.handoffToHuman(conversation, channel);
       return;
@@ -534,8 +790,58 @@ export class PlatformWhatsAppService {
     }
   }
 
+  /**
+   * Reflete a resposta de quem foi abordado por um disparo.
+   *
+   * Duas coisas dependem disso. A taxa de resposta da campanha, que é como se
+   * mede se a lista prestava; e o pedido de não receber mais, que precisa valer
+   * para todos os disparos — inclusive os que ainda nem começaram, senão a
+   * próxima lista colada reabordaria a mesma pessoa.
+   */
+  private async registrarRespostaDeProspeccao(conversation: any, texto: string) {
+    const alvos = await this.db().platformOutreachTarget.findMany({
+      where: { phone: conversation.customerPhone },
+      select: { id: true, campaignId: true, status: true },
+    });
+
+    for (const alvo of alvos) {
+      if (alvo.status !== OutreachTargetStatus.ENVIADO) continue;
+      await this.db().platformOutreachTarget.update({
+        where: { id: alvo.id },
+        data: {
+          status: OutreachTargetStatus.RESPONDEU,
+          repliedAt: new Date(),
+          conversationId: conversation.id,
+        },
+      });
+      await this.db().platformOutreachCampaign.update({
+        where: { id: alvo.campaignId },
+        data: { repliedCount: { increment: 1 } },
+      });
+    }
+
+    const pediuSaida = pediuParaNaoReceber(texto);
+    if (pediuSaida) {
+      await this.db().platformOutreachBlock.upsert({
+        where: { phone: conversation.customerPhone },
+        create: {
+          phone: conversation.customerPhone,
+          reason: "pediu no WhatsApp para não receber mais",
+        },
+        update: {},
+      });
+      await this.db().platformOutreachTarget.updateMany({
+        where: { phone: conversation.customerPhone, status: OutreachTargetStatus.PENDENTE },
+        data: { status: OutreachTargetStatus.DESCARTADO, discardReason: "pediu para não receber" },
+      });
+      this.logger.log(`${conversation.customerPhone} pediu para não receber mais mensagens da prospecção.`);
+    }
+
+    return { pediuSaida, deProspeccao: alvos.length > 0 };
+  }
+
   private async messagesForAssistant(conversationId: string, channel: any): Promise<AIChatMessage[]> {
-    const [history, plan] = await Promise.all([
+    const [history, plan, alvoDeProspeccao] = await Promise.all([
       this.db().platformWhatsAppMessage.findMany({
         where: { conversationId },
         orderBy: { createdAt: "desc" },
@@ -545,6 +851,13 @@ export class PlatformWhatsAppService {
       this.db().softwarePlan.findFirst({
         where: { isActive: true },
         orderBy: [{ isFeatured: "desc" }, { monthlyPrice: "asc" }],
+      }),
+      // Quem foi abordado por nós não está na mesma situação de quem escreveu por
+      // conta própria, e responder aos dois igual é o que faz a abordagem soar
+      // como robô de spam.
+      this.db().platformOutreachTarget.findFirst({
+        where: { conversationId },
+        select: { name: true, company: true, city: true },
       }),
     ]);
     const planPrice = Number(plan?.monthlyPrice ?? 159.9);
@@ -626,6 +939,22 @@ export class PlatformWhatsAppService {
       // aqui evita texto reescrito e mantém a mensagem mais próxima do que o
       // modelo pretendia.
       "Escreva em texto corrido, sem Markdown. Para destacar, use um único asterisco (*assim*), nunca dois. Escreva a URL sozinha, sem asteriscos ou colchetes ao redor, senão o WhatsApp não reconhece o link. Não use travessão longo, títulos com # nem tabelas. Prefira frases curtas separadas por linha em branco a listas com marcadores.",
+      // Prospecção ativa: a pessoa não pediu esse contato. O que separa um
+      // vendedor sênior de um disparo de spam é justamente o que vem abaixo —
+      // reconhecer a abordagem, ir direto ao ponto e aceitar o não na primeira
+      // vez em que ele aparecer.
+      alvoDeProspeccao
+        ? [
+          "IMPORTANTE — esta conversa começou por uma abordagem nossa, não por iniciativa da pessoa. Ela recebeu uma mensagem da ChegowIA sem ter pedido.",
+          "Comporte-se como um vendedor sênior: reconheça em uma frase que o contato partiu de você, diga em uma frase o que a ChegowIA resolve para um negócio como o dela e faça uma única pergunta.",
+          "Seu objetivo nesta conversa, nesta ordem: confirmar se quem responde é o responsável pelo negócio; se não for, pedir com educação o contato de quem decide; se for, entender o tipo de operação e propor o próximo passo (teste de 7 dias ou uma conversa com a equipe).",
+          "Não insista. Se a pessoa disser que não tem interesse, agradeça, diga que fica à disposição e encerre — não ofereça desconto, não argumente de novo, não faça mais perguntas.",
+          "Se ela pedir para não receber mais mensagens, confirme que não vai mais procurá-la e pare.",
+          "Nunca diga que ela pediu contato, que preencheu formulário ou que é cliente. Se perguntar de onde veio o número, diga a verdade: é uma prospecção da ChegowIA para negócios locais, e você já pede desculpa se pegou em má hora.",
+          "Nunca mande mais de uma mensagem sem resposta. Uma abordagem, uma pergunta, e espere.",
+          alvoDeProspeccao.name ? `O contato foi cadastrado como "${alvoDeProspeccao.name}"${alvoDeProspeccao.city ? ` em ${alvoDeProspeccao.city}` : ""}. Pode ser o nome da pessoa ou do estabelecimento — confirme antes de tratar como nome próprio.` : "",
+        ].filter(Boolean).join("\n")
+        : "",
       customInstructions,
     ].filter(Boolean).join("\n\n");
     return [
@@ -671,12 +1000,13 @@ export class PlatformWhatsAppService {
       sentByUserId?: string;
       sentByName?: string;
       rawPayload: unknown;
+      pricingCategory?: string;
     },
   ) {
     await this.recordPlatformWhatsAppUsage({
       channelId: channel.id,
       providerMessageId: data.providerMessageId,
-      pricingCategory: "service",
+      pricingCategory: data.pricingCategory ?? "service",
     });
     const message = await this.db().platformWhatsAppMessage.create({
       data: {
@@ -879,6 +1209,14 @@ export class PlatformWhatsAppService {
       automationEnabled: Boolean(channel.automationEnabled),
       welcomeMessage: channel.welcomeMessage ?? null,
       salesInstructions: channel.salesInstructions ?? null,
+      outreachTemplate: {
+        id: channel.outreachTemplateId ?? null,
+        name: channel.outreachTemplateName ?? null,
+        language: channel.outreachTemplateLanguage ?? null,
+        body: channel.outreachTemplateBody ?? null,
+        params: Array.isArray(channel.outreachTemplateParams) ? channel.outreachTemplateParams : [],
+        configured: Boolean(channel.outreachTemplateId || channel.outreachTemplateName),
+      },
       connected: Boolean(channel.gupshupAppName && channel.status === MessagingChannelStatus.ATIVO),
       gupshup: {
         appId: channel.gupshupAppId ?? null,
@@ -901,6 +1239,7 @@ export class PlatformWhatsAppService {
       automationEnabled: true,
       welcomeMessage: null,
       salesInstructions: null,
+      outreachTemplate: { id: null, name: null, language: null, body: null, params: [], configured: false },
       connected: false,
       gupshup: { appId: null, appName: null, signupLink: null },
       integration: {
@@ -925,6 +1264,19 @@ function channelNumber(channel: any) {
 
 function normalizePhone(value: string) {
   return value.replace(/\D/g, "");
+}
+
+/**
+ * Se ainda cabe texto livre para esta conversa.
+ *
+ * Conta da última mensagem recebida, não da última enviada: é a resposta da
+ * pessoa que reabre a janela. Conversa nossa sem resposta continua fechada
+ * quantas mensagens mandemos.
+ */
+export function janelaDeTextoLivreAberta(conversation: { lastInboundAt?: Date | string | null } | null, agora = new Date()) {
+  const ultima = conversation?.lastInboundAt;
+  if (!ultima) return false;
+  return agora.getTime() - new Date(ultima).getTime() < JANELA_TEXTO_LIVRE_MS;
 }
 
 /**

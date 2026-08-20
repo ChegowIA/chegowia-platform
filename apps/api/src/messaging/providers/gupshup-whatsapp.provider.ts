@@ -218,6 +218,72 @@ export class GupshupWhatsAppProvider {
     });
   }
 
+  /**
+   * Envia um modelo (template) aprovado pela Meta.
+   *
+   * É o único envio possível para quem nunca escreveu para o número: fora da
+   * janela de 24h desde a última mensagem da pessoa, a API oficial recusa texto
+   * livre. Sem isto a prospecção ativa não teria como começar uma conversa.
+   *
+   * Os dois modos identificam o modelo de formas diferentes: no self-serve pelo
+   * id que o painel do Gupshup mostra, no partner pelo nome registrado na Meta
+   * mais o idioma. Passar o do outro modo não dá erro claro — o provedor
+   * responde que não encontrou o modelo — então cada caminho exige o seu.
+   */
+  async sendTemplate(params: GupshupSendParams & {
+    templateId?: string | null;
+    templateName?: string | null;
+    languageCode?: string | null;
+    variables: string[];
+  }): Promise<GupshupSendResult> {
+    if (this.mode() === "SELF_SERVE") {
+      if (!params.templateId) {
+        throw new ServiceUnavailableException(
+          "Cadastre o id do modelo aprovado no Gupshup para abrir conversas com números novos.",
+        );
+      }
+      if (!params.source || !params.appName) {
+        throw new ServiceUnavailableException("O canal do Gupshup está sem número de origem ou nome do aplicativo.");
+      }
+      // Endpoint próprio de modelo: o de mensagem comum recusa quem está fora
+      // da janela de 24h, e é justamente esse o caso aqui.
+      const raw = await this.performRequest(`${this.apiUrl}/wa/api/v1/template/msg`, {
+        method: "POST",
+        headers: { apikey: this.apiKey(), "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          channel: "whatsapp",
+          source: normalizePhone(params.source),
+          destination: brazilianMobileDestination(normalizePhone(params.to)),
+          "src.name": params.appName,
+          template: JSON.stringify({ id: params.templateId, params: params.variables }),
+        }).toString(),
+      });
+      return this.readSelfServeResult(raw, params.appName);
+    }
+
+    if (!params.templateName) {
+      throw new ServiceUnavailableException(
+        "Cadastre o nome do modelo aprovado na Meta para abrir conversas com números novos.",
+      );
+    }
+    return this.sendMessage(params.appId, params.appToken, {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normalizePhone(params.to),
+      type: "template",
+      template: {
+        name: params.templateName,
+        language: { code: params.languageCode || "pt_BR" },
+        components: params.variables.length
+          ? [{
+            type: "body",
+            parameters: params.variables.map((value) => ({ type: "text", text: value })),
+          }]
+          : [],
+      },
+    });
+  }
+
   async sendChoiceMenu(params: GupshupSendParams & { body: string }): Promise<GupshupSendResult> {
     if (this.mode() === "SELF_SERVE") {
       // O self-serve monta botões pelo formato próprio do Gupshup ("quick_reply"),
@@ -270,19 +336,27 @@ export class GupshupWhatsAppProvider {
         message: JSON.stringify(message),
       }).toString(),
     });
-    /**
-     * A API v1 do Gupshup responde HTTP 200 mesmo quando recusa, sinalizando o
-     * problema apenas no corpo (`status: "error"`). Confiar no código HTTP fazia
-     * a mensagem ser gravada como enviada sem `providerMessageId`, de modo que
-     * nenhum evento de status a encontrava depois: ela ficava "enviada" para
-     * sempre sem nunca ter saído.
-     */
+    return this.readSelfServeResult(raw, params.appName);
+  }
+
+  /**
+   * A API v1 do Gupshup responde HTTP 200 mesmo quando recusa, sinalizando o
+   * problema apenas no corpo (`status: "error"`). Confiar no código HTTP fazia
+   * a mensagem ser gravada como enviada sem `providerMessageId`, de modo que
+   * nenhum evento de status a encontrava depois: ela ficava "enviada" para
+   * sempre sem nunca ter saído.
+   *
+   * Vale igual para o endpoint de modelo, que é onde a recusa é mais provável:
+   * modelo não aprovado, pausado pela Meta ou com número de variáveis diferente
+   * do aprovado responde exatamente assim.
+   */
+  private readSelfServeResult(raw: any, appName?: string | null): GupshupSendResult {
     const messageId = readString(raw?.messageId);
     const status = readString(raw?.status);
     if (!messageId || (status && status.toLowerCase() !== "submitted")) {
       const detail = readString(raw?.message) ?? readString(raw?.reason) ?? status;
       this.logger.warn(
-        `Gupshup aceitou a requisição mas não enviou (${params.appName ?? "app"}): ${JSON.stringify(raw).slice(0, 300)}`,
+        `Gupshup aceitou a requisição mas não enviou (${appName ?? "app"}): ${JSON.stringify(raw).slice(0, 300)}`,
       );
       throw new BadGatewayException(
         detail && detail.length < 160

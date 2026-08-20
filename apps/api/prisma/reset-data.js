@@ -44,6 +44,12 @@ const PRESERVADAS = new Set([
   "PlatformWhatsAppConversation",
   "PlatformWhatsAppMessage",
   "PlatformUsageLedger",
+  // Prospecção também é da plataforma. A lista de não contatar é a mais
+  // importante das três: apagá-la faria a próxima lista colada reabordar quem
+  // já tinha pedido para não receber — e quem foi reabordado denuncia o número.
+  "PlatformOutreachCampaign",
+  "PlatformOutreachTarget",
+  "PlatformOutreachBlock",
 ]);
 
 /** De onde a limpeza parte. Tudo que aponta para isso, direta ou indiretamente, cai junto. */

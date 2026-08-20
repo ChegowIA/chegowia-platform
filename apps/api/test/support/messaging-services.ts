@@ -49,8 +49,15 @@ export function buildPlatformWhatsAppService(deps: {
   aiProvider?: Dep;
   realtime?: Dep;
 } = {}) {
+  // Toda mensagem recebida passa pela verificação de prospecção (resposta a um
+  // disparo, pedido de não receber). Sem um padrão aqui, cada teste de conversa
+  // teria de repetir esses mocks só para não estourar em algo que não é o
+  // assunto dele.
+  const prisma: any = { ...(deps.prisma ?? {}) };
+  prisma.platformOutreachTarget ??= { findMany: async () => [], findFirst: async () => null };
+  prisma.platformOutreachBlock ??= { findUnique: async () => null };
   return new PlatformWhatsAppService(
-    (deps.prisma ?? {}) as never,
+    prisma as never,
     (deps.gupshup ?? {}) as never,
     (deps.secrets ?? {}) as never,
     (deps.storage ?? {}) as never,

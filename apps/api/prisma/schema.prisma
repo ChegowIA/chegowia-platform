@@ -135,6 +135,30 @@ enum WhatsAppMessageStatus {
   FALHOU
 }
 
+// Prospecção ativa pelo número institucional.
+//
+// RASCUNHO existe porque a lista é conferida antes de sair: o disparo começa
+// só quando alguém olha quantos números foram aceitos, quantos eram repetidos e
+// quantos estavam na lista de não contatar.
+enum OutreachCampaignStatus {
+  RASCUNHO
+  ENVIANDO
+  PAUSADA
+  CONCLUIDA
+  CANCELADA
+}
+
+// PENDENTE -> ENVIADO -> RESPONDEU é o caminho feliz. DESCARTADO é o número que
+// entrou na lista mas nunca deve receber nada (repetido, inválido ou bloqueado),
+// e fica registrado em vez de ser apagado para o relatório do disparo fechar.
+enum OutreachTargetStatus {
+  PENDENTE
+  ENVIADO
+  RESPONDEU
+  FALHOU
+  DESCARTADO
+}
+
 // Atendimento autenticado da própria ChegowIA. Ele não pertence a nenhuma
 // Company: é a ponte entre qualquer pessoa logada e a equipe da plataforma.
 // Mantê-lo fora das conversas operacionais evita que dados de suporte sejam
@@ -1942,6 +1966,16 @@ model PlatformWhatsAppChannel {
   automationEnabled        Boolean                @default(true)
   welcomeMessage           String?                @db.Text
   salesInstructions        String?                @db.Text
+  // Modelo aprovado na Meta usado para abrir conversa com quem nunca escreveu.
+  // Fora da janela de 24h a API oficial recusa texto livre, então sem isto a
+  // prospecção não tem como começar — e é melhor a tela dizer isso do que o
+  // provedor recusar número por número.
+  outreachTemplateId       String?
+  outreachTemplateName     String?
+  outreachTemplateLanguage String?
+  outreachTemplateBody     String?                @db.Text
+  // Quais campos do contato preenchem {{1}}, {{2}}… na ordem do modelo.
+  outreachTemplateParams   Json?
   connectedAt              DateTime?
   lastWebhookAt            DateTime?
   lastError                String?                @db.Text
@@ -1951,6 +1985,7 @@ model PlatformWhatsAppChannel {
   conversations PlatformWhatsAppConversation[]
   messages      PlatformWhatsAppMessage[]
   usageLedgers  PlatformUsageLedger[]
+  campaigns     PlatformOutreachCampaign[]
 }
 
 model PlatformWhatsAppConversation {
@@ -1969,6 +2004,7 @@ model PlatformWhatsAppConversation {
 
   channel  PlatformWhatsAppChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
   messages PlatformWhatsAppMessage[]
+  targets  PlatformOutreachTarget[]
 
   @@unique([channelId, customerPhone])
   @@index([status, lastMessageAt])
@@ -2136,4 +2172,92 @@ model UsageLedger {
   // índice existe no banco desde 20260813030000 — declarar aqui evita que a
   // próxima migration gerada o derrube e transforme aquela busca em varredura.
   @@index([asaasPaymentId])
+}
+
+// ---------------------------------------------------------------------------
+// Prospecção ativa pelo WhatsApp institucional
+// ---------------------------------------------------------------------------
+//
+// Um disparo é uma lista colada de uma vez. Ele guarda o próprio ritmo porque a
+// qualidade do número é o ativo em jogo: se o mesmo número que atende o suporte
+// levar denúncia de spam, a Meta restringe tudo junto. Daí limite diário,
+// intervalo entre envios e pausa automática ficarem no registro, e não em
+// constante no código — cada lista tem um risco diferente.
+model PlatformOutreachCampaign {
+  id        String                 @id @default(cuid())
+  channelId String
+  name      String
+  status    OutreachCampaignStatus @default(RASCUNHO)
+
+  // Como o contato é chamado quando a lista não trouxe nome. Modelo aprovado com
+  // variável não aceita parâmetro vazio: a Meta recusa o envio inteiro.
+  fallbackName String @default("tudo bem")
+
+  dailyLimit           Int     @default(200)
+  minIntervalSeconds   Int     @default(15)
+  maxIntervalSeconds   Int     @default(30)
+  // Disparo de madrugada é o caminho mais curto para ser denunciado. Continua
+  // desligável para quem quiser testar fora do horário.
+  respectBusinessHours Boolean @default(true)
+
+  // Quando o próximo envio pode sair. É o que espaça as mensagens sem depender
+  // de o processo continuar vivo entre uma e outra.
+  nextSendAt   DateTime?
+  pausedReason String?   @db.Text
+
+  totalTargets Int @default(0)
+  sentCount    Int @default(0)
+  repliedCount Int @default(0)
+  failedCount  Int @default(0)
+
+  createdByUserId String?
+  createdByName   String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  channel PlatformWhatsAppChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  targets PlatformOutreachTarget[]
+
+  @@index([status, nextSendAt])
+}
+
+model PlatformOutreachTarget {
+  id         String               @id @default(cuid())
+  campaignId String
+  phone      String
+  name       String?
+  company    String?
+  city       String?
+  status     OutreachTargetStatus @default(PENDENTE)
+
+  conversationId String?
+  attempts       Int       @default(0)
+  sentAt         DateTime?
+  repliedAt      DateTime?
+  errorMessage   String?   @db.Text
+  discardReason  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  campaign     PlatformOutreachCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  conversation PlatformWhatsAppConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  // O mesmo número não recebe duas vezes o mesmo disparo, nem quando a lista
+  // colada vem com repetição.
+  @@unique([campaignId, phone])
+  @@index([status, campaignId])
+  @@index([phone])
+}
+
+// Quem pediu para não receber mais. Vale para todos os disparos e também para a
+// conversa aberta à mão: um "me tira dessa lista" que só valesse para a
+// campanha em curso seria contornado pela próxima lista colada.
+model PlatformOutreachBlock {
+  id            String   @id @default(cuid())
+  phone         String   @unique
+  reason        String?
+  blockedByName String?
+  createdAt     DateTime @default(now())
 }
