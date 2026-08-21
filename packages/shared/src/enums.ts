@@ -98,6 +98,16 @@ export enum PermissionKey {
   CAIXA_VISUALIZAR = "caixa.visualizar",
   CAIXA_OPERAR = "caixa.operar",
   CAIXA_GERENCIAR = "caixa.gerenciar",
+  /**
+   * Atendimento por WhatsApp.
+   *
+   * Era amarrado às permissões de pedido: quem podia ver pedido lia todas as
+   * conversas dos clientes — telefone, endereço, o que a pessoa escreveu — e não
+   * havia como dar o inbox a um atendente sem dar pedidos junto. São coisas
+   * diferentes e passaram a ter permissão própria.
+   */
+  ATENDIMENTO_VISUALIZAR = "atendimento.visualizar",
+  ATENDIMENTO_RESPONDER = "atendimento.responder",
 }
 
 // Regime tributário — decide CSOSN (Simples) ou CST (normal) no cálculo.

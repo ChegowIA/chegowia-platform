@@ -41,6 +41,7 @@ export default function AtendimentoPage() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
   const { data: channel } = useQuery({
     queryKey: ["messaging-channel"],
@@ -115,6 +116,28 @@ export default function AtendimentoPage() {
     onError: (cause) => setError(apiErrorMessage(cause)),
   });
 
+  /**
+   * Apagar é diferente de limpar.
+   *
+   * Limpar esvazia as mensagens e mantém o contato na lista, para reiniciar o
+   * atendimento. Apagar tira a conversa da tela. Conversa que gerou pedido é
+   * recusada pelo servidor, porque o vínculo é o registro de como a venda entrou.
+   */
+  const deleteConversation = useMutation({
+    mutationFn: async (conversationId: string) => (await api.delete(`/messaging/conversations/${conversationId}`)).data,
+    onSuccess: () => {
+      setDeleteDialogOpen(false);
+      setSelectedId(null);
+      setDraft("");
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["whatsapp-conversations"] });
+    },
+    onError: (cause) => {
+      setDeleteDialogOpen(false);
+      setError(apiErrorMessage(cause));
+    },
+  });
+
   const clearConversation = useMutation({
     mutationFn: async (conversationId: string) => {
       return (await api.delete(`/messaging/conversations/${conversationId}/messages`)).data;
@@ -178,6 +201,7 @@ export default function AtendimentoPage() {
                 onSetMode={(mode) => updateConversation.mutate({ mode })}
                 onSetStatus={(status) => updateConversation.mutate({ status })}
                 onClear={() => setClearDialogOpen(true)}
+                onDelete={() => setDeleteDialogOpen(true)}
               />
               <div ref={messagesScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain bg-slate-50/80 p-4 dark:bg-slate-800/50">
                 {loadingConversation && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando conversa...</p>}
@@ -206,6 +230,22 @@ export default function AtendimentoPage() {
 
         <CompanyContext conversation={conversation} />
       </div>
+
+      <Modal open={deleteDialogOpen && Boolean(conversation)} onClose={() => !deleteConversation.isPending && setDeleteDialogOpen(false)} title="Apagar conversa">
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm leading-6 text-rose-950 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-100">
+            <p className="font-black">A conversa sai da lista e não volta.</p>
+            <p className="mt-1">As mensagens são apagadas junto. Se a pessoa escrever de novo, uma conversa nova é criada.</p>
+          </div>
+          <div className="space-y-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            <p>Conversa que já gerou pedido não pode ser apagada: o vínculo é o registro de como a venda entrou. Nesse caso use &quot;Limpar&quot;.</p>
+          </div>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={deleteConversation.isPending}>Cancelar</Button>
+            <Button type="button" variant="danger" isLoading={deleteConversation.isPending} onClick={() => selectedId && deleteConversation.mutate(selectedId)}>Apagar conversa</Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={clearDialogOpen && Boolean(conversation)} onClose={() => !clearConversation.isPending && setClearDialogOpen(false)} title="Limpar conversa">
         <div className="space-y-5">
@@ -293,7 +333,7 @@ function ConversationList({ conversations, selectedId, loading, onSelect }: {
   );
 }
 
-function ConversationHeader({ conversation, pending, clearing, canEdit, onSetMode, onSetStatus, onClear }: {
+function ConversationHeader({ conversation, pending, clearing, canEdit, onSetMode, onSetStatus, onClear, onDelete }: {
   conversation?: WhatsAppConversationDetail;
   pending: boolean;
   clearing: boolean;
@@ -301,6 +341,7 @@ function ConversationHeader({ conversation, pending, clearing, canEdit, onSetMod
   onSetMode: (mode: WhatsAppConversationMode) => void;
   onSetStatus: (status: WhatsAppConversationStatus) => void;
   onClear: () => void;
+  onDelete: () => void;
 }) {
   if (!conversation) return <div className="h-20 shrink-0 animate-pulse bg-slate-100 dark:bg-slate-800" />;
 
@@ -317,6 +358,7 @@ function ConversationHeader({ conversation, pending, clearing, canEdit, onSetMod
             <Button size="sm" variant={conversation.mode === WhatsAppConversationMode.HUMANO ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.HUMANO)}>Humano</Button>
             <Button size="sm" variant="outline" disabled={pending || clearing} onClick={() => onSetStatus(conversation.status === WhatsAppConversationStatus.ABERTA ? WhatsAppConversationStatus.ENCERRADA : WhatsAppConversationStatus.ABERTA)}>{conversation.status === WhatsAppConversationStatus.ABERTA ? "Encerrar" : "Reabrir"}</Button>
             <Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onClear}>Limpar</Button>
+            <Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onDelete}>Apagar</Button>
           </div>
         )}
       </div>

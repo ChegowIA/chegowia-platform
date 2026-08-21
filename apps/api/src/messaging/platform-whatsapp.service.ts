@@ -521,6 +521,27 @@ export class PlatformWhatsAppService {
     return { id, clearedMessages: result.deletedMessages };
   }
 
+  /**
+   * Apaga a conversa institucional inteira.
+   *
+   * Limpar o histórico mantém o contato na lista, o que serve para reiniciar o
+   * assunto. Apagar serve para o outro caso: tirar da tela quem não deveria mais
+   * estar ali.
+   *
+   * O alvo de prospecção que apontava para esta conversa fica sem o vínculo (a
+   * chave é `SetNull`), e é o comportamento certo: o disparo continua registrando
+   * que a abordagem aconteceu, mesmo sem o histórico.
+   */
+  async deleteConversation(id: string) {
+    const conversation = await this.getConversation(id);
+    await this.db().$transaction(async (tx: any) => {
+      await tx.platformWhatsAppMessage.deleteMany({ where: { conversationId: conversation.id } });
+      await tx.platformWhatsAppConversation.delete({ where: { id: conversation.id } });
+    });
+    this.realtime.emitToSuperAdmins("platform.whatsapp.conversation.updated", { conversationId: conversation.id });
+    return { id: conversation.id, deleted: true };
+  }
+
   async sendHumanMessage(userId: string, conversationId: string, content: string) {
     const conversation = await this.getConversation(conversationId);
     /**

@@ -818,6 +818,43 @@ export class MessagingService {
     return { id: result.conversation.id, clearedMessages: result.deletedMessages };
   }
 
+  /**
+   * Apaga a conversa inteira, e não só as mensagens.
+   *
+   * Limpar o histórico deixava o contato na lista, o que serve para reiniciar o
+   * atendimento — mas não para tirar da tela uma conversa que não deveria mais
+   * estar ali. São necessidades diferentes, e agora existem as duas.
+   *
+   * Conversa que gerou pedido é recusada. O vínculo do pedido com a conversa é
+   * registro de como a venda entrou, e o banco protege isso com `Restrict` — sem
+   * a checagem aqui, o apagar falharia com erro de chave estrangeira, que não diz
+   * nada a quem clicou. Nesse caso o caminho é limpar o histórico.
+   */
+  async deleteWhatsAppConversation(companyId: string, id: string) {
+    const existing = await this.getWhatsAppConversation(companyId, id);
+    const pedidos = await this.db().order.count({
+      where: { companyId, whatsappConversationId: existing.id },
+    });
+    if (pedidos > 0) {
+      throw new BadRequestException(
+        `Esta conversa gerou ${pedidos === 1 ? "um pedido" : `${pedidos} pedidos`} e não pode ser apagada, `
+        + "porque é o registro de como a venda entrou. Use \"Limpar histórico\" para esvaziar as mensagens.",
+      );
+    }
+
+    await this.db().$transaction(async (tx: any) => {
+      // Rascunho de pedido em aberto some junto: ele só existe para aquela
+      // conversa, e deixá-lo ativo faria o assistente responder a um atendimento
+      // que não existe mais.
+      await tx.whatsAppOrderDraft.deleteMany({ where: { companyId, conversationId: existing.id } });
+      await tx.whatsAppMessage.deleteMany({ where: { companyId, conversationId: existing.id } });
+      await tx.whatsAppConversation.delete({ where: { id_companyId: { id: existing.id, companyId } } });
+    });
+
+    this.realtime.emitToCompany(companyId, "whatsapp.conversation.updated", { conversationId: existing.id });
+    return { id: existing.id, deleted: true };
+  }
+
   async sendHumanMessage(companyId: string, userId: string, conversationId: string, content: string) {
     const conversation = await this.getWhatsAppConversation(companyId, conversationId);
     const updated = await this.db().whatsAppConversation.update({

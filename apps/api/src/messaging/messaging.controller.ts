@@ -176,21 +176,21 @@ export class MessagingController {
   }
 
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
-  @RequirePermission(PermissionKey.PEDIDOS_VISUALIZAR)
+  @RequirePermission(PermissionKey.ATENDIMENTO_VISUALIZAR)
   @Get("conversations")
   conversations(@CurrentUser("companyId") companyId: string) {
     return this.messagingService.listWhatsAppConversations(companyId);
   }
 
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
-  @RequirePermission(PermissionKey.PEDIDOS_VISUALIZAR)
+  @RequirePermission(PermissionKey.ATENDIMENTO_VISUALIZAR)
   @Get("conversations/:id")
   conversation(@CurrentUser("companyId") companyId: string, @Param("id") id: string) {
     return this.messagingService.getWhatsAppConversation(companyId, id);
   }
 
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
-  @RequirePermission(PermissionKey.PEDIDOS_EDITAR)
+  @RequirePermission(PermissionKey.ATENDIMENTO_RESPONDER)
   @Patch("conversations/:id")
   updateConversation(
     @CurrentUser("companyId") companyId: string,
@@ -205,7 +205,7 @@ export class MessagingController {
    * realizados e os lançamentos de consumo continuam preservados.
    */
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
-  @RequirePermission(PermissionKey.PEDIDOS_EDITAR)
+  @RequirePermission(PermissionKey.ATENDIMENTO_RESPONDER)
   @Delete("conversations/:id/messages")
   clearConversation(
     @CurrentUser("companyId") companyId: string,
@@ -214,8 +214,25 @@ export class MessagingController {
     return this.messagingService.clearWhatsAppConversation(companyId, id);
   }
 
+  /**
+   * Apaga a conversa da lista, e não só as mensagens dela.
+   *
+   * Limpar o histórico serve para reiniciar o atendimento mantendo o contato;
+   * apagar serve para tirar da tela o que não deveria estar ali. Conversa que
+   * gerou pedido é recusada, porque o vínculo é o registro de como a venda entrou.
+   */
   @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
-  @RequirePermission(PermissionKey.PEDIDOS_EDITAR)
+  @RequirePermission(PermissionKey.ATENDIMENTO_RESPONDER)
+  @Delete("conversations/:id")
+  deleteConversation(
+    @CurrentUser("companyId") companyId: string,
+    @Param("id") id: string,
+  ) {
+    return this.messagingService.deleteWhatsAppConversation(companyId, id);
+  }
+
+  @Roles(Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM)
+  @RequirePermission(PermissionKey.ATENDIMENTO_RESPONDER)
   @Post("conversations/:id/messages")
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   sendHumanMessage(

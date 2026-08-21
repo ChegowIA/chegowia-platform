@@ -94,6 +94,7 @@ export default function SuperAdminAtendimentoPage() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [novaConversaAberta, setNovaConversaAberta] = useState(false);
   const [novoNumero, setNovoNumero] = useState("");
   const [novoNome, setNovoNome] = useState("");
@@ -233,6 +234,25 @@ export default function SuperAdminAtendimentoPage() {
     onError: (cause) => setError(apiErrorMessage(cause)),
   });
 
+  /**
+   * Apagar é diferente de limpar: limpar esvazia as mensagens e mantém o contato
+   * na lista, apagar tira a conversa da tela.
+   */
+  const deleteConversation = useMutation({
+    mutationFn: async (conversationId: string) => (await api.delete(`/platform/whatsapp/conversations/${conversationId}`)).data,
+    onSuccess: () => {
+      setDeleteDialogOpen(false);
+      setSelectedId(null);
+      setDraft("");
+      setError(null);
+      void queryClient.invalidateQueries({ queryKey: ["platform-whatsapp-conversations"] });
+    },
+    onError: (cause) => {
+      setDeleteDialogOpen(false);
+      setError(apiErrorMessage(cause));
+    },
+  });
+
   const clearConversation = useMutation({
     mutationFn: async (conversationId: string) => (await api.delete(`/platform/whatsapp/conversations/${conversationId}/messages`)).data,
     onSuccess: () => {
@@ -330,7 +350,7 @@ export default function SuperAdminAtendimentoPage() {
           <ConversationList conversations={conversations} selectedId={selectedId} loading={loadingConversations} onSelect={setSelectedId} />
           <Card className="min-h-[620px] overflow-hidden xl:h-full xl:min-h-0">
             {!conversation && !loadingConversation ? <EmptyConversation connected={Boolean(channel?.connected)} onConfigure={() => setConnectionOpen(true)} /> : <div className="flex h-full min-h-[620px] flex-col xl:min-h-0">
-              <ConversationHeader conversation={conversation} pending={updateConversation.isPending} clearing={clearConversation.isPending} onSetMode={(mode) => updateConversation.mutate({ mode })} onSetStatus={(status) => updateConversation.mutate({ status })} onClear={() => setClearDialogOpen(true)} />
+              <ConversationHeader conversation={conversation} pending={updateConversation.isPending} clearing={clearConversation.isPending} onSetMode={(mode) => updateConversation.mutate({ mode })} onSetStatus={(status) => updateConversation.mutate({ status })} onClear={() => setClearDialogOpen(true)} onDelete={() => setDeleteDialogOpen(true)} />
               <div ref={messagesScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain bg-slate-50/80 p-4 dark:bg-slate-800/50">
                 {loadingConversation && <p className="text-sm text-slate-500 dark:text-slate-400">Carregando conversa…</p>}
                 {conversation?.messages.map((message) => <ChatMessage key={message.id} message={message} />)}
@@ -389,6 +409,24 @@ export default function SuperAdminAtendimentoPage() {
         </div>
       </Modal>
 
+      <Modal open={deleteDialogOpen && Boolean(conversation)} onClose={() => !deleteConversation.isPending && setDeleteDialogOpen(false)} title="Apagar conversa">
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm leading-6 text-rose-950 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-100">
+            <p className="font-black">A conversa sai da lista e não volta.</p>
+            <p className="mt-1">As mensagens são apagadas junto. Se a pessoa escrever de novo, uma conversa nova é criada.</p>
+          </div>
+          {/*
+            O disparo continua registrando que a abordagem aconteceu: o alvo fica
+            sem o vínculo da conversa, não sem o registro.
+          */}
+          <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">Se este contato veio de um disparo, o registro dele na prospecção é mantido.</p>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={deleteConversation.isPending}>Cancelar</Button>
+            <Button type="button" variant="danger" isLoading={deleteConversation.isPending} onClick={() => selectedId && deleteConversation.mutate(selectedId)}>Apagar conversa</Button>
+          </div>
+        </div>
+      </Modal>
+
       <Modal open={clearDialogOpen && Boolean(conversation)} onClose={() => !clearConversation.isPending && setClearDialogOpen(false)} title="Limpar conversa comercial">
         <div className="space-y-5"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"><p className="font-black">Isso reinicia o contexto para o próximo contato.</p><p className="mt-1">As mensagens saem apenas deste inbox institucional. Nenhum dado de empresa cliente é afetado.</p></div><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={() => setClearDialogOpen(false)} disabled={clearConversation.isPending}>Cancelar</Button><Button type="button" variant="danger" isLoading={clearConversation.isPending} onClick={() => selectedId && clearConversation.mutate(selectedId)}>Limpar histórico</Button></div></div>
       </Modal>
@@ -400,9 +438,9 @@ function ConversationList({ conversations, selectedId, loading, onSelect }: { co
   return <Card className="flex min-h-[420px] flex-col overflow-hidden xl:h-full xl:min-h-0"><div className="shrink-0 border-b border-slate-100 p-4 dark:border-slate-800"><p className="text-lg font-black text-slate-900 dark:text-slate-100">Conversas</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Somente o número institucional</p></div><CardContent className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-3">{loading && <p className="p-2 text-sm text-slate-500 dark:text-slate-400">Carregando…</p>}{conversations.map((item) => <button key={item.id} type="button" onClick={() => onSelect(item.id)} className={clsx("w-full rounded-2xl border p-3 text-left transition", selectedId === item.id ? "border-emerald-300 bg-emerald-50 ring-1 ring-emerald-100 dark:bg-emerald-950/30" : "border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50/40 dark:border-slate-800 dark:bg-slate-900")}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-black text-slate-900 dark:text-slate-100">{item.customerName || formatPhone(item.customerPhone)}</p>{item.customerName && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{formatPhone(item.customerPhone)}</p>}</div><span className={clsx("shrink-0 rounded-full px-2 py-1 text-[10px] font-black", item.mode === WhatsAppConversationMode.HUMANO ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" : "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300")}>{item.mode === WhatsAppConversationMode.HUMANO ? "Humano" : "IA"}</span></div><p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{item.lastMessageText || "Sem mensagem"}</p><div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-semibold text-slate-400"><span>{STATUS_LABEL[item.status]}</span><span>{formatDateTime(item.lastMessageAt)}</span></div></button>)}{!loading && conversations.length === 0 && <div className="rounded-2xl border border-dashed border-slate-300 p-5 text-center dark:border-slate-700"><p className="text-sm font-black text-slate-700 dark:text-slate-300">Nenhum interessado ainda</p><p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Quando alguém chamar o número da ChegowIA, a conversa aparece aqui em tempo real.</p></div>}</CardContent></Card>;
 }
 
-function ConversationHeader({ conversation, pending, clearing, onSetMode, onSetStatus, onClear }: { conversation?: PlatformConversationDetail; pending: boolean; clearing: boolean; onSetMode: (mode: WhatsAppConversationMode) => void; onSetStatus: (status: WhatsAppConversationStatus) => void; onClear: () => void }) {
+function ConversationHeader({ conversation, pending, clearing, onSetMode, onSetStatus, onClear, onDelete }: { conversation?: PlatformConversationDetail; pending: boolean; clearing: boolean; onSetMode: (mode: WhatsAppConversationMode) => void; onSetStatus: (status: WhatsAppConversationStatus) => void; onClear: () => void; onDelete: () => void }) {
   if (!conversation) return <div className="h-20 shrink-0 animate-pulse bg-slate-100 dark:bg-slate-800" />;
-  return <div className="shrink-0 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-lg font-black text-slate-900 dark:text-slate-100">{conversation.customerName || formatPhone(conversation.customerPhone)}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatPhone(conversation.customerPhone)} · WhatsApp ChegowIA</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.VIRTUAL ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.VIRTUAL)}>IA</Button><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.HUMANO ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.HUMANO)}>Humano</Button><Button size="sm" variant="outline" disabled={pending || clearing} onClick={() => onSetStatus(conversation.status === WhatsAppConversationStatus.ABERTA ? WhatsAppConversationStatus.ENCERRADA : WhatsAppConversationStatus.ABERTA)}>{conversation.status === WhatsAppConversationStatus.ABERTA ? "Encerrar" : "Reabrir"}</Button><Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onClear}>Limpar</Button></div></div><div className="mt-3 flex flex-wrap gap-2"><span className={clsx("rounded-full px-2.5 py-1 text-xs font-bold", conversation.mode === WhatsAppConversationMode.HUMANO ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" : "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300")}>{MODE_LABEL[conversation.mode]}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-400">{STATUS_LABEL[conversation.status]}</span></div></div>;
+  return <div className="shrink-0 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div><p className="text-lg font-black text-slate-900 dark:text-slate-100">{conversation.customerName || formatPhone(conversation.customerPhone)}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{formatPhone(conversation.customerPhone)} · WhatsApp ChegowIA</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.VIRTUAL ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.VIRTUAL)}>IA</Button><Button size="sm" variant={conversation.mode === WhatsAppConversationMode.HUMANO ? "primary" : "outline"} disabled={pending || clearing} onClick={() => onSetMode(WhatsAppConversationMode.HUMANO)}>Humano</Button><Button size="sm" variant="outline" disabled={pending || clearing} onClick={() => onSetStatus(conversation.status === WhatsAppConversationStatus.ABERTA ? WhatsAppConversationStatus.ENCERRADA : WhatsAppConversationStatus.ABERTA)}>{conversation.status === WhatsAppConversationStatus.ABERTA ? "Encerrar" : "Reabrir"}</Button><Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onClear}>Limpar</Button><Button size="sm" variant="outline" className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-900/60 dark:text-rose-300 dark:hover:bg-rose-950/30" disabled={pending || clearing} onClick={onDelete}>Apagar</Button></div></div><div className="mt-3 flex flex-wrap gap-2"><span className={clsx("rounded-full px-2.5 py-1 text-xs font-bold", conversation.mode === WhatsAppConversationMode.HUMANO ? "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" : "bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300")}>{MODE_LABEL[conversation.mode]}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-400">{STATUS_LABEL[conversation.status]}</span></div></div>;
 }
 
 function ChatMessage({ message }: { message: PlatformMessage }) {
