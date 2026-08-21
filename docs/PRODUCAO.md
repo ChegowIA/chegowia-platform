@@ -1,9 +1,36 @@
 # Publicação do ChegowIA
 
-Esta implantação mantém banco, imagens e documentos no próprio servidor. Não usa
-S3 nem qualquer serviço da AWS.
+## Onde a produção roda hoje
 
-## 1. Servidor e DNS
+Leia isto antes de qualquer comando deste documento, porque ele descreve **duas**
+implantações possíveis e a maior parte dele é sobre a segunda.
+
+**A produção atual usa plataformas gerenciadas:**
+
+| Peça | Onde | Como se mexe |
+|---|---|---|
+| API (e worker) | Render, container com disco em `/data` | Deploy por push na branch conectada, ou *Manual Deploy* no painel |
+| Web | Vercel | Deploy automático a cada push |
+| MySQL | Railway, exposto pelo proxy TCP público | Painel do Railway |
+
+Consequências que já produziram erro na prática:
+
+- **Não existe host para entrar por SSH.** O shell que o Render oferece é *dentro*
+  do container: `/app`, sem `git`, sem `docker` e sem este repositório. Os comandos
+  de `docker compose` deste documento não rodam ali — e não é falta de permissão,
+  é que aquela máquina não é o host.
+- **As migrations rodam sozinhas no boot.** O entrypoint executa
+  `prisma migrate deploy` antes de subir o processo, então publicar já migra.
+- **Serviço do Render com disco anexado não escala além de uma instância.** É o que
+  garante um único worker de cobrança, sem duplicar job.
+- **O disco `/data` é persistente**, então imagem de produto e documento sobrevivem
+  ao deploy. O que ele não tem é backup nosso: ver a seção 8.
+
+**A implantação em servidor próprio** (`compose.production.yml`, com MySQL, Caddy
+e ClamAV em containers) continua suportada e é o que as seções 1, 6 e 9 descrevem.
+Os scripts de `infra/` detectam qual das duas está em uso.
+
+## 1. Servidor e DNS (implantação em servidor próprio)
 
 - Linux atualizado com Docker Engine e Compose Plugin.
 - Mínimo recomendado: 4 vCPU, 8 GB de RAM e disco SSD. O ClamAV mantém a base de
@@ -340,19 +367,69 @@ privilegiado da API. Não coloque `private_uploads` dentro de uma raiz pública.
 
 ## 8. Backup e restauração
 
+### O que o backup cobre, e o que não cobre
+
+O dump do MySQL carrega o que é insubstituível: XML de NFC-e, protocolo de
+autorização e o próprio certificado A1 (cifrado no banco, nunca em disco). É ele
+que atende a guarda obrigatória de cinco anos, além de todo o dado de negócio.
+
+Fora do banco ficam apenas os arquivos enviados — imagem de produto, logo,
+documento. Eles moram no disco de quem serve a API e são reenviáveis pelo
+lojista; nota fiscal não é. Quando o backup roda onde esse disco está, eles
+entram no `files.tar.gz`; quando roda de fora, o script avisa e a cobertura fica
+com o snapshot de disco do provedor.
+
+### Na produção atual (banco no Railway)
+
+O banco é alcançável pela rede, então o dump sai de qualquer máquina — a sua
+inclusive. `infra/backup.sh` detecta isso pela presença de `DATABASE_URL`:
+
+```bash
+DATABASE_URL='mysql://usuario:senha@host.proxy.rlwy.net:PORTA/banco' \
+  BACKUP_ROOT=~/chegowia-backups \
+  BACKUP_ALLOW_LOCAL_ONLY=true \
+  sh infra/backup.sh
+```
+
+O `mysqldump` vem da imagem oficial `mysql:8.4` via docker quando ela está
+disponível, e não do binário do sistema. O motivo é concreto: um `mysqldump` do
+MariaDB recusa opções do MySQL 8 e derruba o dump por incompatibilidade de
+cliente, não por problema no banco.
+
+A conexão exige TLS por padrão (`--ssl-mode=REQUIRED`), porque o dump atravessa a
+internet com endereço de cliente, CPF e CNPJ dentro. Isso cifra o tráfego, mas
+não valida a autoridade certificadora — protege contra escuta passiva, não contra
+um intermediário ativo. Se o banco recusar conexão cifrada, `BACKUP_REQUIRE_TLS=false`
+libera, sabendo o que isso significa.
+
+Para automatizar sem depender da sua máquina, o caminho é um **Cron Job** no
+provedor rodando esse mesmo comando. Ele precisa de uma imagem com cliente MySQL
+e a `DATABASE_URL` como segredo — a imagem da API não serve, ela não tem cliente
+MySQL de propósito.
+
+Confira também, no painel do Railway, se o volume do MySQL tem snapshot
+automático no seu plano. Ter os dois é o certo: o snapshot do provedor é rápido
+para acidente operacional, e o seu dump é o que permite restaurar em outro
+provedor se a conta for perdida.
+
+### Em servidor próprio
+
 Agende diariamente:
 
 ```cron
 17 3 * * * cd /caminho/chegowia && /bin/sh infra/backup.sh >> /var/log/chegowia-backup.log 2>&1
 ```
 
-### A cópia precisa sair do servidor
+Ali o banco não publica porta, então o dump sai por `docker compose exec` — e
+isso exige rodar **no host**, não dentro do container da API, que não tem docker.
+
+### A cópia precisa sair de onde está
 
 Backup que mora no mesmo disco do banco não é backup. Disco morto, incêndio ou
 conta encerrada no provedor levam o dado e a cópia juntos — e aqui há nota fiscal
 autorizada, com guarda obrigatória de cinco anos.
 
-Configure um destino em `.env.production`:
+Configure um destino no ambiente ou em `.env.production`:
 
 ```sh
 # rclone (recomendado: um remoto `crypt` cifra antes de a cópia sair daqui)
@@ -384,16 +461,33 @@ importar.
 é assim que se descobre que o agendamento nunca foi instalado antes de precisar
 dele. Com backup somente local ele passa, mas imprime o aviso junto do resultado.
 
-O backup contém dump consistente do MySQL, imagens, currículos, manifesto e
-checksums. A retenção padrão é 14 dias (`BACKUP_RETENTION_DAYS`).
+O diretório do backup traz o dump, o manifesto (que registra o modo usado e se os
+arquivos entraram) e os checksums. A retenção padrão é 14 dias
+(`BACKUP_RETENTION_DAYS`).
 
 **Restaure uma vez antes de precisar.** Backup que ninguém restaurou é suposição,
-não cópia de segurança. Faça em uma máquina separada:
+não cópia de segurança.
+
+Em servidor próprio:
 
 ```bash
 CONFIRM_RESTORE=YES BACKUP_DIR=/srv/chegowia/backups/AAAA... \
   /bin/sh infra/restore.sh
 ```
+
+Com banco remoto, aponte a `DATABASE_URL` para um banco **descartável** e confira
+a contagem de tabelas e registros contra a origem:
+
+```bash
+CONFIRM_RESTORE=YES CONFIRM_RESTORE_REMOTO=YES \
+  BACKUP_DIR=~/chegowia-backups/AAAA... \
+  DATABASE_URL='mysql://usuario:senha@host:PORTA/banco_de_teste' \
+  sh infra/restore.sh
+```
+
+A confirmação dupla existe porque, em modo remoto, o script não tem como parar a
+aplicação — quem faz isso é você, no painel do provedor. Restaurar com a API no ar
+deixa a aplicação lendo um banco recriado por baixo.
 
 ## 8.1 Saber do erro antes do cliente
 
@@ -419,6 +513,26 @@ Rastreamento de desempenho fica desligado (`tracesSampleRate: 0`). Ligar é uma
 decisão separada, porque abre um segundo canal de dados.
 
 ## 9. Atualizações e rollback
+
+### Em plataforma gerenciada (produção atual)
+
+Não há comando a rodar no servidor. A sequência é:
+
+1. `git push` na branch conectada — ou *Manual Deploy → Deploy latest commit* no
+   painel do Render, se o deploy automático estiver desligado.
+2. Acompanhe **Events** no Render. As migrations rodam no boot, então o log do
+   deploy mostra `Aplicando migrações pendentes...` antes de a API subir.
+3. Confira de fora:
+
+```bash
+WEB_URL=https://SEU-DOMINIO API_URL=https://SUA-API/api sh infra/check-production.sh
+```
+
+Rollback é o *Rollback* do painel do Render para o deploy anterior — mas só se as
+migrations forem compatíveis. Migration que apagou coluna não volta por rollback
+de imagem; ali é restauração de backup e janela de manutenção.
+
+### Em servidor próprio
 
 Antes de cada atualização:
 
