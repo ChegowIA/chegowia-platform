@@ -124,6 +124,12 @@ export class PlatformWhatsAppController {
     return this.platformWhatsApp.clearConversation(id);
   }
 
+  /** Apaga a conversa da lista, e não só as mensagens dela. */
+  @Delete("conversations/:id")
+  deleteConversation(@Param("id") id: string) {
+    return this.platformWhatsApp.deleteConversation(id);
+  }
+
   @Post("conversations/:id/messages")
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   sendHumanMessage(

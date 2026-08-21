@@ -28,7 +28,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/painel/dashboard", label: "Dashboard", roles: [Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM], permissions: [PermissionKey.PEDIDOS_VISUALIZAR] },
-  { href: "/painel/atendimento", label: "Atendimento", roles: [Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM], permissions: [PermissionKey.PEDIDOS_VISUALIZAR] },
+  { href: "/painel/atendimento", label: "Atendimento", roles: [Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM], permissions: [PermissionKey.ATENDIMENTO_VISUALIZAR] },
   { href: "/painel/pedidos", label: "Pedidos", roles: [Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM], permissions: [PermissionKey.PEDIDOS_VISUALIZAR] },
   { href: "/painel/mesas", label: "Mesas e salão", roles: [Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM], permissions: [PermissionKey.MESAS_VISUALIZAR] },
   { href: "/painel/cardapio", label: "Cardápio", roles: [Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM], permissions: [PermissionKey.CARDAPIO_VISUALIZAR] },

@@ -116,10 +116,18 @@ describe("ativação pelo Asaas", () => {
 
   it("não desvia para o Asaas quando a chave de ambiente aponta o Stripe", async () => {
     process.env.BILLING_PROVIDER = "STRIPE";
+    /**
+     * Sem a chave da Stripe o caminho dela falha na hora, sem sair para a rede.
+     *
+     * Antes o teste chamava a API da Stripe de verdade quando havia chave no
+     * ambiente: passava em 500ms sozinho e estourava o limite de 5s com a suíte
+     * cheia. Teste que depende de rede falha por sorteio, e falha justamente
+     * quando alguém está com pressa para publicar.
+     */
+    delete process.env.STRIPE_SECRET_KEY;
     const { service, asaas } = build();
 
-    // O caminho do Stripe pode falhar ou responder dependendo do ambiente; o que
-    // este teste garante é que o desvio não aconteceu.
+    // O que este teste garante é que o desvio para o Asaas não aconteceu.
     await service.companyCheckout("empresa-1").catch(() => undefined);
 
     expect(asaas.createSubscription).not.toHaveBeenCalled();

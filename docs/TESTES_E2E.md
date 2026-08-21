@@ -596,6 +596,20 @@ O assistente do painel tem ferramentas de leitura e de escrita.
 | 10.1.10 | Webhook de auto-atendimento (`webhooks/gupshup/self-serve`) | Onboarding do número conclui sozinho |
 | 10.1.11 | Super admin gerencia o canal de uma empresa (`messaging/companies/:companyId/whatsapp`) | Consegue conectar/desconectar pela empresa |
 
+### 10.1.1 Permissão de atendimento
+
+O inbox era liberado pelas permissões de pedido: quem via pedido lia todas as
+conversas dos clientes, e não havia como dar o inbox a um atendente sem dar
+pedidos junto.
+
+| # | Passo | Esperado |
+|---|---|---|
+| a | Funcionário só com "Ver pedidos" | **Não** vê o menu Atendimento nem a rota de conversas (403) |
+| b | Conceder "Ver conversas do WhatsApp" | Vê o menu e lista as conversas, sem poder responder |
+| c | Conceder "Responder e apagar conversas" | Passa a responder, limpar, apagar e trocar o modo |
+| d | Tirar as duas e manter pedidos | Volta a não ver o Atendimento |
+| e | ADMIN sem permissão nenhuma marcada | Continua com acesso: administrador tem acesso irrestrito à própria empresa |
+
 ### 10.2 Webhook e conversas
 
 | # | Passo | Esperado |
@@ -606,6 +620,10 @@ O assistente do painel tem ferramentas de leitura e de escrita.
 | 10.2.4 | Responder pelo painel | `whatsapp.message.sent`; chega no aparelho |
 | 10.2.5 | Atribuir conversa a um atendente | `whatsapp.conversation.updated` |
 | 10.2.6 | Gerar link de pedido (`orders/:orderId/whatsapp-link`) | Link abre a conversa com o texto certo |
+| 10.2.7 | "Limpar" no cabeçalho da conversa | Mensagens somem, contato **permanece** na lista, rascunho em aberto é cancelado |
+| 10.2.8 | "Apagar" numa conversa sem pedido | Conversa sai da lista; escrever de novo cria uma nova |
+| 10.2.9 | "Apagar" numa conversa que gerou pedido | Recusado, dizendo quantos pedidos e indicando "Limpar histórico" |
+| 10.2.10 | Apagar sem a permissão de responder | 403 |
 
 ### 10.3 Pedido montado por WhatsApp
 
@@ -631,6 +649,9 @@ Rascunho: `MONTANDO → AGUARDANDO_CONFIRMACAO → CONCLUIDO` (ou `CANCELADO`).
 | 10.4.4 | Conferir isolamento | Mensagem institucional não aparece para nenhuma empresa |
 | 10.4.5 | Perfil e foto do canal institucional | Atualizam sem afetar o canal das empresas |
 | 10.4.6 | Automação institucional | Liga e desliga de forma independente |
+| 10.4.7 | "Limpar" na conversa institucional | Mensagens somem, contato permanece na lista |
+| 10.4.8 | "Apagar" na conversa institucional | Conversa sai da lista |
+| 10.4.9 | Apagar conversa que veio de um disparo | Some da lista, mas o alvo do disparo continua registrado como abordado |
 
 ### 10.5 Conversa iniciada pelo super admin
 

@@ -36,6 +36,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   [PermissionKey.CAIXA_VISUALIZAR]: "Ver caixa e turnos",
   [PermissionKey.CAIXA_OPERAR]: "Abrir, movimentar e fechar o caixa",
   [PermissionKey.CAIXA_GERENCIAR]: "Criar e desativar pontos de venda",
+  [PermissionKey.ATENDIMENTO_VISUALIZAR]: "Ver conversas do WhatsApp",
+  [PermissionKey.ATENDIMENTO_RESPONDER]: "Responder e apagar conversas do WhatsApp",
 };
 
 export const TAX_REGIME_LABELS: Record<TaxRegime, string> = {
