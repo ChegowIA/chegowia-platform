@@ -96,6 +96,47 @@ export interface ProductAddon {
   isActive: boolean;
 }
 
+export type ProductOptionSelectionType = "SINGLE" | "MULTIPLE";
+export type ProductOptionPricingRule = "SUM" | "HIGHEST" | "AVERAGE";
+
+export interface ProductOption {
+  id: string;
+  name: string;
+  priceDelta: number;
+  position: number;
+  isActive: boolean;
+}
+
+/**
+ * Grupo de montagem reutilizável em qualquer alimento: tamanhos, sabores,
+ * ponto de preparo, acompanhamentos, massa, cobertura etc.
+ */
+export interface ProductOptionGroup {
+  id: string;
+  name: string;
+  description?: string | null;
+  selectionType: ProductOptionSelectionType;
+  minSelections: number;
+  maxSelections: number;
+  pricingRule: ProductOptionPricingRule;
+  position: number;
+  isActive: boolean;
+  options: ProductOption[];
+}
+
+export interface ProductOptionSelectionInput {
+  groupId: string;
+  optionIds: string[];
+}
+
+export interface OrderItemOptionSelection {
+  groupId: string;
+  groupName: string;
+  pricingRule: ProductOptionPricingRule;
+  priceDelta: number;
+  options: Array<{ id: string; name: string; priceDelta: number }>;
+}
+
 export interface Product {
   id: string;
   categoryId: string;
@@ -108,6 +149,7 @@ export interface Product {
   costPrice?: number | null;
   variations: ProductVariation[];
   addons: ProductAddon[];
+  optionGroups: ProductOptionGroup[];
   /** Tributação do item. Nulo em qualquer campo = herda o padrão da empresa. */
   ncm?: string | null;
   cest?: string | null;
@@ -186,6 +228,7 @@ export interface OrderItem {
   unitPrice: number;
   variationName?: string | null;
   addons?: { name: string; price: number }[] | null;
+  optionSelections?: OrderItemOptionSelection[] | null;
   notes?: string | null;
   totalPrice: number;
 }

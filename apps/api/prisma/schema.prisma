@@ -221,6 +221,23 @@ enum CatalogImportStatus {
   EXPIRADO
 }
 
+// Regras de montagem de um produto. Um grupo pode ser, por exemplo,
+// "Tamanho", "Sabores", "Ponto da carne" ou "Acompanhamentos" — sem prender
+// o cardápio a uma categoria específica de estabelecimento.
+enum ProductOptionSelectionType {
+  SINGLE
+  MULTIPLE
+}
+
+// Ao escolher mais de uma opção, cada operação decide como precificar o
+// conjunto. HIGHEST é a regra tradicional de pizza meio a meio; AVERAGE é
+// útil para cardápios que dividem o valor; SUM cobre adicionais acumuláveis.
+enum ProductOptionPricingRule {
+  SUM
+  HIGHEST
+  AVERAGE
+}
+
 enum TableStatus {
   LIVRE
   OCUPADA
@@ -1056,6 +1073,7 @@ model Product {
   category         Category           @relation(fields: [categoryId], references: [id])
   variations       ProductVariation[]
   addons           ProductAddon[]
+  optionGroups     ProductOptionGroup[]
   orderItems       OrderItem[]
   diningOrderItems DiningOrderItem[]
 
@@ -1085,6 +1103,45 @@ model ProductAddon {
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   @@index([productId])
+}
+
+// Grupo configurável de escolhas de um produto. Ele generaliza tamanhos,
+// sabores, pontos de preparo e qualquer outra composição que o estabelecimento
+// queira oferecer. `minSelections`/`maxSelections` deixam a quantidade livre:
+// uma pizzaria pode permitir 2, 3 ou mais sabores sem alterar código.
+model ProductOptionGroup {
+  id              String                     @id @default(cuid())
+  productId       String
+  name            String
+  description     String?                    @db.Text
+  selectionType   ProductOptionSelectionType @default(SINGLE)
+  minSelections   Int                        @default(0)
+  maxSelections   Int                        @default(1)
+  pricingRule     ProductOptionPricingRule   @default(SUM)
+  position        Int                        @default(0)
+  isActive        Boolean                    @default(true)
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  options ProductOption[]
+
+  @@index([productId, position])
+}
+
+model ProductOption {
+  id                   String             @id @default(cuid())
+  productOptionGroupId String
+  name                 String
+  priceDelta           Decimal            @default(0) @db.Decimal(10, 2)
+  position             Int                @default(0)
+  isActive             Boolean            @default(true)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  group ProductOptionGroup @relation(fields: [productOptionGroupId], references: [id], onDelete: Cascade)
+
+  @@index([productOptionGroupId, position])
 }
 
 // Prévia efêmera de uma importação de cardápio. Guardamos apenas os itens já
@@ -1191,6 +1248,10 @@ model OrderItem {
   variationName       String?
   variationPriceDelta Decimal  @default(0) @db.Decimal(10, 2)
   addons              Json?
+  // Fotografia das escolhas feitas em grupos configuráveis (tamanho, sabores,
+  // ponto, acompanhamentos etc.). O grupo e os preços ficam no histórico mesmo
+  // se o cardápio for alterado depois da venda.
+  optionSelections    Json?
   notes               String?
   totalPrice          Decimal  @db.Decimal(10, 2)
   // Custo unitário no instante da venda. Guardado, não consultado depois: o

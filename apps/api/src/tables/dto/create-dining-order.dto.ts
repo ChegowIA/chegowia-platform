@@ -1,6 +1,19 @@
 import { Type } from "class-transformer";
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from "class-validator";
 
+class DiningOrderOptionSelectionDto {
+  @IsString()
+  @MaxLength(191)
+  groupId: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  @MaxLength(191, { each: true })
+  optionIds: string[];
+}
+
 class DiningOrderItemDto {
   @IsString()
   @MaxLength(191)
@@ -27,6 +40,13 @@ class DiningOrderItemDto {
   @IsString({ each: true })
   @MaxLength(191, { each: true })
   addonIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => DiningOrderOptionSelectionDto)
+  optionSelections?: DiningOrderOptionSelectionDto[];
 }
 
 export class CreateDiningOrderDto {

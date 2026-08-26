@@ -15,6 +15,14 @@ import { MaskedInput } from "@/components/ui/brazil-fields";
 import { Modal } from "@/components/ui/modal";
 import { WaiterAssistant } from "@/components/ai/waiter-assistant";
 import { TableQrCode } from "@/components/tables/table-qr-code";
+import { ProductOptionGroups } from "@/components/catalog/product-option-groups";
+import {
+  optionGroupsTotal,
+  optionSelectionsAreValid,
+  optionSelectionsFromState,
+  optionSelectionsLabel,
+  type ProductOptionSelectionState,
+} from "@/lib/product-options";
 
 interface DiningOrder {
   id: string;
@@ -56,6 +64,16 @@ interface RestaurantTable {
     minutesWithoutOrder: number | null;
     mostDelayedOrderMinutes: number | null;
   } | null;
+}
+
+interface ConfiguredTableItem {
+  key: string;
+  productId: string;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  optionSelections: Array<{ groupId: string; optionIds: string[] }>;
+  choicesLabel?: string;
 }
 
 function useTableAction(request: () => Promise<unknown>, setError: (message: string | null) => void, success?: () => void) {
@@ -107,6 +125,8 @@ export default function MesasPage() {
   const [openForm, setOpenForm] = useState({ customerName: "", customerPhone: "", guestCount: "2", notes: "" });
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
+  const [configuredItems, setConfiguredItems] = useState<ConfiguredTableItem[]>([]);
+  const [configuringProduct, setConfiguringProduct] = useState<Product | null>(null);
   const [orderNotes, setOrderNotes] = useState("");
   const [closeForm, setCloseForm] = useState({ paymentMethod: PaymentMethod.DINHEIRO, customerDocument: "" });
 
@@ -199,13 +219,20 @@ export default function MesasPage() {
       api.post(`/tables/${selectedId}/orders`, {
         items: Object.entries(cart)
           .filter(([, quantity]) => quantity > 0)
-          .map(([productId, quantity]) => ({ productId, quantity })),
+          .map(([productId, quantity]) => ({ productId, quantity }))
+          .concat(configuredItems.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            optionSelections: item.optionSelections,
+          }))),
         notes: orderNotes || undefined,
       }),
     setError,
     () => {
       setOrderOpen(false);
       setCart({});
+      setConfiguredItems([]);
+      setConfiguringProduct(null);
       setOrderNotes("");
     },
   );
@@ -230,7 +257,24 @@ export default function MesasPage() {
   const cartTotal = Object.entries(cart).reduce((sum, [id, quantity]) => {
     const product = products.find((item) => item.id === id);
     return sum + (product ? Number(product.price) * quantity : 0);
-  }, 0);
+  }, 0) + configuredItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const cartItemCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0)
+    + configuredItems.reduce((sum, item) => sum + item.quantity, 0);
+
+  function addConfiguredItem(item: Omit<ConfiguredTableItem, "key">) {
+    const optionKey = item.optionSelections
+      .map((selection) => `${selection.groupId}:${[...selection.optionIds].sort().join(",")}`)
+      .sort()
+      .join("|");
+    const key = `${item.productId}::${optionKey}`;
+    setConfiguredItems((current) => {
+      const existing = current.find((line) => line.key === key);
+      if (existing) {
+        return current.map((line) => line.key === key ? { ...line, quantity: line.quantity + item.quantity } : line);
+      }
+      return [...current, { ...item, key }];
+    });
+  }
   const canCloseSelected = Boolean(canOpenOrOrder && selected?.session?.attendantUserId === user?.id);
   const qrUrl = qrData?.qrToken && origin ? `${origin}/mesa/${qrData.qrToken}` : "";
 
@@ -383,33 +427,89 @@ export default function MesasPage() {
         {selected && (isLoadingQr || !qrUrl ? <div className="rounded-2xl bg-slate-100 p-8 text-center text-sm font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">Preparando QR Code…</div> : <div className="space-y-4"><TableQrCode url={qrUrl} tableName={selected.name} /><div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">Se uma impressão for perdida ou substituída, gere um QR novo. O anterior deixa de funcionar imediatamente.</div><Button type="button" variant="outline" className="w-full" isLoading={rotateQr.isPending} onClick={() => rotateQr.mutate()}>Gerar um novo QR e invalidar o anterior</Button></div>)}
       </Modal>
 
-      <Modal open={orderOpen} onClose={() => setOrderOpen(false)} title={`Novo pedido · ${selected?.name ?? ""}`}>
+      <Modal open={orderOpen} onClose={() => { setOrderOpen(false); setConfiguringProduct(null); }} title={`Novo pedido · ${selected?.name ?? ""}`}>
         <div className="space-y-4">
           <Input placeholder="Buscar no cardápio..." value={search} onChange={(e) => setSearch(e.target.value)} />
           <div className="max-h-[42vh] space-y-2 overflow-y-auto pr-1">
             {filteredProducts.map((product) => {
               const quantity = cart[product.id] ?? 0;
+              const hasConfiguredChoices = product.optionGroups.length > 0;
               return (
                 <div key={product.id} className="flex items-center gap-3 rounded-2xl border border-slate-200 p-3 dark:border-slate-800">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-black text-slate-900 dark:text-slate-100">{product.name}</p>
                     <p className="text-xs font-bold text-brand-700 dark:text-brand-300">{formatCurrency(Number(product.price))}</p>
+                    {hasConfiguredChoices && <p className="mt-1 text-[11px] font-semibold text-slate-400">{product.optionGroups.length} {product.optionGroups.length === 1 ? "grupo de escolha" : "grupos de escolha"}</p>}
                   </div>
-                  <button className="h-8 w-8 rounded-full bg-slate-100 font-black dark:bg-slate-800" onClick={() => setCart({ ...cart, [product.id]: Math.max(0, quantity - 1) })}>−</button>
-                  <span className="w-5 text-center text-sm font-black">{quantity}</span>
-                  <button className="h-8 w-8 rounded-full bg-brand-600 font-black text-white" onClick={() => setCart({ ...cart, [product.id]: quantity + 1 })}>+</button>
+                  {hasConfiguredChoices ? <Button type="button" size="sm" onClick={() => setConfiguringProduct(product)}>Montar</Button> : <><button className="h-8 w-8 rounded-full bg-slate-100 font-black dark:bg-slate-800" onClick={() => setCart({ ...cart, [product.id]: Math.max(0, quantity - 1) })}>−</button><span className="w-5 text-center text-sm font-black">{quantity}</span><button className="h-8 w-8 rounded-full bg-brand-600 font-black text-white" onClick={() => setCart({ ...cart, [product.id]: quantity + 1 })}>+</button></>}
                 </div>
               );
             })}
           </div>
+          {configuredItems.length > 0 && <div className="rounded-2xl border border-brand-200 bg-brand-50/70 p-3 dark:border-brand-900/60 dark:bg-brand-950/20"><p className="text-xs font-black uppercase tracking-wide text-brand-800 dark:text-brand-200">Itens montados</p><div className="mt-2 space-y-2">{configuredItems.map((item) => <div key={item.key} className="flex items-start justify-between gap-3 text-sm"><div className="min-w-0"><p className="font-black text-slate-900 dark:text-slate-100">{item.quantity}× {item.name}</p>{item.choicesLabel && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{item.choicesLabel}</p>}</div><div className="flex shrink-0 items-center gap-2"><span className="font-black text-brand-700 dark:text-brand-300">{formatCurrency(item.unitPrice * item.quantity)}</span><button type="button" className="text-xs font-bold text-rose-700 hover:underline dark:text-rose-300" onClick={() => setConfiguredItems((current) => current.filter((line) => line.key !== item.key))}>Remover</button></div></div>)}</div></div>}
           <Textarea placeholder="Observação geral da rodada..." value={orderNotes} onChange={(e) => setOrderNotes(e.target.value)} />
-          <Button className="w-full justify-between" disabled={!Object.values(cart).some(Boolean)} isLoading={addOrder.isPending} onClick={() => addOrder.mutate()}>
+          <Button className="w-full justify-between" disabled={!cartItemCount} isLoading={addOrder.isPending} onClick={() => addOrder.mutate()}>
             <span>Enviar para produção</span><span>{formatCurrency(cartTotal)}</span>
           </Button>
         </div>
       </Modal>
+      {configuringProduct && <InternalProductConfigurator product={configuringProduct} onClose={() => setConfiguringProduct(null)} onConfirm={(item) => { addConfiguredItem(item); setConfiguringProduct(null); }} />}
       {isWaiter && <WaiterAssistant />}
     </div>
+  );
+}
+
+function InternalProductConfigurator({
+  product,
+  onClose,
+  onConfirm,
+}: {
+  product: Product;
+  onClose: () => void;
+  onConfirm: (item: Omit<ConfiguredTableItem, "key">) => void;
+}) {
+  const [selections, setSelections] = useState<ProductOptionSelectionState>({});
+  const [quantity, setQuantity] = useState(1);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const choicesTotal = optionGroupsTotal(product.optionGroups, selections);
+  const choicesValid = optionSelectionsAreValid(product.optionGroups, selections);
+  const choicesLabel = optionSelectionsLabel(product.optionGroups, selections);
+  const unitPrice = Number(product.price) + choicesTotal;
+
+  function confirm() {
+    if (!choicesValid) {
+      setFeedback("Revise as escolhas obrigatórias antes de adicionar à comanda.");
+      return;
+    }
+    onConfirm({
+      productId: product.id,
+      name: product.name,
+      quantity,
+      unitPrice,
+      optionSelections: optionSelectionsFromState(product.optionGroups, selections),
+      choicesLabel: choicesLabel || undefined,
+    });
+  }
+
+  return (
+    <Modal open onClose={onClose} title={`Montar · ${product.name}`}>
+      <div className="space-y-4">
+        {product.description && <p className="text-sm text-slate-500 dark:text-slate-400">{product.description}</p>}
+        <ProductOptionGroups
+          groups={product.optionGroups}
+          selections={selections}
+          onChange={(groupId, optionIds) => {
+            setSelections((current) => ({ ...current, [groupId]: optionIds }));
+            setFeedback(null);
+          }}
+          onLimitReached={setFeedback}
+          namePrefix={`internal-table-product-${product.id}`}
+        />
+        {feedback && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">{feedback}</p>}
+        <div className="flex items-center justify-between rounded-2xl bg-slate-100 p-3 dark:bg-slate-800"><div className="flex items-center gap-3"><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-white text-lg font-black shadow-sm dark:bg-slate-900" onClick={() => setQuantity((value) => Math.max(1, value - 1))}>−</button><span className="w-5 text-center font-black">{quantity}</span><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-white text-lg font-black shadow-sm dark:bg-slate-900" onClick={() => setQuantity((value) => value + 1)}>+</button></div><span className="text-xl font-black text-brand-700 dark:text-brand-300">{formatCurrency(unitPrice * quantity)}</span></div>
+        <Button className="w-full" disabled={!choicesValid} onClick={confirm}>Adicionar à comanda</Button>
+      </div>
+    </Modal>
   );
 }
 

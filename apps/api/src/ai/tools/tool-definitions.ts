@@ -123,7 +123,7 @@ export const WHATSAPP_ORDER_TOOLS: AIToolDefinition[] = [
   {
     name: "updateWhatsAppCart",
     description:
-      "Altera o carrinho persistente desta conversa. Use somente IDs retornados por searchCatalog. Nunca informe preço manualmente: o servidor resolve preço, variação e adicionais ativos da empresa.",
+      "Altera o carrinho persistente desta conversa. Use somente IDs retornados por searchCatalog. Nunca informe preço manualmente: o servidor resolve preço, variação, adicionais e regras de grupos configuráveis da empresa.",
     parameters: {
       type: "object",
       properties: {
@@ -133,6 +133,19 @@ export const WHATSAPP_ORDER_TOOLS: AIToolDefinition[] = [
         quantity: { type: "integer", minimum: 1, maximum: 99, description: "Quantidade; obrigatória para ADD e SET." },
         variationId: { type: "string", description: "ID da variação retornada por searchCatalog, se o cliente escolheu uma." },
         addonIds: { type: "array", items: { type: "string" }, description: "IDs dos adicionais retornados por searchCatalog." },
+        optionSelections: {
+          type: "array",
+          description: "Escolhas de grupos configuráveis, como tamanho e sabores. Informe apenas IDs retornados por searchCatalog.",
+          items: {
+            type: "object",
+            properties: {
+              groupId: { type: "string" },
+              optionIds: { type: "array", items: { type: "string" } },
+            },
+            required: ["groupId", "optionIds"],
+            additionalProperties: false,
+          },
+        },
         notes: { type: "string", description: "Observação do item, como retirar cebola." },
       },
       required: ["operation"],

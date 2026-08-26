@@ -55,6 +55,7 @@ export interface TrustedOrderItemInput {
   quantity: number;
   variationId?: string | null;
   addonIds?: string[] | null;
+  optionSelections?: Array<{ groupId: string; optionIds: string[] }> | null;
   notes?: string | null;
 }
 
@@ -83,6 +84,13 @@ export interface PreparedWhatsAppCheckout {
     variationPriceDelta: number;
     addonIds: string[];
     addons: Array<{ name: string; price: number }>;
+    optionSelections?: Array<{
+      groupId: string;
+      groupName: string;
+      pricingRule: "SUM" | "HIGHEST" | "AVERAGE";
+      priceDelta: number;
+      options: Array<{ id: string; name: string; priceDelta: number }>;
+    }>;
     notes: string | null;
     totalPrice: number;
   }>;
@@ -106,6 +114,12 @@ export function whatsappCheckoutFingerprint(checkout: PreparedWhatsAppCheckout) 
       variationPriceDelta: item.variationPriceDelta,
       addonIds: [...item.addonIds].sort(),
       addons: item.addons.map((addon) => ({ name: addon.name, price: addon.price })),
+      optionSelections: (item.optionSelections ?? []).map((group) => ({
+        groupId: group.groupId,
+        pricingRule: group.pricingRule,
+        priceDelta: group.priceDelta,
+        optionIds: group.options.map((option) => option.id).sort(),
+      })).sort((a, b) => a.groupId.localeCompare(b.groupId)),
       notes: item.notes,
       totalPrice: item.totalPrice,
     })),
@@ -174,59 +188,14 @@ export class OrdersService {
     const deliveryQuote = await this.calculateDeliveryQuote(company, address);
 
     return tenantContext.runAsCompany(company.id, async () => {
-      const productIds = dto.items.map((i) => i.productId);
-      const products = await this.db().product.findMany({
-        where: { id: { in: productIds }, isActive: true },
-        include: { variations: true, addons: true },
-      });
-      const productMap = new Map(products.map((p: any) => [p.id, p]));
-
-      let subtotal = 0;
-      const itemsData = dto.items.map((item) => {
-        const product = productMap.get(item.productId) as any;
-        if (!product) throw new BadRequestException(`Produto ${item.productId} indisponível.`);
-
-        const unitPrice = Number(product.price);
-        let variationName: string | undefined;
-        let variationPriceDelta = 0;
-        if (item.variationId) {
-          const variation = product.variations.find((v: any) => v.id === item.variationId);
-          if (!variation) throw new BadRequestException("Variação inválida.");
-          variationName = variation.name;
-          variationPriceDelta = Number(variation.priceDelta);
-        }
-
-        const chosenAddons = (item.addonIds ?? []).map((addonId) => {
-          const addon = product.addons.find((a: any) => a.id === addonId);
-          if (!addon) throw new BadRequestException("Adicional inválido.");
-          return { name: addon.name, price: Number(addon.price) };
-        });
-        const addonsTotal = chosenAddons.reduce((sum, a) => sum + a.price, 0);
-
-        const lineUnitPrice = unitPrice + variationPriceDelta;
-        const totalPrice = (lineUnitPrice + addonsTotal) * item.quantity;
-        subtotal += totalPrice;
-
-        return {
-          productId: product.id,
-          productName: product.name,
-          quantity: item.quantity,
-          unitPrice: lineUnitPrice,
-          // Fotografado agora: o custo do produto muda, e recalcular a margem
-          // pelo custo de hoje reescreveria o resultado de um mês fechado.
-          unitCost: product.costPrice === null || product.costPrice === undefined
-            ? null
-            : Number(product.costPrice),
-          variationName,
-          variationPriceDelta,
-          addons: chosenAddons,
-          notes: item.notes,
-          totalPrice,
-        };
-      });
+      // O checkout do site usa a mesma resolução confiável do WhatsApp: o
+      // navegador envia só IDs; preço, regras mínimas/máximas e a fotografia
+      // das escolhas são sempre definidos novamente no servidor.
+      const itemsData = await this.resolveTrustedOrderItems(dto.items);
+      const subtotal = this.roundCurrency(itemsData.reduce((sum, item) => sum + item.totalPrice, 0));
 
       const deliveryFee = deliveryQuote.deliveryFee;
-      const total = subtotal + deliveryFee;
+      const total = this.roundCurrency(subtotal + deliveryFee);
 
       const order = await this.db().order.create({
         data: {
@@ -246,7 +215,7 @@ export class OrdersService {
           total,
           paymentMethod: dto.paymentMethod,
           notes: dto.notes,
-          items: { create: itemsData },
+          items: { create: itemsData.map((item) => this.persistedOrderItem(item)) },
           statusHistory: { create: { status: OrderStatus.RECEBIDO, changedByUserId: customerId } },
           delivery: { create: { companyId: company.id } },
           payment: { create: { companyId: company.id, method: dto.paymentMethod, amount: total } },
@@ -387,18 +356,7 @@ export class OrdersService {
               paymentMethod: checkout.paymentMethod,
               notes: input.notes?.trim() || null,
               items: {
-                create: checkout.items.map((item) => ({
-                  productId: item.productId,
-                  productName: item.productName,
-                  quantity: item.quantity,
-                  unitPrice: item.unitPrice,
-                  unitCost: item.unitCost,
-                  variationName: item.variationName,
-                  variationPriceDelta: item.variationPriceDelta,
-                  addons: item.addons,
-                  notes: item.notes,
-                  totalPrice: item.totalPrice,
-                })),
+                create: checkout.items.map((item) => this.persistedOrderItem(item)),
               },
               statusHistory: { create: { status: OrderStatus.RECEBIDO } },
               delivery: { create: { companyId } },
@@ -459,6 +417,12 @@ export class OrdersService {
       items: original.items.map((item: any) => ({
         productId: item.productId,
         quantity: item.quantity,
+        optionSelections: Array.isArray(item.optionSelections)
+          ? item.optionSelections.map((group: any) => ({
+              groupId: group.groupId,
+              optionIds: Array.isArray(group.options) ? group.options.map((option: any) => option.id) : [],
+            }))
+          : undefined,
         notes: item.notes ?? undefined,
       })),
     });
@@ -769,6 +733,13 @@ export class OrdersService {
       include: {
         variations: { where: { isActive: true } },
         addons: { where: { isActive: true } },
+        optionGroups: {
+          where: { isActive: true },
+          orderBy: { position: "asc" },
+          include: {
+            options: { where: { isActive: true }, orderBy: { position: "asc" } },
+          },
+        },
       },
     });
     const productsById = new Map(products.map((product: any) => [product.id, product]));
@@ -792,7 +763,13 @@ export class OrdersService {
         if (!addon) throw new BadRequestException(`Um adicional escolhido para ${product.name} não está disponível.`);
         return { name: addon.name, price: Number(addon.price) };
       });
-      const unitPrice = this.roundCurrency(Number(product.price) + Number(variation?.priceDelta ?? 0));
+      const { optionSelections, totalPriceDelta: optionGroupsTotal } = this.resolveProductOptionSelections(
+        product,
+        input.optionSelections,
+      );
+      const unitPrice = this.roundCurrency(
+        Number(product.price) + Number(variation?.priceDelta ?? 0) + optionGroupsTotal,
+      );
       const addonsTotal = addons.reduce((sum, addon) => sum + addon.price, 0);
       const totalPrice = this.roundCurrency((unitPrice + addonsTotal) * quantity);
       const notes = typeof input.notes === "string" ? input.notes.trim().slice(0, 500) || null : null;
@@ -808,10 +785,105 @@ export class OrdersService {
         variationPriceDelta: Number(variation?.priceDelta ?? 0),
         addonIds,
         addons,
+        optionSelections,
         notes,
         totalPrice,
       };
     });
+  }
+
+  /**
+   * Confere as escolhas contra a configuração atual do produto e devolve uma
+   * fotografia pronta para o pedido. Nenhum preço vindo do navegador/WhatsApp
+   * é usado: a regra de grupo decide se soma, cobra o maior ou calcula média.
+   */
+  private resolveProductOptionSelections(product: any, rawSelections: TrustedOrderItemInput["optionSelections"]) {
+    if (rawSelections !== undefined && rawSelections !== null && !Array.isArray(rawSelections)) {
+      throw new BadRequestException(`As escolhas de ${product.name} estão inválidas.`);
+    }
+    const entries = rawSelections ?? [];
+    if (entries.length > 20) throw new BadRequestException("Um item pode ter no máximo 20 grupos de escolhas.");
+
+    const submittedByGroup = new Map<string, string[]>();
+    for (const raw of entries) {
+      if (!raw || typeof raw !== "object") throw new BadRequestException(`As escolhas de ${product.name} estão inválidas.`);
+      const groupId = typeof raw.groupId === "string" ? raw.groupId.trim() : "";
+      if (!groupId || groupId.length > 191 || submittedByGroup.has(groupId)) {
+        throw new BadRequestException(`Há um grupo de escolhas inválido em ${product.name}.`);
+      }
+      if (!Array.isArray(raw.optionIds) || raw.optionIds.length === 0 || raw.optionIds.length > 30) {
+        throw new BadRequestException(`Escolha ao menos uma opção válida em ${product.name}.`);
+      }
+      const optionIds = raw.optionIds.map((id) => typeof id === "string" ? id.trim() : "");
+      if (optionIds.some((id) => !id || id.length > 191) || new Set(optionIds).size !== optionIds.length) {
+        throw new BadRequestException(`Há opções repetidas ou inválidas em ${product.name}.`);
+      }
+      submittedByGroup.set(groupId, optionIds);
+    }
+
+    const groups = Array.isArray(product.optionGroups) ? product.optionGroups : [];
+    const knownGroupIds = new Set(groups.map((group: any) => group.id));
+    for (const groupId of submittedByGroup.keys()) {
+      if (!knownGroupIds.has(groupId)) {
+        throw new BadRequestException(`Um grupo de escolhas de ${product.name} não está mais disponível.`);
+      }
+    }
+
+    const optionSelections: Array<{
+      groupId: string;
+      groupName: string;
+      pricingRule: "SUM" | "HIGHEST" | "AVERAGE";
+      priceDelta: number;
+      options: Array<{ id: string; name: string; priceDelta: number }>;
+    }> = [];
+    let totalPriceDelta = 0;
+
+    for (const group of groups) {
+      const optionIds = submittedByGroup.get(group.id) ?? [];
+      const min = Number(group.minSelections);
+      const max = Number(group.maxSelections);
+      if (optionIds.length < min || optionIds.length > max) {
+        throw new BadRequestException(this.choiceCountMessage(product.name, group.name, min, max));
+      }
+      if (!optionIds.length) continue;
+
+      const optionsById = new Map((group.options ?? []).map((option: any) => [option.id, option]));
+      const options = optionIds.map((optionId) => {
+        const option = optionsById.get(optionId) as any;
+        if (!option) {
+          throw new BadRequestException(`Uma opção escolhida em "${group.name}" não está disponível para ${product.name}.`);
+        }
+        return { id: option.id, name: option.name, priceDelta: Number(option.priceDelta) };
+      });
+      const deltas = options.map((option) => option.priceDelta);
+      const pricingRule = String(group.pricingRule) as "SUM" | "HIGHEST" | "AVERAGE";
+      const priceDelta = this.roundCurrency(
+        pricingRule === "HIGHEST"
+          ? Math.max(...deltas)
+          : pricingRule === "AVERAGE"
+            ? deltas.reduce((sum, delta) => sum + delta, 0) / deltas.length
+            : deltas.reduce((sum, delta) => sum + delta, 0),
+      );
+      totalPriceDelta += priceDelta;
+      optionSelections.push({ groupId: group.id, groupName: group.name, pricingRule, priceDelta, options });
+    }
+
+    return { optionSelections, totalPriceDelta: this.roundCurrency(totalPriceDelta) };
+  }
+
+  private choiceCountMessage(productName: string, groupName: string, min: number, max: number) {
+    if (min === max) {
+      return `Escolha exatamente ${min} ${min === 1 ? "opção" : "opções"} em "${groupName}" para ${productName}.`;
+    }
+    if (min > 0) {
+      return `Escolha entre ${min} e ${max} opções em "${groupName}" para ${productName}.`;
+    }
+    return `Escolha no máximo ${max} ${max === 1 ? "opção" : "opções"} em "${groupName}" para ${productName}.`;
+  }
+
+  private persistedOrderItem(item: any) {
+    const { variationId: _variationId, addonIds: _addonIds, ...data } = item;
+    return data;
   }
 
   private findExistingWhatsAppOrder(companyId: string, draftId: string) {

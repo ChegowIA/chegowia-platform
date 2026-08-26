@@ -142,6 +142,7 @@ function CheckoutForm() {
           quantity: i.quantity,
           variationId: i.variationId,
           addonIds: i.addonIds,
+          optionSelections: i.optionSelections,
           notes: i.notes,
         })),
       });
@@ -259,9 +260,10 @@ function CheckoutForm() {
         </CardHeader>
         <CardContent className="space-y-2">
           {items.map((item) => (
-            <div key={item.key} className="flex justify-between text-sm">
-              <span className="text-slate-600 dark:text-slate-300">
-                {item.quantity}x {item.name}
+            <div key={item.key} className="flex justify-between gap-3 text-sm">
+              <span className="min-w-0 text-slate-600 dark:text-slate-300">
+                <span className="block">{item.quantity}x {item.name}</span>
+                {item.optionSelectionsLabel && <span className="mt-0.5 block text-xs text-slate-400">{item.optionSelectionsLabel}</span>}
               </span>
               <span className="text-slate-900 dark:text-slate-100">{formatCurrency(item.unitPrice * item.quantity)}</span>
             </div>

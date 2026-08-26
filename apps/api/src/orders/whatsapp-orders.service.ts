@@ -19,6 +19,7 @@ interface CartLine extends TrustedOrderItemInput {
   id: string;
   variationId?: string | null;
   addonIds: string[];
+  optionSelections: Array<{ groupId: string; optionIds: string[] }>;
   notes?: string | null;
 }
 
@@ -73,6 +74,7 @@ export class WhatsAppOrdersService {
       quantity?: number;
       variationId?: string;
       addonIds?: string[];
+      optionSelections?: Array<{ groupId?: string; optionIds?: string[] }>;
       notes?: string;
     },
   ) {
@@ -106,6 +108,7 @@ export class WhatsAppOrdersService {
           quantity: normalizeQuantity(input.quantity),
           variationId: cleanIdentifier(input.variationId) || null,
           addonIds: normalizeIds(input.addonIds),
+          optionSelections: normalizeOptionSelections(input.optionSelections),
           notes: cleanOptionalText(input.notes, 500),
         };
         await this.assertCartLineAvailable(nextLine);
@@ -374,6 +377,10 @@ export class WhatsAppOrdersService {
       include: {
         variations: { where: { isActive: true }, select: { id: true } },
         addons: { where: { isActive: true }, select: { id: true } },
+        optionGroups: {
+          where: { isActive: true },
+          select: { id: true, options: { where: { isActive: true }, select: { id: true } } },
+        },
       },
     });
     if (!product) throw new BadRequestException("Esse produto não está disponível nesta empresa.");
@@ -383,6 +390,18 @@ export class WhatsAppOrdersService {
     const availableAddons = new Set(product.addons.map((addon: any) => addon.id));
     if (line.addonIds.some((addonId) => !availableAddons.has(addonId))) {
       throw new BadRequestException("Um adicional escolhido não está disponível para esse produto.");
+    }
+    const availableGroups = new Map<string, Set<string>>(
+      (product.optionGroups ?? []).map((group: any) => [
+        String(group.id),
+        new Set<string>((group.options ?? []).map((option: any) => String(option.id))),
+      ]),
+    );
+    for (const selection of line.optionSelections) {
+      const availableOptions = availableGroups.get(selection.groupId);
+      if (!availableOptions || selection.optionIds.some((optionId) => !availableOptions.has(optionId))) {
+        throw new BadRequestException("Uma escolha configurável não está disponível para esse produto.");
+      }
     }
   }
 
@@ -414,6 +433,16 @@ export class WhatsAppOrdersService {
           include: {
             variations: { where: { isActive: true }, select: { id: true, name: true, priceDelta: true } },
             addons: { where: { isActive: true }, select: { id: true, name: true, price: true } },
+            optionGroups: {
+              where: { isActive: true },
+              orderBy: { position: "asc" },
+              select: {
+                id: true,
+                name: true,
+                pricingRule: true,
+                options: { where: { isActive: true }, orderBy: { position: "asc" }, select: { id: true, name: true, priceDelta: true } },
+              },
+            },
           },
         })
       : [];
@@ -422,6 +451,16 @@ export class WhatsAppOrdersService {
       const product = productMap.get(line.productId) as any;
       const variation = line.variationId ? product?.variations.find((item: any) => item.id === line.variationId) : null;
       const addons = line.addonIds.map((id) => product?.addons.find((item: any) => item.id === id)).filter(Boolean);
+      const optionSelections = line.optionSelections.map((selection) => {
+        const group = product?.optionGroups.find((item: any) => item.id === selection.groupId);
+        const options = selection.optionIds.map((id) => group?.options.find((item: any) => item.id === id)).filter(Boolean);
+        return group ? {
+          id: group.id,
+          name: group.name,
+          pricingRule: group.pricingRule,
+          options: options.map((option: any) => ({ id: option.id, name: option.name, priceDelta: Number(option.priceDelta) })),
+        } : null;
+      }).filter(Boolean);
       return {
         lineId: line.id,
         productId: line.productId,
@@ -429,6 +468,7 @@ export class WhatsAppOrdersService {
         quantity: line.quantity,
         variation: variation ? { id: variation.id, name: variation.name, priceDelta: Number(variation.priceDelta) } : null,
         addons: addons.map((addon: any) => ({ id: addon.id, name: addon.name, price: Number(addon.price) })),
+        optionSelections,
         notes: line.notes ?? null,
       };
     });
@@ -514,6 +554,28 @@ function normalizeQuantity(value: unknown) {
 function normalizeIds(values: unknown) {
   if (!Array.isArray(values)) return [];
   if (values.length > 20) throw new BadRequestException("Um item pode ter no máximo 20 adicionais.");
+  return [...new Set(values.map(cleanIdentifier).filter((value): value is string => Boolean(value)))].sort();
+}
+
+function normalizeOptionSelections(value: unknown): Array<{ groupId: string; optionIds: string[] }> {
+  if (!Array.isArray(value)) return [];
+  if (value.length > 20) throw new BadRequestException("Um item pode ter no máximo 20 grupos de escolhas.");
+  const selections: Array<{ groupId: string; optionIds: string[] }> = [];
+  const groupIds = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue;
+    const groupId = cleanIdentifier((raw as Record<string, unknown>).groupId);
+    const optionIds = normalizeOptionIds((raw as Record<string, unknown>).optionIds);
+    if (!groupId || !optionIds.length || groupIds.has(groupId)) continue;
+    groupIds.add(groupId);
+    selections.push({ groupId, optionIds });
+  }
+  return selections.sort((a, b) => a.groupId.localeCompare(b.groupId));
+}
+
+function normalizeOptionIds(values: unknown) {
+  if (!Array.isArray(values)) return [];
+  if (values.length > 30) throw new BadRequestException("Um grupo pode ter no máximo 30 opções escolhidas.");
   return [...new Set(values.map(cleanIdentifier).filter((value): value is string => Boolean(value)))].sort();
 }
 
@@ -605,6 +667,7 @@ function readCart(value: unknown): CartLine[] {
       quantity,
       variationId: cleanIdentifier(raw.variationId),
       addonIds: normalizeIds(raw.addonIds),
+      optionSelections: normalizeOptionSelections(raw.optionSelections),
       notes: cleanOptionalText(raw.notes, 500),
     });
   }
@@ -616,6 +679,9 @@ function cartLineKey(line: CartLine) {
     productId: line.productId,
     variationId: line.variationId ?? null,
     addonIds: [...line.addonIds].sort(),
+    optionSelections: line.optionSelections
+      .map((selection) => ({ groupId: selection.groupId, optionIds: [...selection.optionIds].sort() }))
+      .sort((a, b) => a.groupId.localeCompare(b.groupId)),
     notes: line.notes ?? null,
   });
 }
@@ -643,6 +709,7 @@ function proposalSnapshot(checkout: PreparedWhatsAppCheckout) {
         unitPrice: item.unitPrice,
         variation: item.variationName,
         addons: item.addons,
+        optionSelections: item.optionSelections ?? [],
         notes: item.notes,
         totalPrice: item.totalPrice,
       })),

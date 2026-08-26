@@ -107,4 +107,64 @@ describe("Regras críticas de domínio", () => {
       { latitude: -23.57, longitude: -46.66 },
     )).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it("aceita uma pizza com quantidade dinâmica de sabores e cobra somente o maior adicional", () => {
+    const orders = new OrdersService({} as never, {} as never, {} as never, {} as never);
+    const pizza = {
+      name: "Pizza especial",
+      optionGroups: [
+        {
+          id: "tamanho",
+          name: "Tamanho",
+          minSelections: 1,
+          maxSelections: 1,
+          pricingRule: "SUM",
+          options: [
+            { id: "media", name: "Média", priceDelta: 0 },
+            { id: "grande", name: "Grande", priceDelta: 10 },
+          ],
+        },
+        {
+          id: "sabores",
+          name: "Sabores",
+          minSelections: 1,
+          maxSelections: 3,
+          pricingRule: "HIGHEST",
+          options: [
+            { id: "mussarela", name: "Mussarela", priceDelta: 4 },
+            { id: "calabresa", name: "Calabresa", priceDelta: 7 },
+            { id: "camarão", name: "Camarão", priceDelta: 12 },
+          ],
+        },
+      ],
+    };
+
+    const result = (orders as any).resolveProductOptionSelections(pizza, [
+      { groupId: "tamanho", optionIds: ["grande"] },
+      { groupId: "sabores", optionIds: ["mussarela", "calabresa", "camarão"] },
+    ]);
+
+    expect(result.totalPriceDelta).toBe(22);
+    expect(result.optionSelections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ groupName: "Sabores", pricingRule: "HIGHEST", priceDelta: 12 }),
+    ]));
+  });
+
+  it("exige os grupos obrigatórios configurados pelo estabelecimento", () => {
+    const orders = new OrdersService({} as never, {} as never, {} as never, {} as never);
+    const product = {
+      name: "Prato montável",
+      optionGroups: [{
+        id: "ponto",
+        name: "Ponto da carne",
+        minSelections: 1,
+        maxSelections: 1,
+        pricingRule: "SUM",
+        options: [{ id: "ao-ponto", name: "Ao ponto", priceDelta: 0 }],
+      }],
+    };
+
+    expect(() => (orders as any).resolveProductOptionSelections(product, []))
+      .toThrow(/Ponto da carne/i);
+  });
 });

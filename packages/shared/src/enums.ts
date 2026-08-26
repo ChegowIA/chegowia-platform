@@ -253,6 +253,17 @@ export enum UsageLedgerStatus {
   FALHOU = "FALHOU",
 }
 
+export enum ProductOptionSelectionType {
+  SINGLE = "SINGLE",
+  MULTIPLE = "MULTIPLE",
+}
+
+export enum ProductOptionPricingRule {
+  SUM = "SUM",
+  HIGHEST = "HIGHEST",
+  AVERAGE = "AVERAGE",
+}
+
 export enum TableStatus {
   LIVRE = "LIVRE",
   OCUPADA = "OCUPADA",

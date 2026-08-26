@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { deliveryAddressLabel, googleMapsRouteUrl, LatLng } from "@/lib/delivery-maps";
 import { Delivery, Order } from "@/lib/types";
+import { storedOptionSelectionsLabel } from "@/lib/product-options";
 import { formatCurrency, formatDateTime } from "@/lib/format";
 import { connectSocket, disconnectSocket } from "@/lib/socket-client";
 import { PublicHeader } from "@/components/layout/public-header";
@@ -104,6 +105,9 @@ export default function OrderTrackingPage() {
                       {item.variationName && <p className="text-slate-500 dark:text-slate-400">{item.variationName}</p>}
                       {item.addons && item.addons.length > 0 && (
                         <p className="text-slate-500 dark:text-slate-400">+ {item.addons.map((a) => a.name).join(", ")}</p>
+                      )}
+                      {storedOptionSelectionsLabel(item.optionSelections) && (
+                        <p className="text-slate-500 dark:text-slate-400">{storedOptionSelectionsLabel(item.optionSelections)}</p>
                       )}
                       {item.notes && <p className="italic text-slate-400">Obs: {item.notes}</p>}
                     </div>

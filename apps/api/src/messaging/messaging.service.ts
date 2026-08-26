@@ -1385,10 +1385,11 @@ export class MessagingService {
   private orderSummaryText(order: any, companyName: string): string {
     const lines = [
       `Olá, ${companyName}! Meu pedido #${order.id.slice(-6).toUpperCase()}:`,
-      ...order.items.map(
-        (item: any) =>
-          `• ${item.quantity}x ${item.productName}${item.variationName ? ` (${item.variationName})` : ""} — R$ ${Number(item.totalPrice).toFixed(2)}`,
-      ),
+      ...order.items.map((item: any) => {
+        const selections = this.optionSelectionsSummary(item.optionSelections);
+        const configuration = [item.variationName, selections].filter(Boolean).join(" · ");
+        return `• ${item.quantity}x ${item.productName}${configuration ? ` (${configuration})` : ""} — R$ ${Number(item.totalPrice).toFixed(2)}`;
+      }),
       `Subtotal: R$ ${Number(order.subtotal).toFixed(2)}`,
       `Entrega: R$ ${Number(order.deliveryFee).toFixed(2)}`,
       `Total: R$ ${Number(order.total).toFixed(2)}`,
@@ -1396,6 +1397,22 @@ export class MessagingService {
       `Pagamento: ${order.paymentMethod}`,
     ];
     return lines.join("\n");
+  }
+
+  private optionSelectionsSummary(optionSelections: unknown): string {
+    if (!Array.isArray(optionSelections)) return "";
+
+    return optionSelections
+      .map((group: any) => {
+        const optionNames = Array.isArray(group?.options)
+          ? group.options.map((option: any) => option?.name).filter((name: unknown): name is string => typeof name === "string" && name.trim().length > 0)
+          : [];
+        if (!optionNames.length) return "";
+        const groupName = typeof group?.groupName === "string" && group.groupName.trim().length > 0 ? `${group.groupName}: ` : "";
+        return `${groupName}${optionNames.join(", ")}`;
+      })
+      .filter(Boolean)
+      .join(" · ");
   }
 
   async buildOrderContactLink(orderId: string) {

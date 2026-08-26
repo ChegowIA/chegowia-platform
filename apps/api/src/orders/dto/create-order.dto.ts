@@ -1,5 +1,6 @@
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsEnum,
@@ -10,6 +11,17 @@ import {
   ValidateNested,
 } from "class-validator";
 import { PaymentMethod } from "@prisma/client";
+
+export class ProductOptionSelectionDto {
+  @IsString()
+  groupId: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(30)
+  @IsString({ each: true })
+  optionIds: string[];
+}
 
 export class CreateOrderItemDto {
   @IsString()
@@ -27,6 +39,13 @@ export class CreateOrderItemDto {
   @IsArray()
   @IsString({ each: true })
   addonIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => ProductOptionSelectionDto)
+  optionSelections?: ProductOptionSelectionDto[];
 
   @IsOptional()
   @IsString()

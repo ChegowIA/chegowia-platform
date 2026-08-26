@@ -16,6 +16,14 @@ import { Modal } from "@/components/ui/modal";
 import { Input, Textarea } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ProductImage } from "@/components/catalog/product-image";
+import { ProductOptionGroups } from "@/components/catalog/product-option-groups";
+import {
+  optionGroupsTotal,
+  optionSelectionsAreValid,
+  optionSelectionsFromState,
+  optionSelectionsLabel,
+  type ProductOptionSelectionState,
+} from "@/lib/product-options";
 import { StoreAssistant } from "@/components/ai/store-assistant";
 
 interface MenuResponse {
@@ -314,6 +322,8 @@ function ProductModal({
 }) {
   const [variationId, setVariationId] = useState<string | undefined>(product.variations[0]?.id);
   const [addonIds, setAddonIds] = useState<string[]>([]);
+  const [optionSelections, setOptionSelections] = useState<ProductOptionSelectionState>({});
+  const [choiceFeedback, setChoiceFeedback] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [quantity, setQuantity] = useState(1);
   const addItem = useCartStore((s) => s.addItem);
@@ -321,19 +331,29 @@ function ProductModal({
 
   const variation = product.variations.find((item) => item.id === variationId);
   const selectedAddons = product.addons.filter((item) => addonIds.includes(item.id));
+  const configuredOptionsTotal = optionGroupsTotal(product.optionGroups, optionSelections);
+  const configuredOptionsValid = optionSelectionsAreValid(product.optionGroups, optionSelections);
+  const configuredOptionsLabel = optionSelectionsLabel(product.optionGroups, optionSelections);
   const unitPrice =
     Number(product.price) +
     Number(variation?.priceDelta ?? 0) +
-    selectedAddons.reduce((sum, addon) => sum + Number(addon.price), 0);
+    selectedAddons.reduce((sum, addon) => sum + Number(addon.price), 0) +
+    configuredOptionsTotal;
 
   function toggleAddon(id: string) {
     setAddonIds((prev) => (prev.includes(id) ? prev.filter((addonId) => addonId !== id) : [...prev, id]));
   }
 
   function handleConfirm() {
+    if (!configuredOptionsValid) {
+      setChoiceFeedback("Revise as escolhas obrigatórias deste produto antes de adicionar.");
+      return;
+    }
     setCompany(companySlug);
     const sortedAddonIds = [...addonIds].sort();
-    const key = [product.id, variationId ?? "", sortedAddonIds.join(",")].join("::");
+    const selectedOptionGroups = optionSelectionsFromState(product.optionGroups, optionSelections);
+    const optionKey = selectedOptionGroups.map((selection) => `${selection.groupId}:${selection.optionIds.join(",")}`).join("|");
+    const key = [product.id, variationId ?? "", sortedAddonIds.join(","), optionKey].join("::");
     addItem({
       key,
       productId: product.id,
@@ -344,6 +364,8 @@ function ProductModal({
       variationName: variation?.name,
       addonIds: sortedAddonIds.length ? sortedAddonIds : undefined,
       addonsLabel: selectedAddons.length ? selectedAddons.map((addon) => addon.name).join(", ") : undefined,
+      optionSelections: selectedOptionGroups.length ? selectedOptionGroups : undefined,
+      optionSelectionsLabel: configuredOptionsLabel || undefined,
       notes: notes || undefined,
     });
     onClose();
@@ -354,6 +376,17 @@ function ProductModal({
       <div className="max-h-[78vh] space-y-4 overflow-y-auto pr-1">
         <ProductImage src={product.imageUrl} alt={product.name} className="h-48 w-full" />
         {product.description && <p className="text-sm text-slate-500 dark:text-slate-400">{product.description}</p>}
+
+        <ProductOptionGroups
+          groups={product.optionGroups}
+          selections={optionSelections}
+          onChange={(groupId, optionIds) => {
+            setOptionSelections((current) => ({ ...current, [groupId]: optionIds }));
+            setChoiceFeedback(null);
+          }}
+          onLimitReached={setChoiceFeedback}
+          namePrefix={`store-product-${product.id}`}
+        />
 
         {product.variations.length > 0 && (
           <div>
@@ -410,6 +443,8 @@ function ProductModal({
           <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex: sem cebola" />
         </div>
 
+        {choiceFeedback && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">{choiceFeedback}</p>}
+
         <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-3 dark:bg-slate-800/60 dark:border-slate-800">
           <div className="flex items-center gap-3">
             <button
@@ -431,7 +466,7 @@ function ProductModal({
           <span className="text-xl font-black text-brand-700 dark:text-brand-300">{formatCurrency(unitPrice * quantity)}</span>
         </div>
 
-        {readOnly ? <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 text-center dark:bg-violet-950/30 dark:border-violet-900/60"><p className="text-sm font-black text-violet-900 dark:text-violet-200">Visualização de super-admin</p><p className="mt-1 text-xs text-violet-700 dark:text-violet-300">Compras exigem uma conta separada com perfil de cliente.</p><Link href="/login?trocar-conta=cliente"><Button variant="outline" className="mt-3">Entrar como cliente</Button></Link></div> : <Button className="w-full" onClick={handleConfirm}>Adicionar ao carrinho</Button>}
+        {readOnly ? <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 text-center dark:bg-violet-950/30 dark:border-violet-900/60"><p className="text-sm font-black text-violet-900 dark:text-violet-200">Visualização de super-admin</p><p className="mt-1 text-xs text-violet-700 dark:text-violet-300">Compras exigem uma conta separada com perfil de cliente.</p><Link href="/login?trocar-conta=cliente"><Button variant="outline" className="mt-3">Entrar como cliente</Button></Link></div> : <Button className="w-full" disabled={!configuredOptionsValid} onClick={handleConfirm}>Adicionar ao carrinho</Button>}
       </div>
     </Modal>
   );

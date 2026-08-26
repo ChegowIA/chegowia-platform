@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { ProductOptionSelectionInput } from "@/lib/types";
 
 export interface CartItem {
   key: string;
@@ -11,6 +12,8 @@ export interface CartItem {
   variationName?: string;
   addonIds?: string[];
   addonsLabel?: string;
+  optionSelections?: ProductOptionSelectionInput[];
+  optionSelectionsLabel?: string;
   notes?: string;
 }
 

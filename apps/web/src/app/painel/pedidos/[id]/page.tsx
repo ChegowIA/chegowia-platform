@@ -7,6 +7,7 @@ import { ORDER_STATUS_FLOW, OrderStatus, Role } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { Employee, Order } from "@/lib/types";
 import { formatCurrency, formatDateTime } from "@/lib/format";
+import { storedOptionSelectionsLabel } from "@/lib/product-options";
 import { useAuthStore } from "@/lib/auth-store";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -128,6 +129,7 @@ export default function PedidoDetalhePage() {
               columns={[
                 { header: "Produto", render: (i) => i.productName },
                 { header: "Variação", render: (i) => i.variationName ?? "-" },
+                { header: "Personalização", render: (i) => storedOptionSelectionsLabel(i.optionSelections) || "-" },
                 { header: "Qtd", render: (i) => i.quantity },
                 { header: "Unitário", render: (i) => formatCurrency(Number(i.unitPrice)) },
                 { header: "Total", render: (i) => formatCurrency(Number(i.totalPrice)) },

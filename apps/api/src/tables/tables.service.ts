@@ -23,6 +23,13 @@ const SESSION_INCLUDE = {
 const PUBLIC_MENU_INCLUDE = {
   variations: { where: { isActive: true } },
   addons: { where: { isActive: true } },
+  optionGroups: {
+    where: { isActive: true },
+    orderBy: { position: "asc" as const },
+    include: {
+      options: { where: { isActive: true }, orderBy: { position: "asc" as const } },
+    },
+  },
 };
 
 // A resposta do QR é uma superfície pública. Mantemos somente o necessário
@@ -48,6 +55,26 @@ const PUBLIC_MENU_SELECT = {
       addons: {
         where: { isActive: true },
         select: { id: true, name: true, price: true },
+      },
+      optionGroups: {
+        where: { isActive: true },
+        orderBy: { position: "asc" },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          selectionType: true,
+          minSelections: true,
+          maxSelections: true,
+          pricingRule: true,
+          position: true,
+          isActive: true,
+          options: {
+            where: { isActive: true },
+            orderBy: { position: "asc" },
+            select: { id: true, name: true, priceDelta: true, position: true, isActive: true },
+          },
+        },
       },
     },
   },
@@ -541,14 +568,17 @@ export class TablesService {
         if (!addon) throw new BadRequestException("Um dos adicionais escolhidos não está disponível.");
         return addon;
       });
+      const configuredChoices = this.resolveDiningOptionSelections(product, item.optionSelections);
       const unitPrice = Number(product.price)
         + Number(variation?.priceDelta ?? 0)
-        + addons.reduce((sum: number, addon: any) => sum + Number(addon.price), 0);
+        + addons.reduce((sum: number, addon: any) => sum + Number(addon.price), 0)
+        + configuredChoices.totalPriceDelta;
       const totalPrice = unitPrice * item.quantity;
       subtotal += totalPrice;
       const choices = [
         variation ? `Opção: ${variation.name}` : null,
         addons.length ? `Adicionais: ${addons.map((addon: any) => addon.name).join(", ")}` : null,
+        configuredChoices.label,
         item.notes?.trim() || null,
       ].filter(Boolean).join(" · ");
 
@@ -566,6 +596,61 @@ export class TablesService {
     return { subtotal, items };
   }
 
+  /** Mantém o QR de mesa com as mesmas regras de montagem do pedido delivery. */
+  private resolveDiningOptionSelections(product: any, rawSelections: Array<{ groupId: string; optionIds: string[] }> | undefined) {
+    const selections = rawSelections ?? [];
+    const submitted = new Map<string, string[]>();
+    for (const selection of selections) {
+      const groupId = typeof selection?.groupId === "string" ? selection.groupId.trim() : "";
+      const optionIds = Array.isArray(selection?.optionIds)
+        ? selection.optionIds.map((id) => typeof id === "string" ? id.trim() : "")
+        : [];
+      if (!groupId || !optionIds.length || submitted.has(groupId) || optionIds.some((id) => !id) || new Set(optionIds).size !== optionIds.length) {
+        throw new BadRequestException(`As escolhas de ${product.name} estão inválidas.`);
+      }
+      submitted.set(groupId, optionIds);
+    }
+
+    const groups = product.optionGroups ?? [];
+    const knownGroups = new Set(groups.map((group: any) => group.id));
+    if ([...submitted.keys()].some((groupId) => !knownGroups.has(groupId))) {
+      throw new BadRequestException(`Uma escolha de ${product.name} não está mais disponível.`);
+    }
+
+    let totalPriceDelta = 0;
+    const labels: string[] = [];
+    for (const group of groups) {
+      const optionIds = submitted.get(group.id) ?? [];
+      const min = Number(group.minSelections);
+      const max = Number(group.maxSelections);
+      if (optionIds.length < min || optionIds.length > max) {
+        throw new BadRequestException(this.diningChoiceCountMessage(product.name, group.name, min, max));
+      }
+      if (!optionIds.length) continue;
+      const byId = new Map((group.options ?? []).map((option: any) => [option.id, option]));
+      const options = optionIds.map((id) => {
+        const option = byId.get(id) as any;
+        if (!option) throw new BadRequestException(`Uma opção de "${group.name}" não está mais disponível.`);
+        return option;
+      });
+      const deltas = options.map((option: any) => Number(option.priceDelta));
+      const priceDelta = group.pricingRule === "HIGHEST"
+        ? Math.max(...deltas)
+        : group.pricingRule === "AVERAGE"
+          ? deltas.reduce((sum: number, delta: number) => sum + delta, 0) / deltas.length
+          : deltas.reduce((sum: number, delta: number) => sum + delta, 0);
+      totalPriceDelta += priceDelta;
+      labels.push(`${group.name}: ${options.map((option: any) => option.name).join(", ")}`);
+    }
+    return { totalPriceDelta: this.roundCurrency(totalPriceDelta), label: labels.length ? labels.join(" · ") : null };
+  }
+
+  private diningChoiceCountMessage(productName: string, groupName: string, min: number, max: number) {
+    if (min === max) return `Escolha exatamente ${min} ${min === 1 ? "opção" : "opções"} em "${groupName}" para ${productName}.`;
+    if (min > 0) return `Escolha entre ${min} e ${max} opções em "${groupName}" para ${productName}.`;
+    return `Escolha no máximo ${max} ${max === 1 ? "opção" : "opções"} em "${groupName}" para ${productName}.`;
+  }
+
   private publicSession(session: { guestCount: number; openedAt: Date; attendantUserId: string | null }) {
     return {
       isOpen: true,
@@ -577,6 +662,10 @@ export class TablesService {
 
   private createQrToken() {
     return randomBytes(24).toString("base64url");
+  }
+
+  private roundCurrency(value: number) {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
   }
 
   private assertGuestCountFitsTable(guestCount: number, seats: number) {

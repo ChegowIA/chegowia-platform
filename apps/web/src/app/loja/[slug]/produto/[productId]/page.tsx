@@ -73,6 +73,7 @@ export default async function PublicProductPage({ params }: ProductRouteProps) {
   const { company, category, product } = detail;
   const image = absoluteAssetUrl(product.imageUrl);
   const storeUrl = `/loja/${encodeURIComponent(company.slug)}`;
+  const optionGroups = product.optionGroups ?? [];
 
   return (
     <>
@@ -108,9 +109,19 @@ export default async function PublicProductPage({ params }: ProductRouteProps) {
               <p className="mt-6 text-3xl font-black tracking-tight text-slate-950 dark:text-slate-50">{currency(product.price)}</p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Preço inicial; opções e adicionais podem alterar o total.</p>
 
-              {(product.variations.length > 0 || product.addons.length > 0) && (
+              {(product.variations.length > 0 || product.addons.length > 0 || optionGroups.length > 0) && (
                 <section className="mt-7 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40" aria-label="Opções disponíveis">
                   <h2 className="text-sm font-black text-slate-900 dark:text-slate-100">Opções disponíveis no pedido</h2>
+                  {optionGroups.length > 0 && (
+                    <div className="mt-2 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                      {optionGroups.map((group) => (
+                        <p key={group.id}>
+                          <span className="font-bold">{group.name}:</span> {(group.options ?? []).map((option) => option.name).join(", ")}
+                          {group.minSelections > 0 ? ` · escolha de ${group.minSelections} a ${group.maxSelections}` : ` · até ${group.maxSelections}`}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   {product.variations.length > 0 && (
                     <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
                       <span className="font-bold">Variações:</span> {product.variations.map((variation) => variation.name).join(", ")}

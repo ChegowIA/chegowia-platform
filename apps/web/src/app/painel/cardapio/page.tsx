@@ -21,6 +21,12 @@ import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/badge";
 import { ProductImage } from "@/components/catalog/product-image";
 import { CatalogImportPanel } from "@/components/catalog/catalog-import-panel";
+import {
+  optionGroupDraftFrom,
+  productOptionGroupsPayload,
+  ProductOptionGroupDraft,
+  ProductOptionGroupsEditor,
+} from "@/components/catalog/product-option-groups-editor";
 
 interface VariationDraft {
   name: string;
@@ -58,6 +64,7 @@ export default function CardapioPage() {
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [variationsDraft, setVariationsDraft] = useState<VariationDraft[]>([]);
   const [addonsDraft, setAddonsDraft] = useState<AddonDraft[]>([]);
+  const [optionGroupsDraft, setOptionGroupsDraft] = useState<ProductOptionGroupDraft[]>([]);
   const [taxDraft, setTaxDraft] = useState<ProductTaxDraft>(EMPTY_PRODUCT_TAX);
 
   // O regime decide se o campo de ICMS oferece CSOSN ou CST. Sem cadastro
@@ -171,6 +178,7 @@ export default function CardapioPage() {
     setProductImageFile(null);
     setVariationsDraft([]);
     setAddonsDraft([]);
+    setOptionGroupsDraft([]);
   }
 
   function openCreateProduct(categoryId?: string) {
@@ -194,6 +202,7 @@ export default function CardapioPage() {
     setProductImageFile(null);
     setVariationsDraft([]);
     setAddonsDraft([]);
+    setOptionGroupsDraft(optionGroupDraftFrom(product.optionGroups));
     setProductModalOpen(true);
   }
 
@@ -217,6 +226,7 @@ export default function CardapioPage() {
         costPrice: productForm.costPrice.trim() ? Number(productForm.costPrice) : undefined,
         imageUrl: productForm.imageUrl || undefined,
         isFeatured: productForm.isFeatured,
+        optionGroups: productOptionGroupsPayload(optionGroupsDraft),
         ...productTaxPayload(taxDraft),
       };
 
@@ -466,6 +476,8 @@ export default function CardapioPage() {
             />
           </label>
 
+          <ProductOptionGroupsEditor value={optionGroupsDraft} onChange={setOptionGroupsDraft} />
+
           <ProductTaxFields value={taxDraft} onChange={setTaxDraft} regime={taxRegime} />
 
           {!editingProduct && (
@@ -610,6 +622,7 @@ function AdminProductCard({
           {product.isFeatured && <Badge tone="brand">Destaque</Badge>}
           {product.variations.length > 0 && <Badge tone="info">{product.variations.length} variações</Badge>}
           {product.addons.length > 0 && <Badge tone="warning">{product.addons.length} adicionais</Badge>}
+          {(product.optionGroups?.length ?? 0) > 0 && <Badge tone="brand">{product.optionGroups.length} grupos de escolha</Badge>}
         </div>
         {canEdit && (
           <div className="flex gap-2">

@@ -12,6 +12,17 @@ const MARKETPLACE_SCAN_LIMIT = 600;
 const SECTION_LIMIT = 8;
 const PRODUCTS_PER_SECTION = 8;
 
+const ACTIVE_OPTION_GROUPS_INCLUDE = {
+  where: { isActive: true },
+  orderBy: { position: "asc" as const },
+  include: {
+    options: {
+      where: { isActive: true },
+      orderBy: { position: "asc" as const },
+    },
+  },
+};
+
 const MARKETPLACE_PRODUCT_INCLUDE = {
   category: true,
   company: {
@@ -91,7 +102,11 @@ export class CatalogPublicService {
         include: {
           products: {
             where: { isActive: true },
-            include: { variations: { where: { isActive: true } }, addons: { where: { isActive: true } } },
+            include: {
+              variations: { where: { isActive: true } },
+              addons: { where: { isActive: true } },
+              optionGroups: ACTIVE_OPTION_GROUPS_INCLUDE,
+            },
           },
         },
       });
@@ -150,6 +165,26 @@ export class CatalogPublicService {
             where: { isActive: true },
             select: { id: true, name: true, price: true, isActive: true },
           },
+          optionGroups: {
+            where: { isActive: true },
+            orderBy: { position: "asc" },
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              selectionType: true,
+              minSelections: true,
+              maxSelections: true,
+              pricingRule: true,
+              position: true,
+              isActive: true,
+              options: {
+                where: { isActive: true },
+                orderBy: { position: "asc" },
+                select: { id: true, name: true, priceDelta: true, position: true, isActive: true },
+              },
+            },
+          },
         },
       });
       if (!product) throw new NotFoundException("Produto não encontrado.");
@@ -171,6 +206,13 @@ export class CatalogPublicService {
           addons: product.addons.map((addon: any) => ({
             ...addon,
             price: Number(addon.price),
+          })),
+          optionGroups: (product.optionGroups ?? []).map((group: any) => ({
+            ...group,
+            options: (group.options ?? []).map((option: any) => ({
+              ...option,
+              priceDelta: Number(option.priceDelta),
+            })),
           })),
         },
       };

@@ -57,6 +57,7 @@ export default function CartPage() {
                       <p className="font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
                       {item.variationName && <p className="text-sm text-slate-500 dark:text-slate-400">{item.variationName}</p>}
                       {item.addonsLabel && <p className="text-sm text-slate-500 dark:text-slate-400">+ {item.addonsLabel}</p>}
+                      {item.optionSelectionsLabel && <p className="text-sm text-slate-500 dark:text-slate-400">{item.optionSelectionsLabel}</p>}
                       {item.notes && <p className="text-sm italic text-slate-400">Obs: {item.notes}</p>}
                       <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{formatCurrency(item.unitPrice)} un.</p>
                     </div>

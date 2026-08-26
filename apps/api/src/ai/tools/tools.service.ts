@@ -225,7 +225,16 @@ export class ToolsService {
         where,
         take: 12,
         orderBy: [{ isFeatured: "desc" }, { name: "asc" }],
-        include: { category: true, variations: { where: { isActive: true } }, addons: { where: { isActive: true } } },
+        include: {
+          category: true,
+          variations: { where: { isActive: true } },
+          addons: { where: { isActive: true } },
+          optionGroups: {
+            where: { isActive: true },
+            orderBy: { position: "asc" },
+            include: { options: { where: { isActive: true }, orderBy: { position: "asc" } } },
+          },
+        },
       });
 
       return products.map((product: any) => ({
@@ -242,6 +251,20 @@ export class ToolsService {
           priceDelta: Number(variation.priceDelta),
         })),
         addons: product.addons.map((addon: any) => ({ id: addon.id, name: addon.name, price: Number(addon.price) })),
+        optionGroups: (product.optionGroups ?? []).map((group: any) => ({
+          id: group.id,
+          name: group.name,
+          description: group.description,
+          selectionType: group.selectionType,
+          minSelections: group.minSelections,
+          maxSelections: group.maxSelections,
+          pricingRule: group.pricingRule,
+          options: (group.options ?? []).map((option: any) => ({
+            id: option.id,
+            name: option.name,
+            priceDelta: Number(option.priceDelta),
+          })),
+        })),
       }));
     });
   }

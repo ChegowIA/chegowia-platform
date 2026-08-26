@@ -249,6 +249,7 @@ function CartMenu({ onClose }: { onClose: () => void }) {
                   {item.quantity}x {item.variationName ? `· ${item.variationName}` : ""}
                 </p>
                 {item.addonsLabel && <p className="mt-1 line-clamp-1 text-xs text-slate-400">{item.addonsLabel}</p>}
+                {item.optionSelectionsLabel && <p className="mt-1 line-clamp-1 text-xs text-slate-400">{item.optionSelectionsLabel}</p>}
               </div>
               <p className="shrink-0 text-sm font-black text-brand-700 dark:text-brand-300">{formatCurrency(item.unitPrice * item.quantity)}</p>
             </div>

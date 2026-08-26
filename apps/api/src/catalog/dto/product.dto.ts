@@ -1,7 +1,9 @@
 import { PartialType, OmitType } from "@nestjs/swagger";
 import { Transform, Type } from "class-transformer";
-import { TaxOrigin } from "@prisma/client";
+import { ProductOptionPricingRule, ProductOptionSelectionType, TaxOrigin } from "@prisma/client";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -36,6 +38,60 @@ export class ProductAddonDto {
   @IsNumber()
   @Min(0)
   price: number;
+}
+
+/**
+ * Uma escolha individual dentro de um grupo configurável. Serve tanto para
+ * "Grande" quanto para "Calabresa", "Bem passado" ou qualquer outra opção.
+ */
+export class ProductOptionDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name: string;
+
+  @IsNumber()
+  priceDelta: number;
+}
+
+/**
+ * Grupo de escolhas de um produto. O par mínimo/máximo é o que permite pizza
+ * meio a meio, três sabores ou uma quantidade totalmente livre sem criar uma
+ * tabela específica para pizzaria.
+ */
+export class ProductOptionGroupDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsEnum(ProductOptionSelectionType)
+  selectionType: ProductOptionSelectionType;
+
+  @IsNumber()
+  @Min(0)
+  @Max(30)
+  minSelections: number;
+
+  @IsNumber()
+  @Min(1)
+  @Max(30)
+  maxSelections: number;
+
+  @IsEnum(ProductOptionPricingRule)
+  pricingRule: ProductOptionPricingRule;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => ProductOptionDto)
+  options: ProductOptionDto[];
 }
 
 export class CreateProductDto {
@@ -82,6 +138,13 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => ProductAddonDto)
   addons?: ProductAddonDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => ProductOptionGroupDto)
+  optionGroups?: ProductOptionGroupDto[];
 
   // ---- Tributação do item ----
   // Tudo opcional: em branco significa "usa o padrão da empresa"

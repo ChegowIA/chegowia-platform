@@ -8,9 +8,17 @@ import { api, apiErrorMessage } from "@/lib/api-client";
 import { Category, Product } from "@/lib/types";
 import { formatCurrency } from "@/lib/format";
 import { ProductImage } from "@/components/catalog/product-image";
+import { ProductOptionGroups } from "@/components/catalog/product-option-groups";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import {
+  optionGroupsTotal,
+  optionSelectionsAreValid,
+  optionSelectionsFromState,
+  optionSelectionsLabel,
+  type ProductOptionSelectionState,
+} from "@/lib/product-options";
 
 interface PublicTableMenu {
   company: { name: string; logoUrl?: string | null };
@@ -32,6 +40,7 @@ interface TableCartItem {
   unitPrice: number;
   variationId?: string;
   addonIds?: string[];
+  optionSelections?: Array<{ groupId: string; optionIds: string[] }>;
   notes?: string;
   choicesLabel?: string;
 }
@@ -76,6 +85,7 @@ export default function TableQrMenuPage() {
         quantity: item.quantity,
         variationId: item.variationId,
         addonIds: item.addonIds,
+        optionSelections: item.optionSelections,
         notes: item.notes,
       })),
     }),
@@ -182,15 +192,65 @@ function TableProductCard({ product, onClick }: { product: Product; onClick: () 
 function TableProductModal({ product, onClose, onConfirm }: { product: Product; onClose: () => void; onConfirm: (item: Omit<TableCartItem, "key">) => void }) {
   const [variationId, setVariationId] = useState<string | undefined>(product.variations[0]?.id);
   const [addonIds, setAddonIds] = useState<string[]>([]);
+  const [optionSelections, setOptionSelections] = useState<ProductOptionSelectionState>({});
+  const [choiceFeedback, setChoiceFeedback] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [quantity, setQuantity] = useState(1);
   const variation = product.variations.find((item) => item.id === variationId);
   const addons = product.addons.filter((item) => addonIds.includes(item.id));
-  const unitPrice = Number(product.price) + Number(variation?.priceDelta ?? 0) + addons.reduce((sum, item) => sum + Number(item.price), 0);
-  const choicesLabel = [variation?.name, addons.length ? `+ ${addons.map((item) => item.name).join(", ")}` : null].filter(Boolean).join(" · ");
+  const configuredOptionsTotal = optionGroupsTotal(product.optionGroups, optionSelections);
+  const configuredOptionsValid = optionSelectionsAreValid(product.optionGroups, optionSelections);
+  const configuredOptionsLabel = optionSelectionsLabel(product.optionGroups, optionSelections);
+  const unitPrice = Number(product.price)
+    + Number(variation?.priceDelta ?? 0)
+    + addons.reduce((sum, item) => sum + Number(item.price), 0)
+    + configuredOptionsTotal;
+  const choicesLabel = [variation?.name, addons.length ? `+ ${addons.map((item) => item.name).join(", ")}` : null, configuredOptionsLabel || null].filter(Boolean).join(" · ");
   const toggleAddon = (id: string) => setAddonIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
-  return <Modal open onClose={onClose} title={product.name}><div className="max-h-[76vh] space-y-4 overflow-y-auto pr-1"><ProductImage src={product.imageUrl} alt={product.name} className="h-44 w-full rounded-2xl" />{product.description && <p className="text-sm text-slate-500 dark:text-slate-400">{product.description}</p>}{product.variations.length > 0 && <OptionGroup title="Escolha uma opção">{product.variations.map((item) => <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800"><span className="flex items-center gap-2"><input type="radio" name="table-product-variation" checked={variationId === item.id} onChange={() => setVariationId(item.id)} />{item.name}</span>{Number(item.priceDelta) !== 0 && <span className="font-bold text-brand-700 dark:text-brand-300">{Number(item.priceDelta) > 0 ? "+" : ""}{formatCurrency(Number(item.priceDelta))}</span>}</label>)}</OptionGroup>}{product.addons.length > 0 && <OptionGroup title="Adicionais">{product.addons.map((item) => <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800"><span className="flex items-center gap-2"><input type="checkbox" checked={addonIds.includes(item.id)} onChange={() => toggleAddon(item.id)} />{item.name}</span><span className="font-bold text-brand-700 dark:text-brand-300">+{formatCurrency(Number(item.price))}</span></label>)}</OptionGroup>}<FormField label="Observação"><Textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ex.: sem cebola" /></FormField><div className="flex items-center justify-between rounded-2xl bg-slate-100 p-3 dark:bg-slate-800"><div className="flex items-center gap-3"><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-white text-lg font-black shadow-sm dark:bg-slate-900" onClick={() => setQuantity((value) => Math.max(1, value - 1))}>−</button><span className="w-5 text-center font-black">{quantity}</span><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-white text-lg font-black shadow-sm dark:bg-slate-900" onClick={() => setQuantity((value) => value + 1)}>+</button></div><span className="text-xl font-black text-brand-700 dark:text-brand-300">{formatCurrency(unitPrice * quantity)}</span></div><Button className="w-full" onClick={() => onConfirm({ productId: product.id, name: product.name, quantity, unitPrice, variationId, addonIds: addonIds.length ? addonIds : undefined, notes: notes.trim() || undefined, choicesLabel: choicesLabel || undefined })}>Adicionar ao pedido</Button></div></Modal>;
+  function confirm() {
+    if (!configuredOptionsValid) {
+      setChoiceFeedback("Revise as escolhas obrigatórias antes de adicionar ao pedido.");
+      return;
+    }
+    const selectedOptionGroups = optionSelectionsFromState(product.optionGroups, optionSelections);
+    onConfirm({
+      productId: product.id,
+      name: product.name,
+      quantity,
+      unitPrice,
+      variationId,
+      addonIds: addonIds.length ? addonIds : undefined,
+      optionSelections: selectedOptionGroups.length ? selectedOptionGroups : undefined,
+      notes: notes.trim() || undefined,
+      choicesLabel: choicesLabel || undefined,
+    });
+  }
+
+  return (
+    <Modal open onClose={onClose} title={product.name}>
+      <div className="max-h-[76vh] space-y-4 overflow-y-auto pr-1">
+        <ProductImage src={product.imageUrl} alt={product.name} className="h-44 w-full rounded-2xl" />
+        {product.description && <p className="text-sm text-slate-500 dark:text-slate-400">{product.description}</p>}
+        <ProductOptionGroups
+          groups={product.optionGroups}
+          selections={optionSelections}
+          onChange={(groupId, optionIds) => {
+            setOptionSelections((current) => ({ ...current, [groupId]: optionIds }));
+            setChoiceFeedback(null);
+          }}
+          onLimitReached={setChoiceFeedback}
+          namePrefix={`table-product-${product.id}`}
+        />
+        {product.variations.length > 0 && <OptionGroup title="Escolha uma opção">{product.variations.map((item) => <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800"><span className="flex items-center gap-2"><input type="radio" name="table-product-variation" checked={variationId === item.id} onChange={() => setVariationId(item.id)} />{item.name}</span>{Number(item.priceDelta) !== 0 && <span className="font-bold text-brand-700 dark:text-brand-300">{Number(item.priceDelta) > 0 ? "+" : ""}{formatCurrency(Number(item.priceDelta))}</span>}</label>)}</OptionGroup>}
+        {product.addons.length > 0 && <OptionGroup title="Adicionais">{product.addons.map((item) => <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm dark:border-slate-800"><span className="flex items-center gap-2"><input type="checkbox" checked={addonIds.includes(item.id)} onChange={() => toggleAddon(item.id)} />{item.name}</span><span className="font-bold text-brand-700 dark:text-brand-300">+{formatCurrency(Number(item.price))}</span></label>)}</OptionGroup>}
+        <FormField label="Observação"><Textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ex.: sem cebola" /></FormField>
+        {choiceFeedback && <ActionError message={choiceFeedback} />}
+        <div className="flex items-center justify-between rounded-2xl bg-slate-100 p-3 dark:bg-slate-800"><div className="flex items-center gap-3"><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-white text-lg font-black shadow-sm dark:bg-slate-900" onClick={() => setQuantity((value) => Math.max(1, value - 1))}>−</button><span className="w-5 text-center font-black">{quantity}</span><button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-white text-lg font-black shadow-sm dark:bg-slate-900" onClick={() => setQuantity((value) => value + 1)}>+</button></div><span className="text-xl font-black text-brand-700 dark:text-brand-300">{formatCurrency(unitPrice * quantity)}</span></div>
+        <Button className="w-full" disabled={!configuredOptionsValid} onClick={confirm}>Adicionar ao pedido</Button>
+      </div>
+    </Modal>
+  );
 }
 
 function TableCartModal({ open, onClose, cart, total, canSend, isSending, error, onQuantity, onSend }: { open: boolean; onClose: () => void; cart: TableCartItem[]; total: number; canSend: boolean; isSending: boolean; error: string | null; onQuantity: (key: string, quantity: number) => void; onSend: () => void }) {
