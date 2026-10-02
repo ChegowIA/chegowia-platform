@@ -59,7 +59,7 @@ export default function SoftwareLanding() {
           </nav>
           <div className="hidden items-center gap-2 lg:flex"><ThemeToggle tone="onDark" />
             <AccountAccessLink tone="dark" />
-            <a href={CHEGOWIA_WHATSAPP_URL} target="_blank" rel="noreferrer"><Button variant="outline" className="rounded-xl border-emerald-400/40 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/20 hover:text-white">WhatsApp</Button></a>
+            <a href={CHEGOWIA_WHATSAPP_URL} target="_blank" rel="noreferrer"><Button className="rounded-xl !border-emerald-400/40 !bg-emerald-500/15 !text-emerald-50 hover:!bg-emerald-500/25 hover:!text-white">WhatsApp</Button></a>
             <Link href="/planos"><Button className="rounded-xl">Começar agora</Button></Link>
           </div>
           <div className="flex items-center gap-2 lg:hidden">
@@ -79,7 +79,7 @@ export default function SoftwareLanding() {
             <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-black uppercase tracking-[.14em] backdrop-blur"><span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />Operação conectada, de verdade</div>
             <h1 className="mt-7 text-5xl font-black leading-[.98] tracking-[-.055em] sm:text-6xl lg:text-7xl">Menos improviso.<br /><span className="text-brand-400">Mais ritmo</span> para vender.</h1>
             <p className="mt-7 max-w-2xl text-lg leading-8 text-slate-200 sm:text-xl">O ChegowIA conecta pedidos, mesas, cozinha, entregas, equipe e clientes em uma plataforma viva — com inteligência artificial útil e pessoas no controle.</p>
-            <div className="mt-9 flex flex-col gap-3 sm:flex-row"><Link href="/planos"><Button size="lg" className="h-14 rounded-2xl px-7 text-base font-black">Conhecer o ChegowIA <span aria-hidden>→</span></Button></Link><a href={CHEGOWIA_WHATSAPP_URL} target="_blank" rel="noreferrer"><Button size="lg" variant="outline" className="h-14 w-full rounded-2xl border-emerald-300/60 bg-emerald-500/15 px-7 text-base font-black text-white backdrop-blur hover:bg-emerald-500/25 hover:text-white sm:w-auto">Falar no WhatsApp</Button></a></div>
+            <div className="mt-9 flex flex-col gap-3 sm:flex-row"><Link href="/planos"><Button size="lg" className="h-14 rounded-2xl px-7 text-base font-black">Conhecer o ChegowIA <span aria-hidden>→</span></Button></Link><a href={CHEGOWIA_WHATSAPP_URL} target="_blank" rel="noreferrer"><Button size="lg" className="h-14 w-full rounded-2xl !border-emerald-400 !bg-emerald-500 px-7 text-base font-black !text-white shadow-[0_12px_28px_-14px_rgba(16,185,129,.9)] hover:!bg-emerald-400 sm:w-auto">Falar no WhatsApp</Button></a></div>
             <div className="mt-10 flex flex-wrap gap-x-7 gap-y-3 text-xs font-bold text-slate-300"><span>✓ Delivery e salão</span><span>✓ Gestão em tempo real</span><span>✓ Sem taxa por pedido</span><span>✓ Suporte e atualizações</span></div>
           </div>
         </div>
