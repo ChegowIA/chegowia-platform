@@ -211,6 +211,38 @@ super-admin, sem carregar hamburgueria ou usuários demonstrativos.
 Depois do primeiro acesso, troque a senha inicial e remova
 `SEED_SUPER_ADMIN_PASSWORD` do arquivo de ambiente.
 
+### Operação de demonstração descartável
+
+Para testar papéis de administrador, atendimento, cozinha, motoboy e garçom
+sem criar cobrança no Asaas ou Stripe, abra o **Shell** do serviço de API no
+Render e rode:
+
+```sh
+node apps/api/prisma/setup-demo-company.js --allow-production
+```
+
+O comando cria a **Pizzaria Exemplo ChegowIA**, um cardápio com tamanhos e
+sabores de pizza configuráveis, mesas, caixa e um pedido em rota. Ele imprime
+uma senha forte para as seis contas `@demo.chegowia.invalid`; guarde-a antes de
+fechar o Shell. A empresa fica marcada como `isTestOnly`, então não aparece no
+catálogo público.
+
+Para apagar apenas essa operação depois, primeiro confira a prévia:
+
+```sh
+node apps/api/prisma/remove-demo-company.js
+```
+
+Em seguida, copie o comando que o próprio script mostrar. Ele exige o nome
+exato do banco conectado e `--allow-production`, por exemplo:
+
+```sh
+node apps/api/prisma/remove-demo-company.js --confirmar=chegowia --allow-production
+```
+
+Não use `reset-data.js` para isso: ele é uma limpeza global de banco, enquanto
+o comando acima remove somente a empresa demo e as contas reservadas dela.
+
 ### Serviços `api` e `worker`
 
 São a mesma imagem com `APP_ROLE` diferente. `api` atende HTTP e não processa
