@@ -55,7 +55,14 @@ describe("pedido de acesso ao WhatsApp", () => {
     expect(realtime.emitToSuperAdmins).not.toHaveBeenCalled();
     // A data original é preservada: é ela que diz há quanto tempo a empresa espera.
     expect(prisma.messagingChannel.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ update: { accessRequestedAt: requestedBefore } }),
+      expect.objectContaining({
+        update: expect.objectContaining({
+          accessRequestedAt: requestedBefore,
+          // Pedidos antigos passam a ser preparados para coexistência, mas a
+          // data original continua sendo a referência de espera.
+          config: expect.objectContaining({ gupshupConnectionMode: "COEXISTENCE" }),
+        }),
+      }),
     );
   });
 

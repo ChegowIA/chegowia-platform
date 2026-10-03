@@ -25,7 +25,10 @@ import { tenantContext } from "../common/tenant/tenant-context";
 import { AiService } from "../ai/ai.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { UsageService } from "../usage/usage.service";
-import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
+import {
+  ConnectWhatsAppGupshupDto,
+  GupshupConnectionMode,
+} from "./dto/connect-whatsapp-gupshup.dto";
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
@@ -144,6 +147,11 @@ export class MessagingService {
     const existing = await this.db().messagingChannel.findUnique({
       where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
     });
+    // A partir daqui o padrão seguro é coexistência: o empresário continua
+    // atendendo no WhatsApp Business App enquanto a Central e a IA trabalham
+    // pelo mesmo número. Um canal antigo explicitamente marcado como exclusivo
+    // mantém a escolha anterior; não trocamos número algum por código.
+    const connectionMode = gupshupConnectionMode(existing) ?? "COEXISTENCE";
     // Reaproveita o app quando o empresário reabre o assistente no meio do
     // caminho; criar outro deixaria um app órfão consumindo cota do parceiro.
     let appId = existing?.provider === WhatsAppProvider.GUPSHUP ? existing.gupshupAppId : null;
@@ -175,12 +183,13 @@ export class MessagingService {
         type: MessagingChannelType.WHATSAPP,
         provider: WhatsAppProvider.GUPSHUP,
         status: MessagingChannelStatus.INATIVO,
-        config: {},
+        config: { gupshupConnectionMode: connectionMode },
         gupshupAppId: appId,
         gupshupAppName: appName,
       },
       update: {
         provider: WhatsAppProvider.GUPSHUP,
+        config: { ...channelConfig(existing), gupshupConnectionMode: connectionMode },
         gupshupAppId: appId,
         gupshupAppName: appName,
         lastError: null,
@@ -209,11 +218,20 @@ export class MessagingService {
         type: MessagingChannelType.WHATSAPP,
         provider: WhatsAppProvider.GUPSHUP,
         status: MessagingChannelStatus.INATIVO,
-        config: {},
+        // Todo pedido novo já nasce no fluxo que preserva o WhatsApp Business
+        // App. A equipe ainda precisa gerar o link correto no Gupshup, mas o
+        // painel e o e-mail deixam isso explícito desde o primeiro passo.
+        config: { gupshupConnectionMode: "COEXISTENCE" },
         accessRequestedAt: new Date(),
       },
       update: {
         accessRequestedAt: current?.accessRequestedAt ?? new Date(),
+        // Não sobrescrevemos um canal antigo que tenha sido marcado
+        // conscientemente como exclusivo da plataforma.
+        config: {
+          ...channelConfig(current),
+          gupshupConnectionMode: gupshupConnectionMode(current) ?? "COEXISTENCE",
+        },
       },
     });
     // Só notifica no primeiro pedido: reclicar o botão não deve gerar e-mail
@@ -250,7 +268,8 @@ export class MessagingService {
         `A empresa ${name} solicitou o WhatsApp pela plataforma.`,
         company?.city ? `Cidade: ${company.city}/${company.state ?? "--"}` : "",
         "",
-        "Próximo passo: crie o aplicativo no painel do Gupshup, cole a URL de callback e traga o nome, o App ID e o link de cadastro para a página da empresa no super-admin.",
+        "Próximo passo: no Gupshup, prepare o link em modo Coexistência / “Connect a WhatsApp Business app”. Assim o número permanece no aplicativo; não use o cadastro padrão que migra o número para a API.",
+        "Depois cole a URL de callback, o nome, o App ID e o link de cadastro na página da empresa no super-admin.",
         `${publicAppUrl()}/super-admin/empresas/${companyId}`,
       ].filter(Boolean));
     } catch (error) {
@@ -297,6 +316,9 @@ export class MessagingService {
       ...channelConfig(current),
       ...(number ? { number } : {}),
       ...(dto.signupLink ? { gupshupSignupLink: dto.signupLink.trim() } : {}),
+      // Só grava se alguém informou: um vínculo histórico salvo antes do modo
+      // coexistência não pode ganhar um selo que não foi confirmado pelo dono.
+      ...(dto.connectionMode ? { gupshupConnectionMode: dto.connectionMode } : {}),
     };
     const data = {
       provider: WhatsAppProvider.GUPSHUP,
@@ -396,11 +418,7 @@ export class MessagingService {
   // Perfil comercial do WhatsApp
   // ---------------------------------------------------------------------------
 
-  /**
-   * Lê o perfil que o cliente final vê no WhatsApp. Como o número deixa de estar
-   * no aplicativo, este painel passa a ser o único lugar onde o empresário
-   * consegue editar foto, descrição e contatos.
-   */
+  /** Lê o perfil comercial que o cliente final vê no WhatsApp. */
   async getWhatsAppProfile(companyId: string) {
     const { channel, appToken } = await this.gupshupChannelWithToken(companyId);
     const [profile, photoUrl] = await Promise.all([
@@ -610,10 +628,21 @@ export class MessagingService {
       });
     });
     const changes: any[] = [];
+    const coexistenceEchoes: any[] = [];
+    const accountUpdates: any[] = [];
     const billingEvents: any[] = [];
     for (const entry of payload.entry ?? []) {
       for (const change of entry?.changes ?? []) {
         if (change?.field === "messages") changes.push(change.value ?? {});
+        // No modo de coexistência, mensagens digitadas no WhatsApp Business App
+        // não chegam em `messages`: a Meta as espelha neste evento próprio. Sem
+        // isso a equipe responderia pelo celular e a Central ficaria com um
+        // histórico incompleto — além de a IA poder assumir a conversa de novo.
+        if (change?.field === "smb_message_echoes") coexistenceEchoes.push(change.value ?? {});
+        // Se o cliente desconecta a integração no próprio celular, troca o
+        // número ou deixa o dispositivo inativo, a Meta avisa por aqui. O canal
+        // precisa refletir isso em vez de permanecer aparentemente ativo.
+        if (change?.field === "account_update") accountUpdates.push(change.value ?? {});
         // O evento de billing v3 é a confirmação mais precisa de tarifa do
         // Gupshup/Meta. Alguns apps o habilitam separadamente, por isso o
         // status continua como fallback quando ele não vier.
@@ -630,6 +659,16 @@ export class MessagingService {
         handledByPlatform = await this.platformWhatsApp.handleGupshupMessagesChangeByAppId(appId, value)
           || handledByPlatform;
       }
+      for (const value of coexistenceEchoes) {
+        if (!this.platformWhatsApp) break;
+        handledByPlatform = await this.platformWhatsApp.handleGupshupCoexistenceEchoesByAppId(appId, value)
+          || handledByPlatform;
+      }
+      for (const value of accountUpdates) {
+        if (!this.platformWhatsApp) break;
+        handledByPlatform = await this.platformWhatsApp.handleGupshupAccountUpdateByAppId(appId, value)
+          || handledByPlatform;
+      }
       if (handledByPlatform) return { received: true };
       this.logger.warn(`Callback Gupshup ignorado: aplicativo não vinculado (${appId}).`);
       return { ignored: true };
@@ -638,6 +677,16 @@ export class MessagingService {
     for (const value of changes) {
       await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
         return this.processMessagesChangeForChannel(channel, value, appId);
+      });
+    }
+    for (const value of coexistenceEchoes) {
+      await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
+        return this.processCoexistenceEchoesForChannel(channel, value, appId);
+      });
+    }
+    for (const value of accountUpdates) {
+      await tenantContext.run({ companyId: channel.companyId, bypass: false }, () => {
+        return this.processGupshupAccountUpdate(channel, value, appId);
       });
     }
     for (const value of billingEvents) {
@@ -891,6 +940,116 @@ export class MessagingService {
     for (const message of value.messages ?? []) {
       await this.processIncomingMessage(channel, value.contacts ?? [], message, value);
     }
+  }
+
+  /**
+   * No Coexistence, a mensagem escrita pelo dono da empresa no WhatsApp
+   * Business App chega como um eco de saída. Ela não é uma mensagem do cliente,
+   * portanto não pode cair no fluxo de IA nem abrir cobrança de mensagem API.
+   *
+   * Registrá-la como saída humana mantém o histórico igual nos dois lados e,
+   * principalmente, impede que a próxima resposta do cliente seja atendida por
+   * automação depois de um colaborador já ter assumido pelo celular.
+   */
+  private async processCoexistenceEchoesForChannel(channel: any, value: any, reference: string) {
+    if (channel.status !== MessagingChannelStatus.ATIVO) {
+      this.logger.warn(`Webhook de coexistência ignorado: canal inativo (${reference}).`);
+      return;
+    }
+    const echoes = Array.isArray(value?.message_echoes) ? value.message_echoes : [];
+    if (!echoes.length) return;
+
+    await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: { lastWebhookAt: new Date(), lastError: null },
+    });
+    for (const echo of echoes) {
+      await this.processBusinessAppMessageEcho(channel, echo, value);
+    }
+  }
+
+  private async processBusinessAppMessageEcho(channel: any, message: any, rawPayload: any) {
+    const providerMessageId = String(message?.id ?? "");
+    // `from` é o número da empresa; `to` identifica a pessoa que recebeu a
+    // mensagem no aplicativo. Usar `from` aqui colocaria todas as conversas no
+    // próprio número da empresa.
+    const customerPhone = normalizePhone(String(message?.to ?? ""));
+    if (!providerMessageId || !customerPhone) return;
+    const duplicate = await this.db().whatsAppMessage.findUnique({ where: { providerMessageId } });
+    if (duplicate) return;
+
+    const now = new Date();
+    const parsed = incomingContent(message);
+    const existing = await this.db().whatsAppConversation.findUnique({
+      where: { channelId_customerPhone: { channelId: channel.id, customerPhone } },
+    });
+    const conversation = await this.db().whatsAppConversation.upsert({
+      where: { channelId_customerPhone: { channelId: channel.id, customerPhone } },
+      create: {
+        companyId: channel.companyId,
+        channelId: channel.id,
+        customerPhone,
+        mode: WhatsAppConversationMode.HUMANO,
+        status: WhatsAppConversationStatus.ABERTA,
+        lastMessageText: parsed.text,
+        lastMessageAt: now,
+        humanRequestedAt: now,
+      },
+      update: {
+        mode: WhatsAppConversationMode.HUMANO,
+        status: WhatsAppConversationStatus.ABERTA,
+        lastMessageText: parsed.text,
+        lastMessageAt: now,
+        humanRequestedAt: existing?.humanRequestedAt ?? now,
+      },
+    });
+    try {
+      await this.db().whatsAppMessage.create({
+        data: {
+          companyId: channel.companyId,
+          channelId: channel.id,
+          conversationId: conversation.id,
+          providerMessageId,
+          direction: WhatsAppMessageDirection.ENVIADA,
+          status: WhatsAppMessageStatus.ENVIADA,
+          type: String(message?.type ?? "text"),
+          body: parsed.text,
+          // Mensagem enviada pelo aplicativo é atendimento humano no próprio
+          // WhatsApp, não uma chamada à API que a ChegowIA deva cobrar.
+          providerCost: 0,
+          billableAmount: 0,
+          rawPayload,
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraint(error)) return;
+      throw error;
+    }
+    this.realtime.emitToCompany(channel.companyId, "whatsapp.message.sent", { conversationId: conversation.id });
+    this.realtime.emitToCompany(channel.companyId, "whatsapp.conversation.updated", conversation);
+  }
+
+  /** Atualiza a tela quando a própria Meta/Gupshup encerra a coexistência. */
+  private async processGupshupAccountUpdate(channel: any, value: any, reference: string) {
+    const event = String(value?.event ?? "").trim();
+    if (!event) return;
+    if (!GUPSHUP_DISCONNECT_EVENTS.has(event)) return;
+
+    const detail = coexistenceDisconnectMessage(event, value?.disconnection_info?.reason);
+    await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: {
+        status: MessagingChannelStatus.INATIVO,
+        lastWebhookAt: new Date(),
+        lastError: detail,
+      },
+    });
+    this.logger.warn(`Canal WhatsApp ${reference} desconectado pelo provedor: ${event}.`);
+    this.realtime.emitToCompany(channel.companyId, "whatsapp.channel.updated", {
+      channelId: channel.id,
+      status: MessagingChannelStatus.INATIVO,
+      reason: detail,
+    });
   }
 
   private async processMessageStatus(channel: any, status: any, rawPayload: any) {
@@ -1351,6 +1510,7 @@ export class MessagingService {
         appId: channel.gupshupAppId ?? null,
         appName: channel.gupshupAppName ?? null,
         accessRequestedAt: channel.accessRequestedAt ?? null,
+        connectionMode: gupshupConnectionMode(channel),
         // Link que o empresário abre para concluir o cadastro com o Facebook
         // dele. No self-serve vem colado pelo superadmin; no partner é gerado.
         signupLink: config.gupshupSignupLink ?? null,
@@ -1372,7 +1532,7 @@ export class MessagingService {
       automationEnabled: true,
       welcomeMessage: null,
       connected: false,
-      gupshup: { appId: null, appName: null, signupLink: null, accessRequestedAt: null },
+      gupshup: { appId: null, appName: null, signupLink: null, accessRequestedAt: null, connectionMode: null },
       integration: {
         connectedAt: null,
         lastWebhookAt: null,
@@ -1458,6 +1618,33 @@ function channelConfig(channel: any): Record<string, any> {
   return channel?.config && typeof channel.config === "object" && !Array.isArray(channel.config)
     ? channel.config
     : {};
+}
+
+function gupshupConnectionMode(channel: any): GupshupConnectionMode | null {
+  const value = channelConfig(channel).gupshupConnectionMode;
+  return value === "COEXISTENCE" || value === "PLATFORM_ONLY" ? value : null;
+}
+
+const GUPSHUP_DISCONNECT_EVENTS = new Set([
+  "PARTNER_REMOVED",
+  "PARTNER_APP_UNINSTALLED",
+]);
+
+function coexistenceDisconnectMessage(event: string, reason: unknown) {
+  const normalizedReason = String(reason ?? "").trim();
+  const context: Record<string, string> = {
+    PRIMARY_INACTIVITY: "O WhatsApp Business App ficou inativo e a Meta removeu a conexão.",
+    COMPANION_INACTIVITY: "O aparelho vinculado ficou inativo e a Meta removeu a conexão.",
+    USER_RE_REGISTERED: "O número foi registrado novamente em outro aparelho.",
+    BUSINESS_DOWNGRADE: "O número foi registrado no WhatsApp comum, não no WhatsApp Business.",
+    CHANGE_NUMBER: "O número do WhatsApp Business foi alterado.",
+    ACCOUNT_DISCONNECTED: "A conta do WhatsApp foi desconectada.",
+  };
+  if (event === "PARTNER_APP_UNINSTALLED") {
+    return "A empresa desconectou a ChegowIA no WhatsApp Business App. Conecte novamente quando quiser retomar a Central.";
+  }
+  return context[normalizedReason]
+    ?? "A integração com o WhatsApp Business App foi encerrada pela Meta. Conecte novamente para retomar a Central.";
 }
 
 function normalizePhone(value: string) {

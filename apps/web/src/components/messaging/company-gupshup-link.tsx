@@ -7,10 +7,20 @@ import { MessagingChannel } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FormField, Input } from "@/components/ui/input";
+import { FormField, Input, Select } from "@/components/ui/input";
 import { GupshupCallbackUrls } from "@/components/messaging/gupshup-callback-urls";
 
-const EMPTY_FORM = { appName: "", appId: "", signupLink: "", number: "" };
+type ConnectionMode = "COEXISTENCE" | "PLATFORM_ONLY";
+
+const EMPTY_FORM: { appName: string; appId: string; signupLink: string; number: string; connectionMode: ConnectionMode } = {
+  appName: "",
+  appId: "",
+  signupLink: "",
+  number: "",
+  // Números novos devem preservar o aplicativo por padrão. A opção exclusiva
+  // continua disponível para uma linha que nunca esteve no WhatsApp Business.
+  connectionMode: "COEXISTENCE",
+};
 
 /**
  * Vínculo do aplicativo do Gupshup a uma empresa, na área do superadmin.
@@ -37,6 +47,10 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
       appId: channel.gupshup?.appId ?? "",
       signupLink: channel.gupshup?.signupLink ?? "",
       number: channel.number ?? "",
+      // Não declaramos coexistência para um canal antigo só porque o campo ainda
+      // não existia. Para vínculo já iniciado, o operador decide conscientemente.
+      connectionMode: channel.gupshup?.connectionMode
+        ?? (channel.gupshup?.appId ? "PLATFORM_ONLY" : "COEXISTENCE"),
     });
   }, [channel]);
 
@@ -47,6 +61,7 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
         appId: form.appId.trim() || undefined,
         signupLink: form.signupLink.trim() || undefined,
         number: form.number.trim() || undefined,
+        connectionMode: form.connectionMode,
       })).data;
     },
     onSuccess: (updated) => {
@@ -91,6 +106,14 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
           cole aqui. O empresário conclui o cadastro com o Facebook dele, sem passar suas credenciais.
         </p>
 
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <strong>Para manter o celular:</strong> no fluxo oficial, escolha <strong>“Connect a WhatsApp Business app”</strong>
+          (ou “usar WhatsApp Business existente”) e confirme pelo QR code dentro do aplicativo <strong>WhatsApp Business</strong>.
+          Não use o cadastro padrão por SMS para um número que já está no app, pois ele o deixa exclusivo da plataforma.
+          Confira também a foto e os dados comerciais no app antes de concluir, pois a Meta pode restringir a troca da foto
+          após o onboarding em coexistência.
+        </div>
+
         <div className="grid gap-4 md:grid-cols-2">
           <FormField label="Nome do aplicativo no Gupshup">
             <Input
@@ -111,6 +134,15 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
               placeholder="https://"
               onChange={(event) => setForm((current) => ({ ...current, signupLink: event.target.value }))}
             />
+          </FormField>
+          <FormField label="Modo da conexão">
+            <Select
+              value={form.connectionMode}
+              onChange={(event) => setForm((current) => ({ ...current, connectionMode: event.target.value as ConnectionMode }))}
+            >
+              <option value="COEXISTENCE">Manter WhatsApp Business App (recomendado)</option>
+              <option value="PLATFORM_ONLY">Somente pela ChegowIA</option>
+            </Select>
           </FormField>
           <FormField label="Número (preencha após o cadastro concluir)">
             <Input

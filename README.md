@@ -128,41 +128,35 @@ domínio pode ser configurada por `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION`.
 
 ## WhatsApp Business oficial e atendimento híbrido
 
-Em **Configurações → WhatsApp com IA e equipe**, o empresário só clica em
-**Conectar e manter meu WhatsApp**, entra na própria conta Meta Business e escolhe o
-número que já usa no WhatsApp Business App. O popup oficial do **Meta Embedded
-Signup** solicita o modo de coexistência, para que o número continue disponível no
-app e também atenda pelo ChegowIA. Ele devolve uma autorização de uso único ao
-servidor; este valida o número, evita novo registro nos fluxos de coexistência,
-assina os webhooks e guarda as credenciais cifradas. O empresário não procura nem
-copia `Phone Number ID`, WABA ID, token ou PIN.
+Em **Configurações → WhatsApp da sua empresa**, o empresário solicita o canal e
+recebe um link oficial de cadastro do Gupshup. Para um número que já existe no
+**WhatsApp Business App**, ele escolhe **“Connect a WhatsApp Business app”** (modo
+de coexistência) e confirma pelo QR code no próprio aplicativo. Assim o mesmo número
+continua no celular e também atende pela ChegowIA; o empresário não entrega senha,
+token, WABA ID ou PIN à plataforma.
 
-O identificador do número recebido no webhook é único e associado à empresa logada,
-então cada mensagem é resolvida para o negócio correto no servidor — o cliente nunca
-envia um `companyId` para escolher o tenant.
+O identificador do aplicativo do Gupshup é único e associado à empresa correta no
+servidor, então cada callback é resolvido para o negócio correspondente — o cliente
+nunca envia um `companyId` para escolher o tenant.
 
 - No primeiro contato, a pessoa recebe os botões **Atendente virtual** e **Falar com
   humano**.
 - A escolha por humano pausa a IA imediatamente naquela conversa; a equipe assume em
   **Painel → Atendimento** e pode reativar a IA quando fizer sentido.
-- O token da Meta e o PIN de registro são validados no vínculo, salvos com AES-256-GCM
-  e nunca retornam pela API ou pelo painel.
+- Credenciais temporárias do Gupshup ficam cifradas quando o modo Partner é usado e
+  nunca retornam pela API ou pelo painel.
 - A IA recebe nome, contato, endereço, entrega, pagamentos, horários e treinamento da
   empresa conectada, além do catálogo permitido pelas ferramentas.
-- Cada mensagem, status Meta, troca de modo e resposta da equipe fica no histórico da
-  conversa da própria empresa.
-- A Meta define a elegibilidade para coexistência. A conexão técnica manual fica
-  protegida em opções avançadas porque ela pode migrar o número para fora do app.
+- Cada mensagem, status, troca de modo e resposta da equipe fica no histórico da
+  conversa da própria empresa. O sistema também registra como saída humana a
+  mensagem enviada diretamente pelo WhatsApp Business App.
+- A Meta/Gupshup define a elegibilidade para coexistência. Uma conta já conectada
+  no modo exclusivo não é trocada automaticamente: o dono precisa reconectar pelo
+  fluxo oficial, para não haver interrupção de atendimento.
 
-Isso exige uma configuração única da plataforma no App Meta: criar uma configuração
-**WhatsApp Embedded Signup** em **Facebook Login for Business**, autorizar o domínio
-do painel e preencher `META_APP_ID`, `META_EMBEDDED_SIGNUP_CONFIG_ID`,
-`META_EMBEDDED_SIGNUP_ENABLED=true`, `API_PUBLIC_URL`, `META_APP_SECRET`,
-`WHATSAPP_WEBHOOK_VERIFY_TOKEN` e uma chave de 32 bytes em
-`WHATSAPP_TOKEN_ENCRYPTION_KEY` (por exemplo, `openssl rand -base64 32`). Cadastre
-`{API_PUBLIC_URL}/api/messaging/webhooks/meta` no App Meta, use o mesmo verify token
-configurado no ambiente e assine o campo `messages`. O guia completo está em
-[docs/PRODUCAO.md](docs/PRODUCAO.md#5-whatsapp-cloud-api-meta).
+No Gupshup, configure o callback como **Meta (v3)** e habilite os eventos
+**COEXISTENCE** e **ACCOUNT** além de mensagens e faturamento. O guia operacional
+está em [docs/PRODUCAO.md](docs/PRODUCAO.md#5-whatsapp-pelo-gupshup).
 
 ## Mensalidade e custos variáveis
 

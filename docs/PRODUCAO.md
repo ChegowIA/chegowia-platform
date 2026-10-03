@@ -129,13 +129,15 @@ quando houver mudança de câmbio, modelo, país destinatário ou faixa de volum
 
 ## 5. WhatsApp pelo Gupshup
 
-O canal de WhatsApp é atendido pelo Gupshup, que é o BSP homologado pela Meta. A
-plataforma não fala com a Cloud API da Meta diretamente: quem responde à Meta
-pelo aplicativo é o Gupshup, o que dispensa App Review próprio da ChegowIA.
+O canal de WhatsApp é atendido pelo Gupshup, BSP homologado pela Meta. A
+ChegowIA não fala com a Cloud API diretamente: o Gupshup faz a ponte com a Meta,
+sem exigir App Review próprio da ChegowIA.
 
-**Consequência que precisa estar clara para o cliente:** o número conectado sai
-do aplicativo WhatsApp Business. O Gupshup não oferece coexistência, então o
-atendimento passa a acontecer só pela plataforma.
+**Padrão para números que já usam WhatsApp Business:** use **coexistência**.
+Ela mantém o mesmo número no WhatsApp Business App e na Central da ChegowIA. A
+mensagem digitada pelo celular entra na Central como atendimento humano; a
+mensagem enviada pela Central aparece no aplicativo. Só escolha o onboarding
+padrão/exclusivo para um número novo que não precisa do app.
 
 1. Crie a conta em `gupshup.io` e pegue a **apikey** (nível da conta, não do app).
 2. Defina no ambiente:
@@ -171,14 +173,23 @@ manual e o pedido do empresário é o gatilho.
 2. No painel do Gupshup, crie um app do tipo **Access API** com nome único, sem
    espaço nem acento.
 3. Na aba **Webhooks** do app, cole a URL de callback que o card do super-admin
-   exibe. Ela aceita tanto o formato Meta (v3) quanto o nativo do Gupshup.
-4. Inicie o onboarding do número. No passo do Facebook, copie o link de
-   **Direct Facebook Registration** e pare — não conclua você.
+   exibe. Prefira o formato **Meta (v3)**. Para coexistência, habilite também os
+   eventos **COEXISTENCE** e **ACCOUNT**, além de mensagens e `billing-event`.
+4. Inicie o onboarding do número. No passo do Facebook, escolha **Connect a
+   WhatsApp Business app** / **usar WhatsApp Business existente**. Copie o link
+   de **Direct Facebook Registration** e pare — não conclua você.
 5. Em **Super-admin → Empresas → [empresa]**, preencha nome do aplicativo, App ID
    e o link de cadastro.
-6. A empresa conclui pelo botão **Conectar meu WhatsApp**, com o Facebook dela.
-   Você nunca acessa a conta do cliente.
-7. Preencha o **número** no card para ativar o canal.
+6. A empresa conclui pelo botão **Conectar meu WhatsApp**, com o Facebook dela,
+   e confirma pelo QR code ou código de acesso dentro do **WhatsApp Business
+   App**. Você nunca acessa a conta do cliente.
+7. Preencha o **número** no card para ativar o canal e marque o modo
+   **Manter WhatsApp Business App**.
+
+Não migre automaticamente um número que já está exclusivo na API: a volta para
+coexistência exige uma nova conexão feita pelo dono do número no aplicativo. A
+operação deve ser agendada e confirmada por ele; desconectar o canal atual antes
+da nova conexão estar pronta pode interromper o atendimento.
 
 O App ID é obrigatório para editar o perfil do WhatsApp (foto, descrição,
 contatos) pelo painel — sem ele essa seção não aparece.

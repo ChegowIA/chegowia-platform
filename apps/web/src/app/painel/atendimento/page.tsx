@@ -266,9 +266,8 @@ export default function AtendimentoPage() {
 
       {/*
         O perfil fica abaixo da caixa de entrada, e não dentro dela: a grade do
-        inbox tem altura fixa, e é aqui que o empresário passa o dia — com o
-        número fora do aplicativo, este é o único lugar onde ele edita foto,
-        descrição e contatos.
+        inbox tem altura fixa, e esta é uma configuração operacional usada no
+        atendimento pelo app e pela Central.
       */}
       {isAdmin && <WhatsAppProfileSettings />}
     </div>

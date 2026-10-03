@@ -400,6 +400,12 @@ export interface MessagingChannel {
     appName?: string | null;
     /** Link que o empresário abre para concluir o cadastro com o Facebook dele. */
     signupLink?: string | null;
+    /**
+     * COEXISTENCE mantém o número no WhatsApp Business App; PLATFORM_ONLY é o
+     * fluxo antigo/exclusivo. `null` quer dizer que a conexão é anterior a essa
+     * informação e não deve ser apresentada como coexistência por suposição.
+     */
+    connectionMode?: "COEXISTENCE" | "PLATFORM_ONLY" | null;
     /** Quando o empresário pediu o WhatsApp; dispara o trabalho manual do superadmin. */
     accessRequestedAt?: string | null;
   };

@@ -49,6 +49,11 @@ export function GupshupCallbackUrls() {
         mesmo webhook. O sistema usa a confirmação de categoria/isenção do Gupshup e preserva a taxa do provedor
         quando a Meta não cobra uma mensagem de utilidade.
       </p>
+      <p className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-xs leading-5 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200">
+        Para um número em <strong>coexistência</strong>, use o formato <strong>Meta (v3)</strong> e habilite também
+        os eventos <strong>COEXISTENCE</strong> e <strong>ACCOUNT</strong> no app do Gupshup. Assim mensagens
+        enviadas pelo WhatsApp Business App entram na Central e uma desconexão aparece no painel.
+      </p>
     </div>
   );
 }

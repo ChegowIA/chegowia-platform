@@ -28,7 +28,10 @@ import { MessagingSecretsService } from "./messaging-secrets.service";
 import { LocalStorageService } from "../common/storage/local-storage.service";
 import { formatForWhatsapp } from "./whatsapp-text-format";
 import { GupshupWhatsAppProvider } from "./providers/gupshup-whatsapp.provider";
-import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
+import {
+  ConnectWhatsAppGupshupDto,
+  GupshupConnectionMode,
+} from "./dto/connect-whatsapp-gupshup.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdatePlatformOutreachTemplateDto } from "./dto/update-platform-outreach-template.dto";
 import { StartPlatformConversationDto } from "./dto/start-platform-conversation.dto";
@@ -120,6 +123,7 @@ export class PlatformWhatsAppService {
         ...channelConfig(current),
         ...(number ? { number } : {}),
         ...(dto.signupLink ? { gupshupSignupLink: dto.signupLink.trim() } : {}),
+        ...(dto.connectionMode ? { gupshupConnectionMode: dto.connectionMode } : {}),
       },
       gupshupAppName: appName,
       gupshupAppId: dto.appId?.trim() || null,
@@ -146,11 +150,7 @@ export class PlatformWhatsAppService {
   // Perfil comercial do número institucional
   // ---------------------------------------------------------------------------
 
-  /**
-   * Perfil que o interessado vê ao abrir a conversa com a ChegowIA. Com o número
-   * fora do aplicativo WhatsApp Business, este painel é o único lugar onde foto,
-   * descrição e contatos podem ser editados.
-   */
+  /** Perfil que o interessado vê ao abrir a conversa com a ChegowIA. */
   async getProfile() {
     const { channel, appToken } = await this.gupshupChannelWithToken();
     const [profile, photoUrl] = await Promise.all([
@@ -599,6 +599,27 @@ export class PlatformWhatsAppService {
     return this.processMessagesChange(channel, value);
   }
 
+  /**
+   * Mensagens escritas pela equipe no WhatsApp Business App, quando o número
+   * foi conectado em coexistência. Elas são ecos de saída, não mensagens de um
+   * interessado, portanto ficam no histórico como atendimento humano e não
+   * acionam o assistente comercial.
+   */
+  async handleGupshupCoexistenceEchoesByAppId(appId: string, value: any) {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({
+      where: { gupshupAppId: appId },
+    });
+    return this.processCoexistenceEchoes(channel, value);
+  }
+
+  /** Espelha no painel quando a Meta remove a conexão pelo aplicativo. */
+  async handleGupshupAccountUpdateByAppId(appId: string, value: any) {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({
+      where: { gupshupAppId: appId },
+    });
+    return this.processAccountUpdate(channel, value);
+  }
+
   /** Devolve false quando o canal não é da plataforma, para o chamador seguir procurando. */
   private async processMessagesChange(channel: any, value: any) {
     if (!channel) return false;
@@ -614,6 +635,95 @@ export class PlatformWhatsAppService {
     for (const message of value.messages ?? []) {
       await this.processIncomingMessage(channel, value.contacts ?? [], message, value);
     }
+    return true;
+  }
+
+  private async processCoexistenceEchoes(channel: any, value: any) {
+    if (!channel) return false;
+    if (channel.status !== MessagingChannelStatus.ATIVO) return true;
+    const echoes = Array.isArray(value?.message_echoes) ? value.message_echoes : [];
+    if (!echoes.length) return true;
+
+    await this.db().platformWhatsAppChannel.update({
+      where: { id: channel.id },
+      data: { lastWebhookAt: new Date(), lastError: null },
+    });
+    for (const echo of echoes) {
+      await this.processBusinessAppMessageEcho(channel, echo, value);
+    }
+    return true;
+  }
+
+  private async processBusinessAppMessageEcho(channel: any, message: any, rawPayload: unknown) {
+    const providerMessageId = String(message?.id ?? "");
+    const customerPhone = normalizePhone(String(message?.to ?? ""));
+    if (!providerMessageId || !customerPhone) return;
+    const duplicate = await this.db().platformWhatsAppMessage.findUnique({ where: { providerMessageId } });
+    if (duplicate) return;
+
+    const now = new Date();
+    const parsed = incomingContent(message);
+    const existing = await this.db().platformWhatsAppConversation.findUnique({
+      where: { channelId_customerPhone: { channelId: channel.id, customerPhone } },
+    });
+    const conversation = await this.db().platformWhatsAppConversation.upsert({
+      where: { channelId_customerPhone: { channelId: channel.id, customerPhone } },
+      create: {
+        channelId: channel.id,
+        customerPhone,
+        mode: WhatsAppConversationMode.HUMANO,
+        status: WhatsAppConversationStatus.ABERTA,
+        lastMessageText: parsed.text,
+        lastMessageAt: now,
+        humanRequestedAt: now,
+      },
+      update: {
+        mode: WhatsAppConversationMode.HUMANO,
+        status: WhatsAppConversationStatus.ABERTA,
+        lastMessageText: parsed.text,
+        lastMessageAt: now,
+        humanRequestedAt: existing?.humanRequestedAt ?? now,
+      },
+    });
+    try {
+      await this.db().platformWhatsAppMessage.create({
+        data: {
+          channelId: channel.id,
+          conversationId: conversation.id,
+          providerMessageId,
+          direction: WhatsAppMessageDirection.ENVIADA,
+          status: WhatsAppMessageStatus.ENVIADA,
+          type: String(message?.type ?? "text"),
+          body: parsed.text,
+          rawPayload: rawPayload as any,
+        },
+      });
+    } catch (error) {
+      if (isUniqueConstraint(error)) return;
+      throw error;
+    }
+    this.realtime.emitToSuperAdmins("platform.whatsapp.message.sent", { conversationId: conversation.id });
+    this.realtime.emitToSuperAdmins("platform.whatsapp.conversation.updated", { conversationId: conversation.id });
+  }
+
+  private async processAccountUpdate(channel: any, value: any) {
+    if (!channel) return false;
+    const event = String(value?.event ?? "").trim();
+    if (!GUPSHUP_DISCONNECT_EVENTS.has(event)) return true;
+    const detail = coexistenceDisconnectMessage(event, value?.disconnection_info?.reason);
+    await this.db().platformWhatsAppChannel.update({
+      where: { id: channel.id },
+      data: {
+        status: MessagingChannelStatus.INATIVO,
+        lastWebhookAt: new Date(),
+        lastError: detail,
+      },
+    });
+    this.realtime.emitToSuperAdmins("platform.whatsapp.channel.updated", {
+      channelId: channel.id,
+      status: MessagingChannelStatus.INATIVO,
+      reason: detail,
+    });
     return true;
   }
 
@@ -1243,6 +1353,7 @@ export class PlatformWhatsAppService {
         appId: channel.gupshupAppId ?? null,
         appName: channel.gupshupAppName ?? null,
         signupLink: channelConfig(channel).gupshupSignupLink ?? null,
+        connectionMode: gupshupConnectionMode(channel),
       },
       integration: {
         connectedAt: channel.connectedAt ?? null,
@@ -1262,7 +1373,7 @@ export class PlatformWhatsAppService {
       salesInstructions: null,
       outreachTemplate: { id: null, name: null, language: null, body: null, params: [], configured: false },
       connected: false,
-      gupshup: { appId: null, appName: null, signupLink: null },
+      gupshup: { appId: null, appName: null, signupLink: null, connectionMode: null },
       integration: {
         connectedAt: null,
         lastWebhookAt: null,
@@ -1276,6 +1387,33 @@ function channelConfig(channel: any): Record<string, unknown> {
   return channel?.config && typeof channel.config === "object" && !Array.isArray(channel.config)
     ? channel.config
     : {};
+}
+
+function gupshupConnectionMode(channel: any): GupshupConnectionMode | null {
+  const value = channelConfig(channel).gupshupConnectionMode;
+  return value === "COEXISTENCE" || value === "PLATFORM_ONLY" ? value : null;
+}
+
+const GUPSHUP_DISCONNECT_EVENTS = new Set([
+  "PARTNER_REMOVED",
+  "PARTNER_APP_UNINSTALLED",
+]);
+
+function coexistenceDisconnectMessage(event: string, reason: unknown) {
+  const normalizedReason = String(reason ?? "").trim();
+  const context: Record<string, string> = {
+    PRIMARY_INACTIVITY: "O WhatsApp Business App ficou inativo e a Meta removeu a conexão.",
+    COMPANION_INACTIVITY: "O aparelho vinculado ficou inativo e a Meta removeu a conexão.",
+    USER_RE_REGISTERED: "O número foi registrado novamente em outro aparelho.",
+    BUSINESS_DOWNGRADE: "O número foi registrado no WhatsApp comum, não no WhatsApp Business.",
+    CHANGE_NUMBER: "O número do WhatsApp Business foi alterado.",
+    ACCOUNT_DISCONNECTED: "A conta do WhatsApp foi desconectada.",
+  };
+  if (event === "PARTNER_APP_UNINSTALLED") {
+    return "A empresa desconectou a ChegowIA no WhatsApp Business App. Conecte novamente quando quiser retomar a Central.";
+  }
+  return context[normalizedReason]
+    ?? "A integração com o WhatsApp Business App foi encerrada pela Meta. Conecte novamente para retomar a Central.";
 }
 
 function channelNumber(channel: any) {

@@ -6,16 +6,29 @@ import { api, apiErrorMessage } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FormField, Input } from "@/components/ui/input";
+import { FormField, Input, Select } from "@/components/ui/input";
 import { GupshupCallbackUrls } from "@/components/messaging/gupshup-callback-urls";
 
 type PlatformChannelGupshup = {
   connected: boolean;
   number?: string | null;
-  gupshup: { appId?: string | null; appName?: string | null; signupLink?: string | null };
+  gupshup: {
+    appId?: string | null;
+    appName?: string | null;
+    signupLink?: string | null;
+    connectionMode?: "COEXISTENCE" | "PLATFORM_ONLY" | null;
+  };
 };
 
-const EMPTY_FORM = { appName: "", appId: "", signupLink: "", number: "" };
+type ConnectionMode = "COEXISTENCE" | "PLATFORM_ONLY";
+
+const EMPTY_FORM: { appName: string; appId: string; signupLink: string; number: string; connectionMode: ConnectionMode } = {
+  appName: "",
+  appId: "",
+  signupLink: "",
+  number: "",
+  connectionMode: "COEXISTENCE",
+};
 
 /**
  * Conexão do número institucional da ChegowIA pelo Gupshup.
@@ -47,6 +60,8 @@ export function PlatformGupshupLink() {
       appId: channel.gupshup?.appId ?? "",
       signupLink: channel.gupshup?.signupLink ?? "",
       number: channel.number ?? "",
+      connectionMode: channel.gupshup?.connectionMode
+        ?? (channel.gupshup?.appId ? "PLATFORM_ONLY" : "COEXISTENCE"),
     });
   }, [channel]);
 
@@ -57,6 +72,7 @@ export function PlatformGupshupLink() {
         appId: form.appId.trim() || undefined,
         signupLink: form.signupLink.trim() || undefined,
         number: form.number.trim() || undefined,
+        connectionMode: form.connectionMode,
       })).data;
     },
     onSuccess: (updated) => {
@@ -89,9 +105,16 @@ export function PlatformGupshupLink() {
 
       <CardContent className="space-y-4">
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          Alternativa à Meta para o número comercial da ChegowIA. Crie o aplicativo no painel do Gupshup, cole a
-          URL de callback lá e traga o nome e o id para cá.
+          Canal comercial da ChegowIA pelo provedor oficial. Crie o aplicativo no painel do Gupshup, cole a URL de
+          callback lá e traga o nome e o id para cá.
         </p>
+
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+          Para continuar atendendo também no celular, escolha <strong>“Connect a WhatsApp Business app”</strong> no
+          cadastro oficial e leia o QR code no app <strong>WhatsApp Business</strong>. Não cadastre por SMS um número
+          que já está no aplicativo. Confira a foto e os dados comerciais no app antes de concluir, pois a Meta pode
+          restringir a troca da foto após o onboarding em coexistência.
+        </div>
 
         <GupshupCallbackUrls />
 
@@ -115,6 +138,15 @@ export function PlatformGupshupLink() {
               placeholder="https://"
               onChange={(event) => setForm((current) => ({ ...current, signupLink: event.target.value }))}
             />
+          </FormField>
+          <FormField label="Modo da conexão">
+            <Select
+              value={form.connectionMode}
+              onChange={(event) => setForm((current) => ({ ...current, connectionMode: event.target.value as ConnectionMode }))}
+            >
+              <option value="COEXISTENCE">Manter WhatsApp Business App (recomendado)</option>
+              <option value="PLATFORM_ONLY">Somente pela ChegowIA</option>
+            </Select>
           </FormField>
           <FormField label="Número (preencha após concluir o cadastro)">
             <Input

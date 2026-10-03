@@ -74,4 +74,18 @@ describe("DTOs críticos", () => {
     });
     expect((await validate(dto)).some((error) => error.property === "signupLink")).toBe(true);
   });
+
+  it("aceita apenas os modos seguros de conexão do WhatsApp", async () => {
+    const coexistence = plainToInstance(ConnectWhatsAppGupshupDto, {
+      appName: "chegowia1",
+      connectionMode: "COEXISTENCE",
+    });
+    expect(await validate(coexistence)).toHaveLength(0);
+
+    const invalid = plainToInstance(ConnectWhatsAppGupshupDto, {
+      appName: "chegowia1",
+      connectionMode: "qualquer-coisa",
+    });
+    expect((await validate(invalid)).some((error) => error.property === "connectionMode")).toBe(true);
+  });
 });

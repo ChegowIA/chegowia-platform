@@ -62,10 +62,9 @@ const EMPTY_FORM = {
 };
 
 /**
- * Perfil que o cliente final vê no WhatsApp. Como o número deixa de estar no
- * aplicativo, este painel passa a ser o único lugar onde o empresário edita foto,
- * descrição e contatos — por isso ele fica junto da Central de atendimento, e não
- * escondido nas configurações técnicas.
+ * Perfil que o cliente final vê no WhatsApp. Ele pode ser gerido pelo provedor
+ * tanto no canal exclusivo quanto na coexistência; fica junto da Central porque
+ * é uma configuração operacional do atendimento, não técnica.
  */
 export function WhatsAppProfileSettings({
   basePath = "/messaging/channel/whatsapp",

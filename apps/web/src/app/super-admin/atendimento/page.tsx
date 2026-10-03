@@ -302,9 +302,8 @@ export default function SuperAdminAtendimentoPage() {
 
       {/*
         Perfil do número comercial. Fica fora do bloco de conexão porque é edição
-        do dia a dia, não configuração inicial — e com o número fora do aplicativo
-        é o único lugar onde foto e descrição podem ser mexidas. O componente se
-        esconde sozinho quando o canal não está no Gupshup.
+        do dia a dia, não configuração inicial. O componente se esconde sozinho
+        quando o canal não está no Gupshup.
       */}
       <WhatsAppProfileSettings
         basePath="/platform/whatsapp/channel"

@@ -17,17 +17,17 @@ const STEPS = [
     detail: "Um clique aqui. Nada mais é necessário da sua parte neste momento.",
   },
   {
-    title: "Preparamos seu número",
-    detail: "Nossa equipe cria a conexão com o provedor oficial. Costuma levar algumas horas.",
+    title: "Preparamos a conexão sem tirar seu app",
+    detail: "Nossa equipe cria a coexistência com o provedor oficial. Costuma levar algumas horas.",
   },
   {
-    title: "Você conecta seu WhatsApp",
+    title: "Você mantém seu WhatsApp conectado",
     detail:
-      "Aparece um botão aqui. Você entra com o Facebook da sua empresa, escolhe o número e confirma o código que chega por SMS. Não pedimos sua senha em momento nenhum.",
+      "Aparece um botão aqui. No cadastro oficial, escolha “usar WhatsApp Business existente” e leia o QR code no app. Não pedimos sua senha em momento nenhum.",
   },
   {
     title: "Pronto para atender",
-    detail: "As conversas passam a aparecer na Central de atendimento, com IA e equipe.",
+    detail: "As conversas passam a aparecer na Central de atendimento, com IA e equipe, e o app continua funcionando.",
   },
 ];
 
@@ -126,15 +126,23 @@ export function WhatsAppGupshupSettings() {
             <p className="text-sm text-slate-600 dark:text-slate-300">
               Seu número <strong>{channel?.number ?? "—"}</strong> está atendendo pela plataforma.
             </p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              As conversas aparecem na Central de atendimento, e o perfil do WhatsApp é editado por lá.
-            </p>
+            {channel?.gupshup?.connectionMode === "COEXISTENCE" ? (
+              <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                Coexistência ativa: o WhatsApp Business App continua disponível. Mensagens enviadas pelo celular também
+                entram no histórico da Central como atendimento humano.
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                As conversas aparecem na Central de atendimento. Para manter o app no mesmo número, solicite uma
+                reconexão em modo coexistência.
+              </p>
+            )}
           </div>
         ) : (
           <>
             <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
-              Conecte o WhatsApp da sua empresa para atender com IA e equipe pela plataforma. São quatro
-              etapas, e a maior parte do trabalho é nossa.
+              Conecte o WhatsApp da sua empresa para atender com IA e equipe pela plataforma, sem perder o acesso ao
+              WhatsApp Business no celular. São quatro etapas, e a maior parte do trabalho é nossa.
             </p>
 
             <ol className="space-y-3">
@@ -172,10 +180,11 @@ export function WhatsAppGupshupSettings() {
             </ol>
 
             {currentStep === 2 && (
-              <p className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
-                Ao conectar, este número passa a ser atendido pela plataforma e sai do aplicativo WhatsApp
-                Business. Se ele estiver em outro sistema, desative a verificação em duas etapas antes de
-                começar.
+              <p className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
+                <strong>Importante:</strong> escolha <strong>“Connect a WhatsApp Business app”</strong> (ou “usar
+                WhatsApp Business existente”) na janela oficial e confirme pelo QR code dentro do app. Não escolha o
+                cadastro padrão por SMS para este número; esse é o caminho que o deixa exclusivo da plataforma. Confira
+                foto e dados comerciais no app antes de concluir.
               </p>
             )}
           </>

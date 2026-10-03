@@ -46,10 +46,7 @@ export class PlatformWhatsAppController {
     return this.platformWhatsApp.connectGupshupManual(dto);
   }
 
-  /**
-   * Perfil que o interessado vê ao abrir a conversa com a ChegowIA. Com o número
-   * fora do aplicativo, é por aqui que foto, descrição e contatos são editados.
-   */
+  /** Perfil que o interessado vê ao abrir a conversa com a ChegowIA. */
   @Get("channel/profile")
   profile() {
     return this.platformWhatsApp.getProfile();

@@ -127,10 +127,7 @@ export class MessagingController {
     return this.messagingService.disconnectGupshupConnection(companyId);
   }
 
-  /**
-   * Perfil que o cliente final vê no WhatsApp. Com o número fora do aplicativo,
-   * este é o único lugar onde o empresário edita foto, descrição e contatos.
-   */
+  /** Perfil que o cliente final vê no WhatsApp, gerido pelo provedor do canal. */
   @Roles(Role.ADMIN)
   @Get("channel/whatsapp/profile")
   getWhatsAppProfile(@CurrentUser("companyId") companyId: string) {
