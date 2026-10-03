@@ -176,7 +176,21 @@ export default function AddressesPage() {
         </div>
       </main>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? "Editar endereço" : "Novo endereço"}>
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editing ? "Editar endereço" : "Novo endereço"}
+        footer={(
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => setModalOpen(false)}>
+              Cancelar
+            </Button>
+            <Button className="w-full sm:w-auto" disabled={form.zipCode.replace(/\D/g, "").length !== 8} isLoading={saveAddress.isPending} onClick={() => saveAddress.mutate()}>
+              Salvar endereço
+            </Button>
+          </div>
+        )}
+      >
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormField label="Apelido (opcional)">
@@ -216,14 +230,6 @@ export default function AddressesPage() {
             Definir como endereço padrão
           </label>
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={() => setModalOpen(false)}>
-              Cancelar
-            </Button>
-            <Button disabled={form.zipCode.replace(/\D/g, "").length !== 8} isLoading={saveAddress.isPending} onClick={() => saveAddress.mutate()}>
-              Salvar
-            </Button>
-          </div>
         </div>
       </Modal>
     </>

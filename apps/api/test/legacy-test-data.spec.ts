@@ -109,21 +109,47 @@ describe("dados legados da homologação", () => {
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
   });
 
-  it("não consulta rota quando a cidade/área atendida não corresponde ao endereço salvo", async () => {
+  it("permite a demo na cidade vizinha quando CEP e rota real estão dentro do raio", async () => {
     const { service, geography, postalCodeLocations } = createService({
       address: {
         id: "address-1",
         street: "Rua 1",
         number: "100",
         neighborhood: "Centro",
-        city: "Anápolis",
+        city: "Aparecida de Goiânia",
         state: "GO",
-        zipCode: "75000000",
+        zipCode: "74968190",
       },
     });
+    await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual(expect.objectContaining({ OR: expect.any(Array) }));
+    expect(postalCodeLocations.isLikelyWithinDeliveryRadius).toHaveBeenCalledTimes(1);
+    expect(geography.calculateDrivingRoute).toHaveBeenCalledTimes(1);
+  });
+
+  it("não consulta rota quando a pré-triagem de CEP informa que o endereço está fora do raio", async () => {
+    const { service, geography } = createService({ postalMatch: false });
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
-    expect(postalCodeLocations.isLikelyWithinDeliveryRadius).not.toHaveBeenCalled();
     expect(geography.calculateDrivingRoute).not.toHaveBeenCalled();
+  });
+
+  it("mantém a exceção da demo fora do filtro textual de cidade do catálogo", async () => {
+    const { service } = createService({
+      address: {
+        id: "address-1",
+        street: "Rua 1",
+        number: "100",
+        neighborhood: "Centro",
+        city: "Aparecida de Goiânia",
+        state: "GO",
+        zipCode: "74968190",
+      },
+    });
+    await expect(service.publicCatalogCompanyScope(targetViewer, "Aparecida de Goiânia")).resolves.toEqual({
+      OR: [
+        expect.objectContaining({ isTestOnly: false }),
+        expect.objectContaining({ slug: "operacao-demo-chegowia", isTestOnly: true }),
+      ],
+    });
   });
 
   it("confere o e-mail no banco quando a superfície conhece apenas o id do usuário", async () => {

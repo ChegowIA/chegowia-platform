@@ -4,6 +4,7 @@ import { PRISMA_CLIENT } from "../prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../prisma/prisma-client.factory";
 import { GeographicPoint, GeographyService } from "../geography/geography.service";
 import { PostalCodeLocationService } from "../geography/postal-code-location.service";
+import { filtroPublicoDeEmpresa } from "../public-visibility/subscription-grace";
 
 const DEMO_COMPANY_SLUG = "operacao-demo-chegowia";
 const DEMO_CATALOG_EMAIL = "thiagolpssouza@gmail.com";
@@ -34,6 +35,37 @@ export class LegacyTestDataService {
   async publicCompanyVisibilityWhere(viewer?: JwtPayload | null) {
     if (!viewer?.sub || !isDemoCatalogEmail(viewer.email)) return HIDDEN_TEST_COMPANIES;
     return this.visibilityForEligibleUser(viewer.sub);
+  }
+
+  /**
+   * Escopo completo para resultados de catálogo que também filtram por cidade.
+   *
+   * A regra comercial normal continua exigindo sede/área de entrega na cidade
+   * escolhida. A demo privada é diferente: para a única conta autorizada, CEP
+   * e rota já foram validados antes deste método devolver a exceção. Deixá-la
+   * passar pelo filtro textual de cidade a esconderia mesmo estando a poucos
+   * metros, em municípios vizinhos da região metropolitana.
+   */
+  async publicCatalogCompanyScope(viewer?: JwtPayload | null, city?: string | null) {
+    const publicCompanies = {
+      isTestOnly: false,
+      ...filtroPublicoDeEmpresa({ cidade: city }),
+    };
+    if (!viewer?.sub || !isDemoCatalogEmail(viewer.email)) return publicCompanies;
+    if (!(await this.canViewPrivateDemo(viewer.sub))) return publicCompanies;
+
+    return {
+      OR: [
+        publicCompanies,
+        {
+          slug: DEMO_COMPANY_SLUG,
+          isTestOnly: true,
+          // A exceção continua sujeita à assinatura. Só a pré-triagem por
+          // município é dispensada, pois a rota real já confirmou a distância.
+          ...filtroPublicoDeEmpresa(),
+        },
+      ],
+    };
   }
 
   async publicCompanyVisibilityWhereForUserId(userId?: string | null) {
@@ -81,10 +113,9 @@ export class LegacyTestDataService {
       }),
       this.db().company.findFirst({
         where: { slug: DEMO_COMPANY_SLUG, isActive: true, isTestOnly: true },
-        include: { deliveryAreas: { where: { isActive: true }, select: { city: true } } },
       }),
     ]);
-    if (!address || !company || !isCityServed(company, address.city) || !address.zipCode || !company.zipCode) {
+    if (!address || !company || !address.zipCode || !company.zipCode) {
       return false;
     }
 
@@ -144,21 +175,6 @@ export class LegacyTestDataService {
 
 function isDemoCatalogEmail(value?: string | null) {
   return value?.trim().toLowerCase() === DEMO_CATALOG_EMAIL;
-}
-
-function isCityServed(company: { city?: string | null; deliveryAreas?: Array<{ city?: string | null }> }, city?: string | null) {
-  const target = normalizePlace(city);
-  if (!target) return false;
-  return normalizePlace(company.city) === target
-    || (company.deliveryAreas ?? []).some((area) => normalizePlace(area.city) === target);
-}
-
-function normalizePlace(value?: string | null) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLocaleLowerCase("pt-BR");
 }
 
 function readCoordinates(value: { latitude?: unknown; longitude?: unknown }): GeographicPoint | null {

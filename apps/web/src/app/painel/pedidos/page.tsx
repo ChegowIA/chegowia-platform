@@ -381,7 +381,7 @@ export default function PedidosPage() {
                     />
                   ))}
                   {!isLoading && columnOrders.length === 0 && (
-                    <div className={`grid min-h-28 place-items-center rounded-xl border border-dashed ${column.border} bg-white/40 px-4 text-center text-xs font-medium text-slate-400`}>
+                    <div className={`grid min-h-28 place-items-center rounded-xl border border-dashed ${column.border} bg-white/70 px-4 text-center text-xs font-medium text-slate-500 dark:bg-slate-950/55 dark:text-slate-400`}>
                       {draggedId && validTarget ? `Solte para mover para ${column.shortTitle}` : "Nenhum pedido nesta etapa"}
                     </div>
                   )}
@@ -425,7 +425,7 @@ function OrderCard({
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`group relative overflow-hidden rounded-xl border border-white bg-white p-3.5 pt-4 shadow-[0_14px_32px_-22px_rgba(15,23,42,.55)] transition-all duration-200 ${
+      className={`group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-3.5 pt-4 shadow-[0_14px_32px_-22px_rgba(15,23,42,.55)] transition-all duration-200 dark:border-slate-700 dark:bg-slate-950 dark:shadow-[0_14px_32px_-22px_rgba(0,0,0,.8)] ${
         draggable ? "cursor-grab hover:-translate-y-0.5 hover:shadow-lg active:cursor-grabbing" : ""
       } ${dragging ? "scale-95 rotate-1 opacity-40" : "opacity-100"}`}
     >
@@ -436,7 +436,7 @@ function OrderCard({
           <h3 className="mt-1 line-clamp-1 font-black text-slate-950 dark:text-slate-100">{order.customer?.name ?? order.customerName ?? "Cliente"}</h3>
           {order.source === "WHATSAPP" && <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">WhatsApp IA</span>}
         </div>
-        {draggable && <span className="select-none text-lg leading-none text-slate-300 group-hover:text-slate-500" title="Arrastar">⠿</span>}
+        {draggable && <span className="select-none text-lg leading-none text-slate-300 group-hover:text-slate-500 dark:text-slate-600 dark:group-hover:text-slate-300" title="Arrastar">⠿</span>}
       </div>
 
       <div className="my-3 space-y-1.5 border-y border-slate-100 py-3 dark:border-slate-800">
@@ -457,7 +457,7 @@ function OrderCard({
             value={order.delivery?.motoboyId ?? ""}
             disabled={assigning}
             onChange={(event) => event.target.value && onAssign(event.target.value)}
-            className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs font-bold text-slate-700 outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:bg-slate-800/60 dark:border-slate-800 dark:text-slate-300"
+            className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs font-bold text-slate-700 outline-none transition focus:border-brand-400 focus:bg-white focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:bg-slate-950"
           >
             <option value="">Selecionar motoboy...</option>
             {motoboys.map((motoboy) => (
@@ -478,7 +478,7 @@ function OrderCard({
             draggable={false}
             onClick={onContact}
             title="Falar com o cliente"
-            className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-50 text-emerald-700 transition hover:bg-emerald-600 hover:text-white dark:text-emerald-400"
+            className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-50 text-emerald-700 transition hover:bg-emerald-600 hover:text-white dark:bg-emerald-950/45 dark:text-emerald-300 dark:hover:bg-emerald-600"
           >
             <WhatsappIcon />
           </button>

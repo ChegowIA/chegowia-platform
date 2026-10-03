@@ -100,9 +100,9 @@ export default function StorePage() {
         {!loadingCompany && !company && <p className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400">Loja não encontrada.</p>}
 
         {company && (
-          <section className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-36px_rgba(15,23,42,.4)] sm:p-7 dark:bg-slate-900 dark:border-slate-800/80">
-            <div className="pointer-events-none absolute -right-12 -top-20 h-56 w-56 rounded-full bg-brand-100/70 blur-3xl" />
-            <div className="pointer-events-none absolute bottom-0 right-1/3 h-24 w-48 rounded-full bg-accent-100/50 blur-3xl" />
+          <section className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-36px_rgba(15,23,42,.4)] sm:p-7 dark:border-slate-700 dark:bg-slate-900 dark:shadow-[0_24px_70px_-36px_rgba(0,0,0,.8)]">
+            <div className="pointer-events-none absolute -right-12 -top-20 h-56 w-56 rounded-full bg-brand-100/70 blur-3xl dark:bg-brand-950/45" />
+            <div className="pointer-events-none absolute bottom-0 right-1/3 h-24 w-48 rounded-full bg-accent-100/50 blur-3xl dark:bg-accent-950/35" />
             <div className="relative flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-4">
                 <ProductImage src={company.logoUrl} alt={company.name} className="h-20 w-20 shrink-0 rounded-2xl shadow-lg sm:h-24 sm:w-24" />
@@ -123,13 +123,13 @@ export default function StorePage() {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2 sm:min-w-64">
-                <div className="rounded-2xl border border-brand-100 bg-brand-50/80 px-4 py-3 dark:border-brand-900/50">
+                <div className="rounded-2xl border border-brand-100 bg-brand-50/80 px-4 py-3 dark:border-brand-900/60 dark:bg-brand-950/45">
                   <p className="text-xs font-semibold text-brand-900 dark:text-brand-200">Taxa de entrega</p>
                   <p className="text-lg font-black text-brand-700 dark:text-brand-300">a partir de {formatCurrency(Number(company.deliveryFeeBase))}</p>
                 </div>
-                <div className="rounded-2xl border border-accent-100 bg-accent-50/80 px-4 py-3">
-                  <p className="text-xs font-semibold text-accent-900">Raio de entrega</p>
-                  <p className="text-lg font-black text-accent-800">{Number(company.deliveryRadiusKm).toFixed(1)} km</p>
+                <div className="rounded-2xl border border-accent-100 bg-accent-50/80 px-4 py-3 dark:border-accent-900/60 dark:bg-accent-950/45">
+                  <p className="text-xs font-semibold text-accent-900 dark:text-accent-200">Raio de entrega</p>
+                  <p className="text-lg font-black text-accent-800 dark:text-accent-300">{Number(company.deliveryRadiusKm).toFixed(1)} km</p>
                 </div>
               </div>
             </div>
@@ -140,7 +140,7 @@ export default function StorePage() {
 
         {menu && (
           <div className="mt-6 min-w-0 space-y-6">
-            <div className="sticky top-[65px] z-20 -mx-4 border-y border-slate-200/70 bg-white/90 px-4 py-3 shadow-sm backdrop-blur-xl sm:mx-0 sm:rounded-2xl sm:border dark:bg-slate-900/90">
+            <div className="sticky top-[65px] z-20 -mx-4 border-y border-slate-200/70 bg-white/90 px-4 py-3 shadow-sm backdrop-blur-xl sm:mx-0 sm:rounded-2xl sm:border dark:border-slate-700 dark:bg-slate-900/90">
               <div className="grid gap-3 lg:grid-cols-[minmax(260px,.7fr)_1.3fr] lg:items-center">
                 <label className="relative block">
                   <span className="pointer-events-none absolute inset-y-0 left-4 grid place-items-center text-slate-400">

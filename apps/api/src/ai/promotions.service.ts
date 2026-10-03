@@ -30,13 +30,12 @@ export class PromotionsService {
   async publicList(params: { city?: string; state?: string; zipCode?: string }, viewer?: JwtPayload) {
     const now = new Date();
     const city = params.city?.trim();
-    const visibility = this.legacyTestData
-      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
-      : { isTestOnly: false };
+    const catalogScope = this.legacyTestData
+      ? await this.legacyTestData.publicCatalogCompanyScope(viewer, city)
+      : { isTestOnly: false, ...filtroPublicoDeEmpresa({ cidade: city }) };
     const companyWhere: any = {
       isActive: true,
-      ...visibility,
-      ...filtroPublicoDeEmpresa({ cidade: city }),
+      ...catalogScope,
     };
     if (params.zipCode && this.postalCodeLocations) {
       const candidates = await this.db().company.findMany({

@@ -311,16 +311,12 @@ export class CompaniesService {
    * completa no checkout é a confirmação definitiva da entrega.
    */
   async publicList(params: { city?: string; state?: string; neighborhood?: string; search?: string; zipCode?: string }, viewer?: JwtPayload) {
-    const visibility = this.legacyTestData
-      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
-      : { isTestOnly: false };
+    const catalogScope = this.legacyTestData
+      ? await this.legacyTestData.publicCatalogCompanyScope(viewer, params.city)
+      : { isTestOnly: false, ...filtroPublicoDeEmpresa({ cidade: params.city }) };
     const where: any = {
       isActive: true,
-      ...visibility,
-      // `contains` era o filtro aqui, e casava "Rio Branco" com "Rio Branco do
-      // Sul", em outro estado. A comparação passou a ser por igualdade, somada à
-      // loja que cadastrou área de entrega naquela cidade.
-      ...filtroPublicoDeEmpresa({ cidade: params.city }),
+      ...catalogScope,
     };
     if (params.search) where.name = { contains: params.search };
 
@@ -360,15 +356,14 @@ export class CompaniesService {
    * `publicList`. Só entra aqui o que a loja realmente mostra ao cliente.
    */
   async publicFindBySlug(slug: string, viewer?: JwtPayload) {
-    const visibility = this.legacyTestData
-      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
-      : { isTestOnly: false };
+    const catalogScope = this.legacyTestData
+      ? await this.legacyTestData.publicCatalogCompanyScope(viewer)
+      : { isTestOnly: false, ...filtroPublicoDeEmpresa() };
     const company = await this.db().company.findFirst({
       where: {
         slug,
         isActive: true,
-        ...visibility,
-        ...filtroPublicoDeEmpresa(),
+        ...catalogScope,
       },
       select: {
         id: true,

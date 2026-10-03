@@ -65,13 +65,12 @@ export class CatalogPublicService {
     zipCode?: string | null,
     state?: string | null,
   ) {
-    const visibility = this.legacyTestData
-      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
-      : { isTestOnly: false };
+    const catalogScope = this.legacyTestData
+      ? await this.legacyTestData.publicCatalogCompanyScope(viewer, cidade)
+      : { isTestOnly: false, ...filtroPublicoDeEmpresa({ cidade }) };
     const where: any = {
       isActive: true,
-      ...visibility,
-      ...filtroPublicoDeEmpresa({ cidade }),
+      ...catalogScope,
     };
     if (!zipCode || !this.postalCodeLocations) return where;
 
