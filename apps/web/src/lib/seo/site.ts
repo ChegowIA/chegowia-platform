@@ -38,6 +38,12 @@ export function absoluteSiteUrl(path = "/") {
 export function absoluteAssetUrl(path?: string | null) {
   if (!path) return undefined;
   if (/^https?:\/\//i.test(path)) return path;
+  // Imagens de demonstração e materiais institucionais ficam no bundle do
+  // site (Vercel), não no serviço da API. Uploads continuam apontando para a
+  // API, onde estão o volume persistente e as permissões de acesso.
+  if (path.startsWith("/assets/") || path.startsWith("/brand/") || path.startsWith("/landing/")) {
+    return new URL(path, `${siteOrigin}/`).toString();
+  }
   return new URL(path.startsWith("/") ? path : `/${path}`, `${apiOrigin}/`).toString();
 }
 

@@ -33,6 +33,11 @@ const DEMO_NAME = "Pizzaria Exemplo ChegowIA";
 const DEMO_EMAIL_DOMAIN = "demo.chegowia.invalid";
 const DEMO_MARKER = "[demo-chegowia]";
 const ACCESS_END = new Date("2099-12-31T23:59:59.000Z");
+const DEMO_ASSETS = {
+  logo: "/assets/demo/pizzaria-exemplo-chegowia-logo.webp",
+  pizza: "/assets/demo/pizza-especial-chegowia.webp",
+  soda: "/assets/demo/refrigerante-lata-chegowia.webp",
+};
 
 const STAFF = [
   {
@@ -146,6 +151,7 @@ async function main() {
         deliveryFeePerKm: 1.5,
         deliveryRadiusKm: 12,
         avgDeliveryTimeMinutes: 40,
+        logoUrl: DEMO_ASSETS.logo,
         isActive: true,
         isTestOnly: true,
       },
@@ -164,6 +170,7 @@ async function main() {
         deliveryFeePerKm: 1.5,
         deliveryRadiusKm: 12,
         avgDeliveryTimeMinutes: 40,
+        logoUrl: DEMO_ASSETS.logo,
         isActive: true,
         isTestOnly: true,
       },
@@ -250,12 +257,14 @@ async function main() {
       name: "Pizza Especial ChegowIA",
       description: "Exemplo completo de produto configurável: tamanho e até dois sabores, com preço pelo sabor de maior valor.",
       price: 39.9,
+      imageUrl: DEMO_ASSETS.pizza,
       isFeatured: true,
     });
     await ensureProduct(tx, company.id, drinksCategory.id, {
       name: "Refrigerante Lata",
       description: "350 ml — item simples para testar adicionais e pedidos mistos.",
       price: 6.5,
+      imageUrl: DEMO_ASSETS.soda,
       isFeatured: false,
     });
 
