@@ -85,6 +85,46 @@ describe("Canal institucional do WhatsApp", () => {
     expect(ativo).toEqual(expect.objectContaining({ connected: true }));
   });
 
+  it("espelha na central institucional a mensagem enviada pelo WhatsApp Business App", async () => {
+    const channel = { id: "canal-plataforma", status: "ATIVO" };
+    const platformMessages = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: "mensagem-1" }),
+    };
+    const { instance, realtime } = serviceWith({
+      platformWhatsAppChannel: {
+        findUnique: jest.fn().mockResolvedValue(channel),
+        update: jest.fn().mockResolvedValue(channel),
+      },
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({ id: "conversa-1" }),
+      },
+      platformWhatsAppMessage: platformMessages,
+    });
+
+    await instance.handleGupshupCoexistenceEchoesByAppId("app-1", {
+      message_echoes: [{
+        id: "wamid-institucional-1",
+        from: "556231425344",
+        to: "5562988887777",
+        type: "text",
+        text: { body: "Olá, posso ajudar?" },
+      }],
+    });
+
+    expect(platformMessages.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        direction: "ENVIADA",
+        body: "Olá, posso ajudar?",
+      }),
+    }));
+    expect(realtime.emitToSuperAdmins).toHaveBeenCalledWith(
+      "platform.whatsapp.message.sent",
+      { conversationId: "conversa-1" },
+    );
+  });
+
   it("usa o preço comercial público no contexto da IA", async () => {
     const { instance } = serviceWith();
 
