@@ -14,7 +14,6 @@ describe("dados legados da homologação", () => {
     address?: any;
     company?: any;
     postalMatch?: boolean;
-    routeDistanceKm?: number;
   } = {}) {
     const address = options.address === undefined
       ? {
@@ -57,20 +56,12 @@ describe("dados legados da homologação", () => {
         update: jest.fn().mockResolvedValue(company),
       },
     };
-    const geography = {
-      geocode: jest.fn(),
-      calculateDrivingRoute: jest.fn().mockResolvedValue({
-        distanceKm: options.routeDistanceKm ?? 4.2,
-        durationMinutes: 14,
-      }),
-    };
     const postalCodeLocations = {
       isLikelyWithinDeliveryRadius: jest.fn().mockResolvedValue(options.postalMatch ?? true),
     };
     return {
-      service: new LegacyTestDataService(prisma as never, geography as never, postalCodeLocations as never),
+      service: new LegacyTestDataService(prisma as never, postalCodeLocations as never),
       prisma,
-      geography,
       postalCodeLocations,
     };
   }
@@ -87,8 +78,8 @@ describe("dados legados da homologação", () => {
     expect(prisma.address.findFirst).not.toHaveBeenCalled();
   });
 
-  it("libera somente a demo para a conta autorizada quando CEP e rota estão dentro do raio", async () => {
-    const { service, postalCodeLocations, geography } = createService();
+  it("libera somente a demo para a conta autorizada quando o CEP está dentro do raio médio", async () => {
+    const { service, postalCodeLocations } = createService();
 
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({
       OR: [
@@ -101,16 +92,15 @@ describe("dados legados da homologação", () => {
       companyZipCode: "74013010",
       deliveryRadiusKm: 12,
     }));
-    expect(geography.calculateDrivingRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("oculta a demo se a rota real exceder o raio, mesmo para a conta autorizada", async () => {
-    const { service } = createService({ routeDistanceKm: 12.01 });
+  it("oculta a demo quando a triagem de CEP informa que o endereço está fora do raio", async () => {
+    const { service } = createService({ postalMatch: false });
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
   });
 
-  it("permite a demo na cidade vizinha quando CEP e rota real estão dentro do raio", async () => {
-    const { service, geography, postalCodeLocations } = createService({
+  it("permite a demo na cidade vizinha quando o CEP está dentro do raio médio", async () => {
+    const { service, postalCodeLocations } = createService({
       address: {
         id: "address-1",
         street: "Rua 1",
@@ -123,13 +113,6 @@ describe("dados legados da homologação", () => {
     });
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual(expect.objectContaining({ OR: expect.any(Array) }));
     expect(postalCodeLocations.isLikelyWithinDeliveryRadius).toHaveBeenCalledTimes(1);
-    expect(geography.calculateDrivingRoute).toHaveBeenCalledTimes(1);
-  });
-
-  it("não consulta rota quando a pré-triagem de CEP informa que o endereço está fora do raio", async () => {
-    const { service, geography } = createService({ postalMatch: false });
-    await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
-    expect(geography.calculateDrivingRoute).not.toHaveBeenCalled();
   });
 
   it("mantém a exceção da demo fora do filtro textual de cidade do catálogo", async () => {

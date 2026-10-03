@@ -1,5 +1,13 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 import { useAuthStore } from "./auth-store";
+import { toast } from "./toast";
+
+declare module "axios" {
+  export interface AxiosRequestConfig {
+    /** Controle opcional da notificação global desta requisição. */
+    notify?: boolean | { success?: string | false; error?: string | false };
+  }
+}
 
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const API_BASE = `${API_ORIGIN}/api`;
@@ -14,6 +22,50 @@ api.interceptors.request.use((config) => {
 
 interface RetriableConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
+}
+
+function notificationConfig(config?: RetriableConfig) {
+  return config?.notify;
+}
+
+function shouldSilenceAutomaticSuccess(config?: RetriableConfig) {
+  const url = config?.url ?? "";
+  // Conversas, autenticação e prévias são fluxos que já têm retorno próprio;
+  // exibir um toast para cada mensagem enviada deixaria a interface ruidosa.
+  return /(^|\/)auth\//.test(url)
+    || /\/messages(?:$|[/?])/.test(url)
+    || /(^|\/)ai\//.test(url)
+    || /\/public-discovery\//.test(url)
+    || /\/quote(?:$|[/?])/.test(url)
+    || /\/import\/preview(?:$|[/?])/.test(url);
+}
+
+function defaultSuccessMessage(config?: RetriableConfig) {
+  const method = config?.method?.toLowerCase();
+  if (!method || method === "get" || shouldSilenceAutomaticSuccess(config)) return null;
+  if (method === "delete") return "Item removido com sucesso.";
+  if (method === "patch" || method === "put") return "Alterações salvas com sucesso.";
+  return "Ação concluída com sucesso.";
+}
+
+function notifySuccess(config?: RetriableConfig) {
+  if (typeof window === "undefined") return;
+  const notify = notificationConfig(config);
+  if (notify === false) return;
+  const custom = typeof notify === "object" ? notify.success : undefined;
+  if (custom === false) return;
+  const message = custom || defaultSuccessMessage(config);
+  if (message) toast.success(message);
+}
+
+function notifyError(error: AxiosError) {
+  if (typeof window === "undefined") return;
+  const config = error.config as RetriableConfig | undefined;
+  const notify = notificationConfig(config);
+  if (notify === false) return;
+  const custom = typeof notify === "object" ? notify.error : undefined;
+  if (custom === false) return;
+  toast.error(custom || apiErrorMessage(error));
 }
 
 let refreshPromise: Promise<string | null> | null = null;
@@ -63,7 +115,10 @@ export function refreshAccessToken(): Promise<string | null> {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    notifySuccess(response.config as RetriableConfig);
+    return response;
+  },
   async (error: AxiosError) => {
     const original = error.config as RetriableConfig | undefined;
     if (error.response?.status === 401 && original && !original._retry && !original.url?.includes("/auth/")) {
@@ -74,6 +129,7 @@ api.interceptors.response.use(
         return api(original);
       }
     }
+    notifyError(error);
     return Promise.reject(error);
   },
 );

@@ -177,6 +177,10 @@ export class CompaniesService {
             slug: dto.slug ? slugify(dto.slug) : undefined,
             ...(locationChanged ? { latitude: null, longitude: null } : {}),
           },
+          // A tela de Configurações mantém esta resposta no cache. Devolver
+          // também as configurações evita que salvar endereço/taxas apague do
+          // cache local os horários, pagamentos ou preferências de IA.
+          include: { settings: true },
         });
       });
       this.postalCodeLocations.warm(company.zipCode, { city: company.city, state: company.state });

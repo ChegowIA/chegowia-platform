@@ -2,7 +2,6 @@ import { Inject, Injectable } from "@nestjs/common";
 import { JwtPayload } from "../interfaces/jwt-payload.interface";
 import { PRISMA_CLIENT } from "../prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../prisma/prisma-client.factory";
-import { GeographicPoint, GeographyService } from "../geography/geography.service";
 import { PostalCodeLocationService } from "../geography/postal-code-location.service";
 import { filtroPublicoDeEmpresa } from "../public-visibility/subscription-grace";
 
@@ -24,7 +23,6 @@ export class LegacyTestDataService {
 
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
-    private readonly geography: GeographyService,
     private readonly postalCodeLocations: PostalCodeLocationService,
   ) {}
 
@@ -91,8 +89,11 @@ export class LegacyTestDataService {
 
   /**
    * A demo permanece opaca para todo o resto do sistema. Para a conta
-   * autorizada, conferimos CEP (triagem média) e depois a mesma rota por ruas
-   * que decide o checkout; qualquer falha mantém a loja escondida.
+   * autorizada, conferimos o CEP como triagem de vitrine. A rota completa é
+   * calculada no orçamento/checkout, onde ela realmente decide se o pedido
+   * pode ser entregue. Fazer uma chamada de rota em toda carga da home torna
+   * a visibilidade dependente de um serviço externo e esconde uma loja válida
+   * quando o provedor de mapas oscila.
    */
   private async canViewPrivateDemo(userId: string): Promise<boolean> {
     const pending = this.pendingDemoAccessChecks.get(userId);
@@ -122,63 +123,16 @@ export class LegacyTestDataService {
     const radiusKm = Number(company.deliveryRadiusKm);
     if (!Number.isFinite(radiusKm) || radiusKm <= 0) return false;
 
-    const likelyWithinRange = await this.postalCodeLocations.isLikelyWithinDeliveryRadius({
+    return await this.postalCodeLocations.isLikelyWithinDeliveryRadius({
       customerZipCode: address.zipCode,
       customerHint: { city: address.city, state: address.state },
       companyZipCode: company.zipCode,
       companyHint: { city: company.city, state: company.state },
       deliveryRadiusKm: radiusKm,
     });
-    if (!likelyWithinRange) return false;
-
-    const [origin, destination] = await Promise.all([
-      this.resolveCompanyCoordinates(company),
-      this.resolveAddressCoordinates(address),
-    ]);
-    const route = await this.geography.calculateDrivingRoute(origin, destination);
-    return route.distanceKm <= radiusKm;
-  }
-
-  private async resolveCompanyCoordinates(company: any): Promise<GeographicPoint> {
-    const existing = readCoordinates(company);
-    if (existing) return existing;
-    if (!company.addressLine?.trim() || !company.city?.trim() || !company.state?.trim() || !company.zipCode?.trim()) {
-      throw new Error("Empresa demo sem endereço operacional completo.");
-    }
-    const coordinates = await this.geography.geocode({
-      addressLine: company.addressLine,
-      city: company.city,
-      state: company.state,
-      zipCode: company.zipCode,
-    });
-    await this.db().company.update({ where: { id: company.id }, data: coordinates });
-    return coordinates;
-  }
-
-  private async resolveAddressCoordinates(address: any): Promise<GeographicPoint> {
-    const existing = readCoordinates(address);
-    if (existing) return existing;
-    const addressLine = [address.street, address.number, address.complement]
-      .filter((part) => typeof part === "string" && part.trim())
-      .join(", ");
-    const coordinates = await this.geography.geocode({
-      addressLine,
-      neighborhood: address.neighborhood,
-      city: address.city,
-      state: address.state,
-      zipCode: address.zipCode,
-    });
-    await this.db().address.update({ where: { id: address.id }, data: coordinates });
-    return coordinates;
   }
 }
 
 function isDemoCatalogEmail(value?: string | null) {
   return value?.trim().toLowerCase() === DEMO_CATALOG_EMAIL;
-}
-
-function readCoordinates(value: { latitude?: unknown; longitude?: unknown }): GeographicPoint | null {
-  const latitude = Number(value.latitude);
-  const longitude = Number(value.longitude);
-  return Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : null;
 }
