@@ -218,14 +218,21 @@ sem criar cobrança no Asaas ou Stripe, abra o **Shell** do serviço de API no
 Render e rode:
 
 ```sh
-node apps/api/prisma/setup-demo-company.js --allow-production
+DEMO_ADMIN_EMAIL='seu-email+demo@exemplo.com' node apps/api/prisma/setup-demo-company.js --allow-production
 ```
 
 O comando cria a **Pizzaria Exemplo ChegowIA**, um cardápio com tamanhos e
 sabores de pizza configuráveis, mesas, caixa e um pedido em rota. Ele imprime
-uma senha forte para as seis contas `@demo.chegowia.invalid`; guarde-a antes de
-fechar o Shell. A empresa fica marcada como `isTestOnly`, então não aparece no
-catálogo público.
+uma senha forte para as contas de teste; guarde-a antes de fechar o Shell. O
+e-mail informado será o ADMIN e receberá o código MFA normalmente. Use um
+alias/caixa de e-mail sua que **ainda não tenha conta na ChegowIA**, pois a
+operação demo é apagada por completo no cleanup. As demais contas usam o
+domínio reservado `@demo.chegowia.invalid`. A empresa fica marcada como
+`isTestOnly`, então não aparece no catálogo público.
+
+Não existe rota web/API para criar esse tipo de empresa, assinatura sem
+cobrança ou e-mails reservados: somente este script, executado com acesso ao
+Shell e ao banco, pode provisioná-los.
 
 Para apagar apenas essa operação depois, primeiro confira a prévia:
 

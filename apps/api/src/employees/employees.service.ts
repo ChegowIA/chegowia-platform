@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
 import { DEFAULT_PERMISSIONS_BY_ROLE } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
@@ -8,6 +8,7 @@ import { CreateEmployeeDto } from "./dto/create-employee.dto";
 import { UpdateEmployeeDto } from "./dto/update-employee.dto";
 import { AuthService } from "../auth/auth.service";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 
 @Injectable()
 export class EmployeesService {
@@ -48,6 +49,9 @@ export class EmployeesService {
 
   async create(companyId: string, dto: CreateEmployeeDto) {
     const email = dto.email.trim().toLowerCase();
+    if (isReservedDemoEmail(email)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
     const existing = await this.db().user.findUnique({ where: { email } });
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
 

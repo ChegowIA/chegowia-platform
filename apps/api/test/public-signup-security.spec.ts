@@ -55,6 +55,30 @@ describe("segurança das rotas anônimas de cadastro", () => {
       expect(application.id).toBe("nova");
       expect(prisma.clientApplication.create).toHaveBeenCalled();
     });
+
+    it("recusa o domínio reservado da operação demo", async () => {
+      const { prisma, service } = build(null);
+
+      await expect(service.apply({ ...dto, email: "admin@demo.chegowia.invalid" })).rejects
+        .toThrow("reservado à operação interna de demonstração");
+
+      expect(prisma.clientApplication.create).not.toHaveBeenCalled();
+    });
+
+    it("força toda candidatura HTTP a nascer comercial, mesmo se o serviço receber campos forjados", async () => {
+      const { prisma, service } = build(null);
+
+      const application: any = await service.apply({
+        ...dto,
+        isTestOnly: true,
+        monthlyPriceSnapshot: 0,
+      });
+
+      expect(application).toMatchObject({ isTestOnly: false, monthlyPriceSnapshot: 159.9 });
+      expect(prisma.clientApplication.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ isTestOnly: false, monthlyPriceSnapshot: 159.9 }),
+      });
+    });
   });
 
   describe("lead de vendas", () => {

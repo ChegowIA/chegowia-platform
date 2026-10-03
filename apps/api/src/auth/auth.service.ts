@@ -20,6 +20,7 @@ import { MailService } from "../common/mail/mail.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
+import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 
 interface IssuedTokens {
   accessToken: string;
@@ -614,6 +615,9 @@ export class AuthService {
 
   async registerCustomer(dto: RegisterCustomerDto) {
     const email = dto.email.trim().toLowerCase();
+    if (isReservedDemoEmail(email)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
     const existing = await this.db().user.findUnique({ where: { email } });
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
 

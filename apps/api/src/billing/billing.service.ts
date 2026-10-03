@@ -40,6 +40,7 @@ import { runsBackgroundJobs } from "../common/config/app-role";
 import { DIAS_DE_CARENCIA_NO_CATALOGO } from "../common/public-visibility/subscription-grace";
 import { AsaasSubaccountDto } from "./dto/asaas-subaccount.dto";
 import { readSecretKey, sealSecret } from "../common/utils/secret-box";
+import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 
 const MAX_PAYOUT_ATTEMPTS = 10;
 const MAX_STRIPE_EVENT_ATTEMPTS = 10;
@@ -487,6 +488,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
   async apply(dto: ClientApplicationDto, forcedResellerId?: string) {
     const normalizedEmail = dto.email.trim().toLowerCase();
+    if (isReservedDemoEmail(normalizedEmail)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
     const normalizedDocument = normalizeBrazilDocument(dto.document);
     if (await this.db().user.findUnique({ where: { email: normalizedEmail } })) {
       throw new ConflictException("Este e-mail já possui uma conta ativa. Entre pelo login.");
@@ -2208,6 +2212,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensureClientIdentityAvailable(application: { email: string; document: string }) {
+    if (isReservedDemoEmail(application.email)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
     const [emailUser, documentUser, documentCompany] = await Promise.all([
       this.db().user.findUnique({ where: { email: application.email } }),
       this.db().user.findUnique({ where: { document: application.document } }),

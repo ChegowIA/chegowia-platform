@@ -11,11 +11,12 @@
  *   npm run demo:setup
  *
  * Uso no Shell do Render (a imagem de produção não tem npm):
- *   node apps/api/prisma/setup-demo-company.js --allow-production
+ *   DEMO_ADMIN_EMAIL='seu-email+demo@exemplo.com' node apps/api/prisma/setup-demo-company.js --allow-production
  *
  * Opcionalmente, defina uma senha conhecida para todas as contas de teste:
  *   DEMO_PASSWORD='UmaSenhaForte@2026' node apps/api/prisma/setup-demo-company.js --allow-production
  *
+ * Em produção, o ADMIN precisa usar um e-mail acessível para concluir o MFA.
  * A execução é idempotente. Rodá-la novamente restaura os dados-base e troca
  * a senha das contas demo; nunca toma uma conta que pertença a outra empresa.
  */
@@ -110,6 +111,8 @@ async function main() {
       "Produção exige --allow-production. Isso evita criar uma empresa de teste por engano.",
     );
   }
+  const adminEmail = resolveDemoAdminEmail(args, production);
+  const staffDefinition = buildDemoStaff(adminEmail);
 
   const plan = await prisma.softwarePlan.findFirst({
     where: { isActive: true },
@@ -222,7 +225,7 @@ async function main() {
     await ensurePermissions(tx);
 
     const staff = [];
-    for (const person of STAFF) staff.push(await upsertStaff(tx, company.id, person, passwordHash));
+    for (const person of staffDefinition) staff.push(await upsertStaff(tx, company.id, person, passwordHash));
     await syncStaffPermissions(tx, staff);
 
     const customer = await upsertCustomer(tx, company.id, passwordHash);
@@ -305,7 +308,7 @@ async function main() {
       data: { totalOrders: orderCount, lastOrderAt: lastOrder?.createdAt ?? null },
     });
 
-    return { company, staff, customer, orderCount };
+    return { company, staff, customer, orderCount, adminEmail };
   }, { timeout: 30_000 });
 
   console.log("\nOperação demo criada e pronta para testes.\n");
@@ -323,7 +326,33 @@ async function main() {
     console.log(`Senha gerada para todas as contas: ${password}`);
     console.log("Guarde-a agora: ela só aparece nesta execução.");
   }
+  if (!isReservedDemoEmail(result.adminEmail)) {
+    console.log(`\nO código de segurança do ADMIN será enviado para: ${result.adminEmail}`);
+  }
   console.log(`\nTambém há ${result.orderCount} pedido(s) do cliente demo, incluindo um em rota para o motoboy.\n`);
+}
+
+function buildDemoStaff(adminEmail) {
+  return STAFF.map((person) => (person.role === "ADMIN" ? { ...person, email: adminEmail } : person));
+}
+
+function resolveDemoAdminEmail(args, production) {
+  const email = String(args["admin-email"] || process.env.DEMO_ADMIN_EMAIL || `admin@${DEMO_EMAIL_DOMAIN}`)
+    .trim()
+    .toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    throw new Error("DEMO_ADMIN_EMAIL/--admin-email deve ser um e-mail válido.");
+  }
+  if (production && isReservedDemoEmail(email)) {
+    throw new Error(
+      "Em produção, defina DEMO_ADMIN_EMAIL (ou --admin-email) com um e-mail acessível e ainda sem conta na ChegowIA. O ADMIN precisa receber o código MFA.",
+    );
+  }
+  return email;
+}
+
+function isReservedDemoEmail(email) {
+  return email.trim().toLowerCase().endsWith(`@${DEMO_EMAIL_DOMAIN}`);
 }
 
 function demoCompanySettings() {
@@ -371,8 +400,10 @@ async function ensurePermissions(tx) {
 
 async function upsertStaff(tx, companyId, person, passwordHash) {
   const existing = await tx.user.findUnique({ where: { email: person.email } });
-  if (existing?.companyId && existing.companyId !== companyId) {
-    throw new Error(`A conta ${person.email} pertence a outra empresa; nenhum dado foi alterado.`);
+  if (existing && existing.companyId !== companyId) {
+    throw new Error(
+      `A conta ${person.email} já existe fora desta operação demo; use um e-mail/alias novo. Nenhum dado foi alterado.`,
+    );
   }
   const existingProfile = existing
     ? await tx.employeeProfile.findUnique({ where: { userId: existing.id } })
@@ -422,11 +453,20 @@ async function syncStaffPermissions(tx, staff) {
 
 async function upsertCustomer(tx, companyId, passwordHash) {
   const existing = await tx.user.findUnique({ where: { email: CUSTOMER.email } });
-  if (existing?.companyId) {
-    throw new Error(`A conta ${CUSTOMER.email} está vinculada a uma empresa; nenhum dado foi alterado.`);
-  }
-  if (existing && await tx.employeeProfile.findUnique({ where: { userId: existing.id } })) {
-    throw new Error(`A conta ${CUSTOMER.email} possui perfil de funcionário; nenhum dado foi alterado.`);
+  if (existing) {
+    if (existing.companyId) {
+      throw new Error(`A conta ${CUSTOMER.email} está vinculada a uma empresa; nenhum dado foi alterado.`);
+    }
+    if (await tx.employeeProfile.findUnique({ where: { userId: existing.id } })) {
+      throw new Error(`A conta ${CUSTOMER.email} possui perfil de funcionário; nenhum dado foi alterado.`);
+    }
+    const profiles = await tx.customerProfile.findMany({
+      where: { userId: existing.id },
+      select: { companyId: true },
+    });
+    if (!profiles.some((profile) => profile.companyId === companyId) || profiles.some((profile) => profile.companyId !== companyId)) {
+      throw new Error(`A conta ${CUSTOMER.email} já existe fora desta operação demo; nenhum dado foi alterado.`);
+    }
   }
   const data = {
     name: CUSTOMER.name,

@@ -12,6 +12,7 @@ import { ResellerApplicationDto } from "./dto/reseller-application.dto";
 import { LocalStorageService } from "../common/storage/local-storage.service";
 import { AuthService } from "../auth/auth.service";
 import { PaginationQueryDto, paginate } from "../common/dto/pagination-query.dto";
+import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 
 @Injectable()
 export class ResellersService {
@@ -50,8 +51,11 @@ export class ResellersService {
   }
 
   async apply(dto: ResellerApplicationDto, file?: any) {
-    if (!file) throw new BadRequestException("Envie seu currículo em PDF, DOC ou DOCX.");
     const normalizedEmail = dto.email.trim().toLowerCase();
+    if (isReservedDemoEmail(normalizedEmail)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
+    if (!file) throw new BadRequestException("Envie seu currículo em PDF, DOC ou DOCX.");
     const normalizedDocument = normalizeBrazilDocument(dto.document);
     if (await this.db().user.findUnique({ where: { email: normalizedEmail } })) {
       throw new ConflictException("Este e-mail já possui uma conta.");
@@ -215,6 +219,9 @@ export class ResellersService {
   private async approveApplication(id: string, reviewerId?: string, notes?: string) {
     const application = await this.db().resellerApplication.findUnique({ where: { id } });
     if (!application) throw new NotFoundException("Candidatura não encontrada.");
+    if (isReservedDemoEmail(application.email)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
     const existing = await this.db().user.findUnique({ where: { email: application.email } });
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
     const [documentUser, documentCompany] = await Promise.all([

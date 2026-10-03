@@ -17,6 +17,7 @@ import { LocalStorageService } from "../common/storage/local-storage.service";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
+import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 
 @Injectable()
 export class CompaniesService {
@@ -211,6 +212,9 @@ export class CompaniesService {
   async createAdmin(companyId: string, dto: CreateCompanyAdminDto) {
     await this.findById(companyId);
     const email = dto.email.trim().toLowerCase();
+    if (isReservedDemoEmail(email)) {
+      throw new BadRequestException("Este e-mail é reservado à operação interna de demonstração.");
+    }
     const existing = await this.db().user.findUnique({ where: { email } });
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
 
