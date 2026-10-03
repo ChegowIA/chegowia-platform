@@ -982,9 +982,10 @@ model Address {
   neighborhood String
   city         String
   state        String
-  // Mantido nullable no banco somente para não quebrar endereços históricos.
-  // A API exige CEP válido em toda criação/edição e antes do checkout.
-  zipCode      String?  @db.VarChar(8)
+  // Mantido nullable e na largura legada no banco para não quebrar endereços
+  // históricos. A API exige CEP válido em toda criação/edição e no checkout,
+  // normalizando-o para oito dígitos antes de persistir alterações novas.
+  zipCode      String?
   reference    String?
   latitude     Decimal? @db.Decimal(10, 7)
   longitude    Decimal? @db.Decimal(10, 7)

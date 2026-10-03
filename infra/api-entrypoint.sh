@@ -37,7 +37,23 @@ if [ "${SKIP_PRISMA_MIGRATIONS:-false}" = "true" ]; then
   echo "Migrações Prisma ignoradas temporariamente (SKIP_PRISMA_MIGRATIONS=true)."
 else
   echo "Aplicando migrações pendentes..."
-  ./node_modules/.bin/prisma migrate deploy --schema=apps/api/prisma/schema.prisma
+  if ./node_modules/.bin/prisma migrate deploy --schema=apps/api/prisma/schema.prisma; then
+    :
+  else
+    # Uma única migration de CEP chegou parcialmente à produção antes de a
+    # alteração de schema ser corrigida. Como o Shell do provedor só fica
+    # disponível com o serviço saudável, tratamos APENAS esse estado conhecido
+    # no boot. O script recusa qualquer outra migration falha e não remove nem
+    # sobrescreve dados de clientes.
+    echo "Tentando recuperar exclusivamente a migration de CEP interrompida..."
+    node apps/api/prisma/repair-failed-operational-postal-codes.js --allow-production
+    echo "Marcando a migration recuperada como aplicada..."
+    ./node_modules/.bin/prisma migrate resolve \
+      --applied 20261003070000_add_operational_postal_codes \
+      --schema=apps/api/prisma/schema.prisma
+    echo "Validando migrations após a recuperação..."
+    ./node_modules/.bin/prisma migrate deploy --schema=apps/api/prisma/schema.prisma
+  fi
 fi
 
 echo "Iniciando o processo (APP_ROLE=${APP_ROLE:-all})..."

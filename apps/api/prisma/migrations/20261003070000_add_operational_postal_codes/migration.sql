@@ -19,10 +19,10 @@ UPDATE `Company`
       `longitude` = -49.2563466
   WHERE `slug` = 'operacao-demo-chegowia';
 
-ALTER TABLE `Address`
-  MODIFY COLUMN `zipCode` VARCHAR(8) NULL;
-
 CREATE INDEX `Company_zipCode_idx` ON `Company`(`zipCode`);
+-- Address.zipCode permanece na largura histórica para preservar qualquer
+-- dado legado. A aplicação só usa CEP normalizado de oito dígitos nas novas
+-- gravações e exige isso antes de calcular ou aceitar uma entrega.
 CREATE INDEX `Address_zipCode_idx` ON `Address`(`zipCode`);
 
 -- Cache de centro aproximado do CEP. Não há dados pessoais aqui: vários
