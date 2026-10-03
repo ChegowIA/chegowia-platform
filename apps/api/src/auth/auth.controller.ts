@@ -51,6 +51,7 @@ export class AuthController {
       user: result.user,
       mfaRequired: false,
       multiContext: result.multiContext,
+      sessionExpiresAt: result.sessionExpiresAt,
     };
   }
 
@@ -80,7 +81,12 @@ export class AuthController {
   ) {
     const result = await this.authService.switchContext(user, dto.companyId ?? null, dto.role);
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
-    return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
+    return {
+      accessToken: result.accessToken,
+      user: result.user,
+      assumed: result.assumed,
+      sessionExpiresAt: result.sessionExpiresAt,
+    };
   }
 
   /**
@@ -113,7 +119,12 @@ export class AuthController {
   ) {
     const result = await this.authService.consumeCompanyAdminAccessLink(user, dto.token);
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
-    return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
+    return {
+      accessToken: result.accessToken,
+      user: result.user,
+      assumed: result.assumed,
+      sessionExpiresAt: result.sessionExpiresAt,
+    };
   }
 
   /** Atalho efêmero, auditado e somente leitura para a central de um parceiro. */
@@ -140,7 +151,12 @@ export class AuthController {
   ) {
     const result = await this.authService.consumeResellerAccessLink(user, dto.token);
     this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
-    return { accessToken: result.accessToken, user: result.user, assumed: result.assumed };
+    return {
+      accessToken: result.accessToken,
+      user: result.user,
+      assumed: result.assumed,
+      sessionExpiresAt: result.sessionExpiresAt,
+    };
   }
 
   @Public()
@@ -155,10 +171,8 @@ export class AuthController {
   @Post("verify-email")
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  async verifyEmail(@Body() dto: VerifyEmailDto, @Res({ passthrough: true }) res: Response) {
-    const result = await this.authService.verifyEmail(dto.token);
-    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
-    return { accessToken: result.accessToken, user: result.user };
+  verifyEmail(@Body() dto: VerifyEmailDto) {
+    return this.authService.verifyEmail(dto.token);
   }
 
   @Public()
@@ -195,7 +209,12 @@ export class AuthController {
     // Em produção o superadmin sempre passa por MFA, então esta é a resposta que
     // decide se o seletor de contexto aparece. Omitir o campo aqui fazia o login
     // multiacesso não existir justamente para quem ele foi feito.
-    return { accessToken: result.accessToken, user: result.user, multiContext: result.multiContext };
+    return {
+      accessToken: result.accessToken,
+      user: result.user,
+      multiContext: result.multiContext,
+      sessionExpiresAt: result.sessionExpiresAt,
+    };
   }
 
   @Public()
@@ -204,10 +223,10 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const cookieValue = req.cookies?.[REFRESH_COOKIE];
-    const { accessToken, refreshTokenCookie, refreshTokenExpiresAt, user } =
+    const { accessToken, refreshTokenCookie, refreshTokenExpiresAt, sessionExpiresAt, user } =
       await this.authService.refresh(cookieValue);
     this.setRefreshCookie(res, refreshTokenCookie, refreshTokenExpiresAt);
-    return { accessToken, user };
+    return { accessToken, user, sessionExpiresAt };
   }
 
   /**

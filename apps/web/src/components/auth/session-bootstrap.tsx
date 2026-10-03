@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, refreshAccessToken } from "@/lib/api-client";
 import { AuthUser, useAuthStore } from "@/lib/auth-store";
 import { connectSocket, disconnectSocket } from "@/lib/socket-client";
@@ -8,14 +9,35 @@ import { CustomerOrderTracker } from "@/components/orders/customer-order-tracker
 import { PlatformSupportBubble, PlatformSupportFallback } from "@/components/support/platform-support-bubble";
 import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 
+function sessionExpiresAtMs(value: string | null) {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const sessionExpiresAt = useAuthStore((state) => state.sessionExpiresAt);
   const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
   const user = useAuthStore((state) => state.user);
   const setSession = useAuthStore((state) => state.setSession);
   const setSessionLoading = useAuthStore((state) => state.setSessionLoading);
+  const queryClient = useQueryClient();
   const isAuditedSupportView = Boolean(user?.impersonation?.supportAccess);
+
+  const expireSession = useCallback(() => {
+    const deadline = sessionExpiresAtMs(useAuthStore.getState().sessionExpiresAt);
+    // Não deixe um timer antigo encerrar uma sessão nova que entrou em outra
+    // aba enquanto ele aguardava.
+    if (deadline === null || deadline > Date.now()) return;
+    useAuthStore.getState().clear();
+    queryClient.clear();
+    disconnectSocket();
+    if (typeof window !== "undefined" && window.location.pathname !== "/acesso") {
+      window.location.replace("/acesso?motivo=sessao-expirada");
+    }
+  }, [queryClient]);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -25,15 +47,20 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
     async function syncSession() {
       setSessionLoading(true);
       const token = useAuthStore.getState().accessToken;
+      const deadline = sessionExpiresAtMs(useAuthStore.getState().sessionExpiresAt);
 
       try {
+        if (deadline !== null && deadline <= Date.now()) {
+          expireSession();
+          return;
+        }
         if (!token) {
           await refreshAccessToken();
           return;
         }
 
         try {
-          const { data } = await api.get<AuthUser>("/auth/me");
+          const { data } = await api.get<AuthUser>("/auth/me", { notify: false });
           if (!cancelled) setSession(token, data);
         } catch {
           if (!cancelled) await refreshAccessToken();
@@ -48,7 +75,24 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [hasHydrated, setSession, setSessionLoading]);
+  }, [expireSession, hasHydrated, setSession, setSessionLoading]);
+
+  /**
+   * A sessão não depende de uma próxima requisição para terminar. Assim um
+   * painel deixado aberto, inclusive em tablet, sai no momento exato das 24h.
+   */
+  useEffect(() => {
+    if (!hasHydrated || !accessToken) return;
+    const deadline = sessionExpiresAtMs(sessionExpiresAt);
+    if (deadline === null) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      expireSession();
+      return;
+    }
+    const timer = window.setTimeout(expireSession, remaining);
+    return () => window.clearTimeout(timer);
+  }, [accessToken, expireSession, hasHydrated, sessionExpiresAt]);
 
   /**
    * O servidor derruba os sockets quando o vínculo muda (conta desativada,

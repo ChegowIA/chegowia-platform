@@ -62,6 +62,9 @@ export default function AccessPage() {
     if (!hydrated || sessionLoading) return;
     const params = new URLSearchParams(window.location.search);
     const continueTo = safeContinuePath();
+    if (params.get("motivo") === "sessao-expirada") {
+      setError("Sua sessão de 24 horas terminou. Entre novamente para receber um novo código.");
+    }
     if (params.get("modo") === "cadastro" || params.has("novo")) setMode("cadastro");
     const mustSwitch = params.has("trocar-conta");
     if (mustSwitch && user) {

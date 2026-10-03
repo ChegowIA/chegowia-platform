@@ -2,16 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { api, apiErrorMessage } from "@/lib/api-client";
-import { homePathForRole } from "@/lib/auth-routes";
-import { useAuthStore } from "@/lib/auth-store";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { Button } from "@/components/ui/button";
 
 export default function VerifyEmailPage() {
-  const router = useRouter();
-  const setSession = useAuthStore((state) => state.setSession);
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [message, setMessage] = useState("Confirmando seu e-mail...");
 
@@ -23,17 +18,16 @@ export default function VerifyEmailPage() {
       return;
     }
     api.post("/auth/verify-email", { token })
-      .then(({ data }) => {
-        setSession(data.accessToken, data.user);
+      .then(() => {
         setStatus("success");
-        setMessage("E-mail confirmado. Seu acesso está pronto.");
-        window.setTimeout(() => router.replace(homePathForRole(data.user.role)), 900);
+        setMessage("E-mail confirmado. Entre com sua senha para receber o código de acesso.");
+        window.setTimeout(() => window.location.replace("/acesso"), 1_200);
       })
       .catch((error) => {
         setStatus("error");
         setMessage(apiErrorMessage(error, "Este link é inválido ou expirou."));
       });
-  }, [router, setSession]);
+  }, []);
 
   return (
     <main className="grid min-h-dvh place-items-center bg-slate-950 p-5">
@@ -46,7 +40,7 @@ export default function VerifyEmailPage() {
           {status === "success" ? "Tudo certo" : status === "error" ? "Não foi possível confirmar" : "Só um instante"}
         </h1>
         <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-400">{message}</p>
-        {status === "error" && (
+        {status !== "loading" && (
           <Link href="/acesso"><Button className="mt-6 w-full">Voltar para o acesso</Button></Link>
         )}
       </section>

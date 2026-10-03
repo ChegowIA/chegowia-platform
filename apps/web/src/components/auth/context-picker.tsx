@@ -56,7 +56,7 @@ export function ContextPicker({ onDone }: { onDone: () => void }) {
       return (await api.post("/auth/context", payload)).data;
     },
     onSuccess: (result) => {
-      setSession(result.accessToken, result.user);
+      setSession(result.accessToken, result.user, result.sessionExpiresAt);
       onDoneRef.current();
     },
     onError: (cause) => setError(apiErrorMessage(cause)),

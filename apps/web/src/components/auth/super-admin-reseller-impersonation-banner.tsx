@@ -30,9 +30,9 @@ export function SuperAdminResellerImpersonationBanner() {
       });
       return { ...data, destination };
     },
-    onSuccess: ({ accessToken, user: platformUser, destination }) => {
+    onSuccess: ({ accessToken, user: platformUser, sessionExpiresAt, destination }) => {
       queryClient.clear();
-      setSession(accessToken, platformUser);
+      setSession(accessToken, platformUser, sessionExpiresAt);
       router.replace(destination);
     },
   });

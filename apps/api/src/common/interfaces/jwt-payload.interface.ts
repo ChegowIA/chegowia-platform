@@ -9,6 +9,16 @@ export interface JwtPayload {
   role: Role;
   companyId: string | null;
   /**
+   * Janela absoluta que só nasce depois da confirmação do MFA. Os dois valores
+   * são epoch em milissegundos para que REST, websocket e o navegador possam
+   * encerrar a mesma sessão no mesmo instante.
+   *
+   * São opcionais no tipo apenas para conseguirmos ler tokens legados e
+   * recusá-los de forma segura no guard. Todo token novo os carrega.
+   */
+  mfaSessionStartedAt?: number;
+  mfaSessionExpiresAt?: number;
+  /**
    * Marca um token em que o superadmin multiacesso assumiu outro papel/empresa.
    * `role` e `companyId` passam a ser os do contexto assumido, enquanto `sub`
    * continua sendo o usuário real — é o que permite auditar quem agiu.

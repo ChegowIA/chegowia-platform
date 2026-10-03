@@ -17,6 +17,12 @@ import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { JwtPayload, SuperAdminSupportAccessKind } from "../common/interfaces/jwt-payload.interface";
 import { MailService } from "../common/mail/mail.service";
+import {
+  activeMfaSessionFromPayload,
+  createMfaSessionWindow,
+  limitMfaSessionWindow,
+  MfaSessionWindow,
+} from "../common/security/mfa-session";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
@@ -26,6 +32,7 @@ interface IssuedTokens {
   accessToken: string;
   refreshTokenCookie: string;
   refreshTokenExpiresAt: Date;
+  sessionExpiresAt: Date;
 }
 
 /** Papel e empresa que o superadmin multiacesso decidiu assumir nesta sessão. */
@@ -44,7 +51,6 @@ interface AssumedContext {
   expiresAt?: Date | null;
 }
 
-const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
 const MFA_TTL_MS = 10 * 60 * 1000;
@@ -69,6 +75,7 @@ export class AuthService {
 
   private toPayload(
     user: { id: string; email: string; role: Role; companyId: string | null },
+    session: MfaSessionWindow,
     assumed?: AssumedContext | null,
   ): JwtPayload {
     if (assumed) {
@@ -88,16 +95,30 @@ export class AuthService {
             ...(assumed.resellerId ? { assumedResellerId: assumed.resellerId } : {}),
           }
           : {}),
+        mfaSessionStartedAt: session.startedAt.getTime(),
+        mfaSessionExpiresAt: session.expiresAt.getTime(),
       };
     }
-    return { sub: user.id, email: user.email, role: user.role, companyId: user.companyId };
+    return {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      companyId: user.companyId,
+      mfaSessionStartedAt: session.startedAt.getTime(),
+      mfaSessionExpiresAt: session.expiresAt.getTime(),
+    };
   }
 
   private async issueTokens(
     user: { id: string; email: string; role: Role; companyId: string | null },
+    session: MfaSessionWindow,
     assumed?: AssumedContext | null,
   ): Promise<IssuedTokens> {
-    const accessToken = this.jwtService.sign(this.toPayload(user, assumed), {
+    const effectiveSession = limitMfaSessionWindow(session, assumed?.expiresAt);
+    if (effectiveSession.expiresAt.getTime() <= Date.now()) {
+      throw new UnauthorizedException("Sessão expirada, faça login novamente.");
+    }
+    const accessToken = this.jwtService.sign(this.toPayload(user, effectiveSession, assumed), {
       secret: process.env.JWT_ACCESS_SECRET,
       expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ?? "15m") as any,
       issuer: process.env.JWT_ISSUER ?? "chegowia-api",
@@ -106,16 +127,13 @@ export class AuthService {
 
     const secret = randomBytes(32).toString("hex");
     const tokenHash = await bcrypt.hash(secret, 10);
-    const defaultExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
-    const expiresAt = assumed?.expiresAt && assumed.expiresAt < defaultExpiresAt
-      ? assumed.expiresAt
-      : defaultExpiresAt;
 
     const record = await this.db().refreshToken.create({
       data: {
         userId: user.id,
         tokenHash,
-        expiresAt,
+        expiresAt: effectiveSession.expiresAt,
+        sessionStartedAt: effectiveSession.startedAt,
         assumedRole: assumed?.role ?? null,
         assumedCompanyId: assumed?.companyId ?? null,
         assumedAccessId: assumed?.accessId ?? null,
@@ -128,7 +146,8 @@ export class AuthService {
     return {
       accessToken,
       refreshTokenCookie: `${record.id}.${secret}`,
-      refreshTokenExpiresAt: expiresAt,
+      refreshTokenExpiresAt: effectiveSession.expiresAt,
+      sessionExpiresAt: effectiveSession.expiresAt,
     };
   }
 
@@ -172,7 +191,7 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.validateUser(dto.email, dto.password);
-    if (this.requiresMfa(user.role)) {
+    if (this.requiresMfa(user)) {
       await this.db().accountToken.updateMany({
         where: {
           userId: user.id,
@@ -197,7 +216,10 @@ export class AuthService {
         emailHint: this.maskEmail(user.email),
       };
     }
-    const tokens = await this.issueTokens(user);
+    // As únicas contas sem caixa postal são as identidades .invalid criadas
+    // pelo script interno de demonstração. Elas não entram por fluxos HTTP
+    // públicos e permanecem isoladas; toda conta real chega aqui pelo MFA.
+    const tokens = await this.issueTokens(user, createMfaSessionWindow());
     return {
       ...tokens,
       mfaRequired: false as const,
@@ -276,11 +298,12 @@ export class AuthService {
    */
   async switchContext(identity: JwtPayload, companyId: string | null, role?: Role) {
     const user = await this.multiContextActor(identity);
+    const session = this.mfaSessionFromIdentity(identity);
 
     // Sem empresa e sem papel: voltar à plataforma.
     if (!companyId && (!role || role === Role.SUPER_ADMIN)) {
       await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
-      const tokens = await this.issueTokens(user);
+      const tokens = await this.issueTokens(user, session);
       this.logger.warn(`Contexto de plataforma retomado por ${user.email}.`);
       return { ...tokens, user: await this.publicUser(user), assumed: null };
     }
@@ -296,7 +319,7 @@ export class AuthService {
       }
       await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
       const assumed: AssumedContext = { role, companyId: null };
-      const tokens = await this.issueTokens(user, assumed);
+      const tokens = await this.issueTokens(user, session, assumed);
       this.logger.warn(`Contexto assumido: ${user.email} entrou como ${role}.`);
       return {
         ...tokens,
@@ -320,7 +343,7 @@ export class AuthService {
 
     await this.closeSuperAdminSupportAccess(identity.assumedAccessId, user.id, identity.assumedAccessKind);
     const assumed: AssumedContext = { role: chosenRole, companyId: company.id, companyName: company.name };
-    const tokens = await this.issueTokens(user, assumed);
+    const tokens = await this.issueTokens(user, session, assumed);
     // Assumir uma empresa é ação sensível: fica no log com quem, onde e quando.
     this.logger.warn(
       `Contexto assumido: ${user.email} entrou como ${chosenRole} da empresa ${company.name} (${company.id}).`,
@@ -392,6 +415,7 @@ export class AuthService {
    */
   async consumeCompanyAdminAccessLink(identity: JwtPayload, token: string) {
     const user = await this.multiContextActor(identity);
+    const session = this.mfaSessionFromIdentity(identity);
     const now = new Date();
     const access = await this.db().superAdminCompanyAccess.findUnique({
       where: { tokenHash: this.hashUrlToken(token) },
@@ -434,7 +458,7 @@ export class AuthService {
       accessKind: "COMPANY",
       expiresAt: sessionExpiresAt,
     };
-    const tokens = await this.issueTokens(user, assumed);
+    const tokens = await this.issueTokens(user, session, assumed);
     this.logger.warn(
       `Acesso de suporte iniciado: ${user.email} entrou como ADMIN da empresa ${access.company.name} (${access.company.id}).`,
     );
@@ -508,6 +532,7 @@ export class AuthService {
   /** Consome uma vez o atalho e assume a carteira concreta do revendedor. */
   async consumeResellerAccessLink(identity: JwtPayload, token: string) {
     const user = await this.multiContextActor(identity);
+    const session = this.mfaSessionFromIdentity(identity);
     const now = new Date();
     const access = await this.db().superAdminResellerAccess.findUnique({
       where: { tokenHash: this.hashUrlToken(token) },
@@ -559,7 +584,7 @@ export class AuthService {
       resellerName: access.reseller.user.name,
       expiresAt: sessionExpiresAt,
     };
-    const tokens = await this.issueTokens(user, assumed);
+    const tokens = await this.issueTokens(user, session, assumed);
     this.logger.warn(
       `Acesso de suporte iniciado: ${user.email} abriu a visão do revendedor ${access.reseller.user.name} (${access.reseller.id}).`,
     );
@@ -657,18 +682,22 @@ export class AuthService {
 
   async verifyEmail(token: string) {
     const record = await this.findUrlToken(token, AccountTokenType.VERIFICACAO_EMAIL);
-    const user = await this.db().$transaction(async (tx: any) => {
+    await this.db().$transaction(async (tx: any) => {
       await tx.accountToken.update({
         where: { id: record.id },
         data: { usedAt: new Date() },
       });
-      return tx.user.update({
+      await tx.user.update({
         where: { id: record.userId },
         data: { emailVerifiedAt: new Date() },
       });
     });
-    const tokens = await this.issueTokens(user);
-    return { ...tokens, user: await this.publicUser(user) };
+    // Confirmar o endereço prova que o e-mail existe, mas não substitui o MFA.
+    // Antes este link já emitia sessão e permitia entrar sem digitar o código.
+    return {
+      success: true,
+      message: "E-mail confirmado. Entre com sua senha para receber o código de acesso.",
+    };
   }
 
   async resendVerification(emailInput: string) {
@@ -811,7 +840,7 @@ export class AuthService {
       where: { id: record.id },
       data: { usedAt: new Date() },
     });
-    const tokens = await this.issueTokens(record.user);
+    const tokens = await this.issueTokens(record.user, createMfaSessionWindow());
     return {
       ...tokens,
       user: await this.publicUser(record.user),
@@ -826,7 +855,7 @@ export class AuthService {
     const [tokenId, secret] = cookieValue.split(".");
     const record = await this.db().refreshToken.findUnique({ where: { id: tokenId } });
 
-    if (!record || record.revokedAt || record.expiresAt < new Date()) {
+    if (!record || record.revokedAt || !record.sessionStartedAt || record.expiresAt < new Date()) {
       throw new UnauthorizedException("Sessão expirada, faça login novamente.");
     }
     const secretOk = await bcrypt.compare(secret, record.tokenHash);
@@ -924,7 +953,10 @@ export class AuthService {
       }
     }
 
-    const tokens = await this.issueTokens(user, assumed);
+    const tokens = await this.issueTokens(user, {
+      startedAt: record.sessionStartedAt,
+      expiresAt: record.expiresAt,
+    }, assumed);
     return {
       ...tokens,
       user: await this.publicSessionUser(user, assumed),
@@ -998,14 +1030,20 @@ export class AuthService {
     return createHash("sha256").update(token).digest("hex");
   }
 
-  private requiresMfa(role: Role) {
-    const configured = process.env.MFA_REQUIRED_ROLES
-      ?? (process.env.NODE_ENV === "production" ? "SUPER_ADMIN,ADMIN,REVENDEDOR" : "");
-    return configured
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .includes(role);
+  private requiresMfa(user: { email: string }) {
+    // Não é uma configuração por papel: cliente, entregador, cozinha,
+    // funcionário, administrador, parceiro e superadmin precisam confirmar o
+    // código. A exceção é exclusivamente o domínio .invalid do demo interno,
+    // que não pode receber e-mail e é bloqueado de qualquer cadastro público.
+    return !isReservedDemoEmail(user.email);
+  }
+
+  private mfaSessionFromIdentity(identity: JwtPayload): MfaSessionWindow {
+    const session = activeMfaSessionFromPayload(identity);
+    if (!session) {
+      throw new UnauthorizedException("Sua sessão expirou. Entre novamente e confirme o código.");
+    }
+    return session;
   }
 
   private maskEmail(email: string) {

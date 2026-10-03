@@ -86,7 +86,7 @@ export function SuperAdminSupportLinkGate({
       .then(({ data }) => {
         window.sessionStorage.removeItem(storageKey);
         queryClient.clear();
-        setSession(data.accessToken, data.user);
+        setSession(data.accessToken, data.user, data.sessionExpiresAt);
         router.replace(destination);
       })
       .catch((reason) => {

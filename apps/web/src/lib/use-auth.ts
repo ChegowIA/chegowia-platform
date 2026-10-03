@@ -30,7 +30,7 @@ export function useLogin() {
       return data;
     },
     onSuccess: (data) => {
-      if (!data.mfaRequired) setSession(data.accessToken, data.user);
+      if (!data.mfaRequired) setSession(data.accessToken, data.user, data.sessionExpiresAt);
     },
   });
 }
@@ -51,7 +51,7 @@ export function useVerifyMfa() {
       const { data } = await api.post("/auth/mfa/verify", payload);
       return data;
     },
-    onSuccess: (data) => setSession(data.accessToken, data.user),
+    onSuccess: (data) => setSession(data.accessToken, data.user, data.sessionExpiresAt),
   });
 }
 

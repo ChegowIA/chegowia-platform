@@ -74,7 +74,7 @@ let refreshPromise: Promise<string | null> | null = null;
 async function requestFreshAccessToken(): Promise<string | null> {
   try {
     const { data } = await axios.post(`${API_BASE}/auth/refresh`, {}, { withCredentials: true });
-    useAuthStore.getState().setSession(data.accessToken, data.user);
+    useAuthStore.getState().setSession(data.accessToken, data.user, data.sessionExpiresAt);
     return data.accessToken as string;
   } catch {
     useAuthStore.getState().clear();

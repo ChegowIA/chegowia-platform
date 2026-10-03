@@ -30,11 +30,11 @@ export function SuperAdminImpersonationBanner() {
       });
       return { ...data, destination };
     },
-    onSuccess: ({ accessToken, user: platformUser, destination }) => {
+    onSuccess: ({ accessToken, user: platformUser, sessionExpiresAt, destination }) => {
       // Consultas de uma empresa nunca podem sobreviver na memória ao voltar
       // para a plataforma ou abrir outra empresa.
       queryClient.clear();
-      setSession(accessToken, platformUser);
+      setSession(accessToken, platformUser, sessionExpiresAt);
       router.replace(destination);
     },
   });

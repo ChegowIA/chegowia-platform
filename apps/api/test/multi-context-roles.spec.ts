@@ -42,7 +42,14 @@ describe("papéis do login multiacesso", () => {
     return { service, jwtService, prisma };
   }
 
-  const identity = { sub: superAdmin.id, email: ALLOWED, role: Role.SUPER_ADMIN, companyId: null };
+  const identity = {
+    sub: superAdmin.id,
+    email: ALLOWED,
+    role: Role.SUPER_ADMIN,
+    companyId: null,
+    mfaSessionStartedAt: Date.now() - 1_000,
+    mfaSessionExpiresAt: Date.now() + 23 * 60 * 60_000,
+  };
 
   it.each([Role.ADMIN, Role.FUNCIONARIO, Role.COZINHA, Role.MOTOBOY, Role.GARCOM])(
     "assume %s dentro de uma empresa",

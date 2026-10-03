@@ -467,6 +467,9 @@ model RefreshToken {
   userId            String
   tokenHash         String
   expiresAt         DateTime
+  // Sessões antigas não possuem este marco e são recusadas no refresh. Assim,
+  // ativar MFA universal não permite que um cookie prévio contorne o código.
+  sessionStartedAt  DateTime?
   revokedAt         DateTime?
   createdAt         DateTime  @default(now())
   // Contexto assumido pelo superadmin multiacesso. Fica aqui para que renovar a

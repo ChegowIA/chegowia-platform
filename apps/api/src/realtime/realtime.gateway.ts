@@ -12,6 +12,7 @@ import { Role, SubscriptionStatus } from "@prisma/client";
 import { PermissionKey } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
+import { activeMfaSessionFromPayload } from "../common/security/mfa-session";
 
 /**
  * Tópicos da sala da empresa e a permissão que os libera. As salas eram uma só
@@ -97,6 +98,8 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const payload = this.jwtService.verify<JwtPayload>(token, {
         secret: process.env.JWT_ACCESS_SECRET,
       });
+      const mfaSession = activeMfaSessionFromPayload(payload);
+      if (!mfaSession) throw new Error("Sessão MFA expirada.");
       const session = await this.resolveSocketSession(payload);
       if (!session) throw new Error("Conta inativa.");
       const companyRole = COMPANY_ROLES.has(payload.role);
@@ -123,7 +126,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       if (payload.role === Role.REVENDEDOR && !payload.assumed && !session.resellerSupport) client.join("resellers");
       // O handshake é a única autorização do socket; sem prazo, um tablet de
       // salão aberto o dia todo seguiria conectado com credencial vencida.
-      this.scheduleRevalidation(client);
+      this.scheduleRevalidation(client, mfaSession.expiresAt);
     } catch {
       this.logger.warn(`Conexão websocket rejeitada: ${client.id}`);
       client.disconnect(true);
@@ -159,7 +162,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
    * servidor provoca; isto cobre a expiração passiva e qualquer alteração feita
    * fora dos caminhos instrumentados.
    */
-  private scheduleRevalidation(client: Socket) {
+  private scheduleRevalidation(client: Socket, sessionExpiresAt: Date) {
     const timer = setInterval(async () => {
       const socketData = client.data as { user?: JwtPayload; companyAccessPaused?: boolean };
       const payload = socketData.user;
@@ -194,7 +197,19 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       }
     }, REVALIDATION_INTERVAL_MS);
     timer.unref?.();
-    client.on("disconnect", () => clearInterval(timer));
+    // A revalidação de cinco em cinco minutos não é precisa o suficiente para
+    // uma política de expiração fixa. Este timer encerra até um socket ocioso
+    // exatamente quando termina a sessão confirmada por MFA.
+    const expiresIn = Math.max(0, sessionExpiresAt.getTime() - Date.now());
+    const expirationTimer = setTimeout(() => {
+      client.emit("session.revoked", { reason: "sessao-expirada" });
+      client.disconnect(true);
+    }, expiresIn);
+    expirationTimer.unref?.();
+    client.on("disconnect", () => {
+      clearInterval(timer);
+      clearTimeout(expirationTimer);
+    });
   }
 
   /**
@@ -207,6 +222,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     company: { isActive: boolean; subscription: { status: SubscriptionStatus; trialEndsAt: Date | null } | null } | null;
     resellerSupport: boolean;
   } | null> {
+    if (!activeMfaSessionFromPayload(payload)) return null;
     const db = this.prisma as any;
     const user = await db.user.findUnique({
       where: { id: payload.sub },

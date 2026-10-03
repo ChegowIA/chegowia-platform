@@ -17,7 +17,14 @@ describe("atalho auditável de suporte do superadmin", () => {
     emailVerifiedAt: new Date(),
   };
   const company = { id: "empresa-1", name: "Empresa 1", isActive: false };
-  const identity = { sub: superAdmin.id, email: ALLOWED, role: Role.SUPER_ADMIN, companyId: null };
+  const identity = {
+    sub: superAdmin.id,
+    email: ALLOWED,
+    role: Role.SUPER_ADMIN,
+    companyId: null,
+    mfaSessionStartedAt: Date.now() - 1_000,
+    mfaSessionExpiresAt: Date.now() + 23 * 60 * 60_000,
+  };
   const originalAppUrl = process.env.APP_URL;
 
   beforeEach(() => {
@@ -138,6 +145,7 @@ describe("atalho auditável de suporte do superadmin", () => {
       userId: superAdmin.id,
       tokenHash: await bcrypt.hash(secret, 10),
       expiresAt: new Date(Date.now() + 50 * 60_000),
+      sessionStartedAt: new Date(Date.now() - 1_000),
       revokedAt: null,
       assumedRole: Role.ADMIN,
       assumedCompanyId: company.id,

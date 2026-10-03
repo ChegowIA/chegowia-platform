@@ -90,7 +90,15 @@ describe("revalidação periódica do socket", () => {
   function socketFake() {
     const handlers: Record<string, () => void> = {};
     return {
-      data: { user: { sub: "user-1", role: Role.GARCOM, companyId: "empresa-1" } },
+      data: {
+        user: {
+          sub: "user-1",
+          role: Role.GARCOM,
+          companyId: "empresa-1",
+          mfaSessionStartedAt: Date.now() - 1_000,
+          mfaSessionExpiresAt: Date.now() + 23 * 60 * 60_000,
+        },
+      },
       emit: jest.fn(),
       disconnect: jest.fn(),
       on: jest.fn((event: string, handler: () => void) => {
@@ -118,7 +126,7 @@ describe("revalidação periódica do socket", () => {
   it("mantém a conexão enquanto o vínculo continua o mesmo", async () => {
     const client = socketFake();
     const instance = instanceWith({ isActive: true, role: Role.GARCOM, companyId: "empresa-1" });
-    (instance as any).scheduleRevalidation(client);
+    (instance as any).scheduleRevalidation(client, new Date(Date.now() + 23 * 60 * 60_000));
 
     await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
 
@@ -128,7 +136,7 @@ describe("revalidação periódica do socket", () => {
   it("derruba quando a conta é desativada fora dos caminhos instrumentados", async () => {
     const client = socketFake();
     const instance = instanceWith({ isActive: false, role: Role.GARCOM, companyId: "empresa-1" });
-    (instance as any).scheduleRevalidation(client);
+    (instance as any).scheduleRevalidation(client, new Date(Date.now() + 23 * 60 * 60_000));
 
     await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
 
@@ -139,7 +147,7 @@ describe("revalidação periódica do socket", () => {
   it("derruba quando o papel muda depois da conexão", async () => {
     const client = socketFake();
     const instance = instanceWith({ isActive: true, role: Role.COZINHA, companyId: "empresa-1" });
-    (instance as any).scheduleRevalidation(client);
+    (instance as any).scheduleRevalidation(client, new Date(Date.now() + 23 * 60 * 60_000));
 
     await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
 
@@ -149,7 +157,7 @@ describe("revalidação periódica do socket", () => {
   it("para o timer quando o socket cai, para não vazar intervalo", async () => {
     const client = socketFake();
     const instance = instanceWith({ isActive: true, role: Role.GARCOM, companyId: "empresa-1" });
-    (instance as any).scheduleRevalidation(client);
+    (instance as any).scheduleRevalidation(client, new Date(Date.now() + 23 * 60 * 60_000));
 
     client.handlers.disconnect();
     await jest.advanceTimersByTimeAsync(30 * 60 * 1000);
@@ -177,6 +185,8 @@ describe("socket da visão auditada de revendedor", () => {
       assumedAccessKind: "RESELLER" as const,
       assumedUserId: "reseller-user-1",
       assumedResellerId: "reseller-1",
+      mfaSessionStartedAt: Date.now() - 1_000,
+      mfaSessionExpiresAt: Date.now() + 23 * 60 * 60_000,
     };
     const prisma = {
       user: {

@@ -20,6 +20,10 @@ describe("login multiacesso do superadmin", () => {
     isActive: true,
     emailVerifiedAt: new Date(),
   };
+  const mfaSession = {
+    mfaSessionStartedAt: Date.now() - 1_000,
+    mfaSessionExpiresAt: Date.now() + 23 * 60 * 60_000,
+  };
 
   beforeEach(() => {
     process.env.MULTI_CONTEXT_LOGIN_EMAIL = ALLOWED;
@@ -91,12 +95,12 @@ describe("login multiacesso do superadmin", () => {
     const service = new AuthService(prisma as never, jwtService as never, {} as never, {} as never);
 
     const result = await service.switchContext(
-      { sub: superAdmin.id, email: ALLOWED, role: Role.SUPER_ADMIN, companyId: null },
+      { sub: superAdmin.id, email: ALLOWED, role: Role.SUPER_ADMIN, companyId: null, ...mfaSession },
       "empresa-1",
     );
 
     expect(jwtService.sign).toHaveBeenCalledWith(
-      { sub: "user-super", email: ALLOWED, role: Role.ADMIN, companyId: "empresa-1", assumed: true },
+      expect.objectContaining({ sub: "user-super", email: ALLOWED, role: Role.ADMIN, companyId: "empresa-1", assumed: true }),
       expect.anything(),
     );
     // O contexto assumido é gravado no refresh para sobreviver à renovação.
