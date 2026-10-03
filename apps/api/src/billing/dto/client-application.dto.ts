@@ -1,7 +1,10 @@
-import { Equals, IsBoolean, IsEmail, IsOptional, IsString, MinLength } from "class-validator";
+import { Transform } from "class-transformer";
+import { Equals, IsBoolean, IsEmail, IsOptional, IsString, Matches, MinLength } from "class-validator";
 import { IsCnpj } from "../../common/validators/brazil-document.validator";
 import { IsStrongPassword } from "../../common/validators/strong-password.validator";
 import { MatchesProperty } from "../../common/validators/match-property.validator";
+
+const onlyDigits = ({ value }: { value: unknown }) => String(value ?? "").replace(/\D/g, "");
 
 export class ClientApplicationDto {
   @IsOptional() @IsString() sourceLeadId?: string;
@@ -15,6 +18,10 @@ export class ClientApplicationDto {
   @IsOptional() @IsString() tradeName?: string;
   @IsString() city: string;
   @IsString() state: string;
+  @Transform(onlyDigits)
+  @IsString()
+  @Matches(/^\d{8}$/, { message: "Informe o CEP com 8 dígitos." })
+  zipCode: string;
   @IsString() businessType: string;
   @IsString() @MinLength(80) operationDetails: string;
   @IsString() @IsStrongPassword() password: string;

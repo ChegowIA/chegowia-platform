@@ -1,5 +1,8 @@
 import { PartialType } from "@nestjs/swagger";
-import { IsBoolean, IsOptional, IsString, MinLength } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsBoolean, IsOptional, IsString, Matches, MinLength } from "class-validator";
+
+const onlyDigits = ({ value }: { value: unknown }) => String(value ?? "").replace(/\D/g, "");
 
 export class CreateAddressDto {
   @IsOptional()
@@ -26,9 +29,10 @@ export class CreateAddressDto {
   @IsString()
   state: string;
 
-  @IsOptional()
+  @Transform(onlyDigits)
   @IsString()
-  zipCode?: string;
+  @Matches(/^\d{8}$/, { message: "Informe o CEP com 8 dígitos." })
+  zipCode: string;
 
   @IsOptional()
   @IsString()

@@ -241,7 +241,7 @@ documento fiscal com guarda obrigatória de cinco anos.
 |---|---|---|
 | 5.1.1 | `/` sem login | Institucional; catálogo não aparece |
 | 5.1.2 | Login cliente, sem endereço salvo | Catálogo continua vazio (`hasLocation` falso) |
-| 5.1.3 | Cadastrar endereço em Moema e voltar | Burger do Thiago aparece |
+| 5.1.3 | Cadastrar endereço em Moema com CEP válido e voltar | Burger do Thiago aparece quando CEP/cidade indicam área atendida |
 | 5.1.4 | `/busca` por "smash" | Produto com o nome da loja |
 | 5.1.5 | Trocar endereço padrão para outra cidade | A loja **não** aparece (igualdade de cidade) |
 | 5.1.6 | `/loja/burger-do-thiago` | Cardápio completo |
@@ -249,12 +249,13 @@ documento fiscal com guarda obrigatória de cinco anos.
 | 5.1.8 | `/loja/slug-inexistente` | 404 tratado |
 | 5.1.9 | `/planos`, `/software`, `/revenda`, `/termos`, `/privacidade` | Abrem sem login |
 | 5.1.10 | `GET /api/catalog/public/sitemap` | Só empresas e produtos ativos |
+| 5.1.11 | Logar como `thiagolpssouza@gmail.com`, salvar endereço dentro do raio da demo e abrir catálogo | Só então a `operacao-demo-chegowia` aparece; outro e-mail, CEP/cidade ou rota fora do raio não a vê |
 
 ### 5.2 Endereços (`/minha-conta/enderecos`, 4 rotas)
 
 | # | Passo | Esperado |
 |---|---|---|
-| 5.2.1 | Cadastrar endereço | Geocodificado (latitude/longitude preenchidos) |
+| 5.2.1 | Cadastrar endereço | CEP de 8 dígitos obrigatório; geocodificado (latitude/longitude preenchidos) |
 | 5.2.2 | Marcar como padrão | O anterior deixa de ser padrão |
 | 5.2.3 | CEP inexistente | Erro tratado, sem quebrar a tela |
 | 5.2.4 | Excluir endereço em uso por pedido ativo | Comportamento consistente (bloqueia ou desvincula, mas não perde o pedido) |
@@ -330,6 +331,7 @@ Fluxo: `RECEBIDO → CONFIRMADO → EM_PREPARO → PRONTO → SAIU_PARA_ENTREGA 
 | 6.2.11 | Criar, renomear e reordenar categorias | Ordem reflete na vitrine |
 | 6.2.12 | Desativar categoria com produtos ativos | Produtos somem da vitrine junto |
 | 6.2.13 | Excluir categoria em uso | Bloqueado ou com aviso do impacto |
+| 6.2.14 | Abrir **Pré-visualizar como cliente** como ADMIN | Abre em outra aba a mesma seleção ativa do cardápio, sem permitir criar pedido |
 
 ### 6.3 Mesas e salão
 
@@ -504,7 +506,7 @@ O cálculo usa geocodificação do endereço e rota de carro por OSRM
 
 | # | Passo | Esperado |
 |---|---|---|
-| 8.4.1 | Criar pedido com endereço válido | Distância e tempo estimado preenchidos |
+| 8.4.1 | Criar pedido com endereço e CEP válidos | Distância e tempo estimado preenchidos |
 | 8.4.2 | Conferir a taxa | Corresponde à área de entrega cadastrada |
 | 8.4.3 | Endereço fora do raio configurado | Recusado no checkout |
 | 8.4.4 | Derrubar o OSRM (apontar `ROUTING_BASE_URL` para porta morta) | **A venda não pode travar**: o pedido é criado, com estimativa ausente ou de fallback |

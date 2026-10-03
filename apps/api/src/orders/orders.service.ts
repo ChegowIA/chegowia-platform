@@ -164,11 +164,14 @@ export class OrdersService {
   // -------------------------------------------------------------------------
 
   async createForCustomer(customerId: string, dto: CreateOrderDto) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhereForUserId(customerId)
+      : { isTestOnly: false };
     const company = await this.db().company.findFirst({
       where: {
         slug: dto.companySlug,
         isActive: true,
-        ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(customerId) ?? { isTestOnly: false }),
+        ...visibility,
       },
       include: {
         settings: true,
@@ -235,11 +238,14 @@ export class OrdersService {
   }
 
   async quoteForCustomer(customerId: string, dto: DeliveryQuoteDto): Promise<DeliveryQuote> {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhereForUserId(customerId)
+      : { isTestOnly: false };
     const company = await this.db().company.findFirst({
       where: {
         slug: dto.companySlug,
         isActive: true,
-        ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(customerId) ?? { isTestOnly: false }),
+        ...visibility,
       },
       include: { subscription: { select: { currentPeriodEnd: true, trialEndsAt: true } } },
     });
@@ -640,6 +646,7 @@ export class OrdersService {
   }
 
   private async calculateDeliveryQuote(company: any, address: any): Promise<DeliveryQuote> {
+    this.assertOperationalPostalCodes(company, address);
     const [origin, destination] = await Promise.all([
       this.resolveCompanyCoordinates(company),
       this.resolveAddressCoordinates(address),
@@ -682,6 +689,7 @@ export class OrdersService {
   }
 
   private async calculateDeliveryQuoteWithCoordinates(company: any, address: WhatsAppDeliveryAddress) {
+    this.assertOperationalPostalCodes(company, address);
     const [origin, destination] = await Promise.all([
       this.resolveCompanyCoordinates(company),
       this.resolveTransientAddressCoordinates(address),
@@ -896,13 +904,14 @@ export class OrdersService {
   private async resolveCompanyCoordinates(company: any): Promise<GeographicPoint> {
     const current = this.readCoordinates(company);
     if (current) return current;
-    if (!company.addressLine?.trim() || !company.city?.trim() || !company.state?.trim()) {
+    if (!company.addressLine?.trim() || !company.city?.trim() || !company.state?.trim() || !hasPostalCode(company.zipCode)) {
       throw new BadRequestException("A loja precisa cadastrar um endereço completo para calcular a rota de entrega.");
     }
     const coordinates = await this.geography.geocode({
       addressLine: company.addressLine,
       city: company.city,
       state: company.state,
+      zipCode: company.zipCode,
     });
     await this.db().company.update({
       where: { id: company.id },
@@ -931,6 +940,15 @@ export class OrdersService {
     return coordinates;
   }
 
+  private assertOperationalPostalCodes(company: { zipCode?: unknown }, address: { zipCode?: unknown }) {
+    if (!hasPostalCode(company.zipCode)) {
+      throw new BadRequestException("A loja precisa informar o CEP operacional antes de aceitar entregas.");
+    }
+    if (!hasPostalCode(address.zipCode)) {
+      throw new BadRequestException("Informe um CEP válido de 8 dígitos no seu endereço para calcular a entrega.");
+    }
+  }
+
   private readCoordinates(value: { latitude?: unknown; longitude?: unknown }): GeographicPoint | null {
     if (value.latitude === null || value.latitude === undefined || value.longitude === null || value.longitude === undefined) {
       return null;
@@ -944,6 +962,10 @@ export class OrdersService {
   private roundCurrency(value: number) {
     return Math.round((value + Number.EPSILON) * 100) / 100;
   }
+}
+
+function hasPostalCode(value: unknown) {
+  return /^\d{8}$/.test(String(value ?? "").replace(/\D/g, ""));
 }
 
 function isUniqueConstraint(error: unknown) {

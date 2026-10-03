@@ -228,7 +228,15 @@ e-mail informado será o ADMIN e receberá o código MFA normalmente. Use um
 alias/caixa de e-mail sua que **ainda não tenha conta na ChegowIA**, pois a
 operação demo é apagada por completo no cleanup. As demais contas usam o
 domínio reservado `@demo.chegowia.invalid`. A empresa fica marcada como
-`isTestOnly`, então não aparece no catálogo público.
+`isTestOnly`, portanto continua oculta do catálogo público geral.
+
+Há uma exceção deliberadamente estreita para a operação
+`operacao-demo-chegowia`: ela pode aparecer **somente** para a conta
+`thiagolpssouza@gmail.com`, quando essa pessoa estiver autenticada e tiver um
+endereço salvo com CEP válido dentro da cidade/área atendida e do raio real da
+loja. A API compara primeiro a proximidade aproximada dos CEPs e confirma com
+a rota por ruas; URL, parâmetro de navegador ou outro e-mail não liberam a
+loja. Todas as demais empresas `isTestOnly` seguem invisíveis.
 
 Não existe rota web/API para criar esse tipo de empresa, assinatura sem
 cobrança ou e-mails reservados: somente este script, executado com acesso ao
@@ -249,6 +257,15 @@ node apps/api/prisma/remove-demo-company.js --confirmar=chegowia --allow-product
 
 Não use `reset-data.js` para isso: ele é uma limpeza global de banco, enquanto
 o comando acima remove somente a empresa demo e as contas reservadas dela.
+
+### CEP operacional e distância
+
+CEP de oito dígitos é obrigatório para novos endereços de clientes, empresas e
+contratações. Registros antigos permanecem preservados, mas precisam receber o
+CEP antes de uma nova edição ou de aceitar entrega. A vitrine usa o centro
+aproximado do CEP como triagem rápida; o checkout ainda geocodifica o endereço
+completo e calcula a rota de carro, que é a decisão definitiva para taxa e
+raio de entrega.
 
 ### Serviços `api` e `worker`
 

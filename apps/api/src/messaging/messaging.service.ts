@@ -1438,11 +1438,14 @@ export class MessagingService {
   }
 
   async buildStoreContactLink(companySlug: string, viewer?: JwtPayload) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
+      : { isTestOnly: false };
     const company = await this.db().company.findFirst({
       where: {
         slug: companySlug,
         isActive: true,
-        ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+        ...visibility,
       },
     });
     if (!company?.whatsapp) throw new NotFoundException("Empresa não tem WhatsApp configurado.");

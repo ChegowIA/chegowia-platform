@@ -6,6 +6,7 @@ import { tenantContext } from "../common/tenant/tenant-context";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
+import { PostalCodeLocationService } from "../common/geography/postal-code-location.service";
 
 /** Teto do varrimento da home. Ver o comentário de `getMarketplace`. */
 const MARKETPLACE_SCAN_LIMIT = 600;
@@ -44,6 +45,7 @@ export class CatalogPublicService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly legacyTestData?: LegacyTestDataService,
+    private readonly postalCodeLocations?: PostalCodeLocationService,
   ) {}
 
   private db() {
@@ -57,12 +59,32 @@ export class CatalogPublicService {
    * assinatura usam `OR`: montadas separadamente no mesmo objeto, uma
    * sobrescreveria a outra sem erro nenhum.
    */
-  private async publicCompanyWhere(viewer?: JwtPayload, cidade?: string | null) {
-    return {
+  private async publicCompanyWhere(
+    viewer?: JwtPayload,
+    cidade?: string | null,
+    zipCode?: string | null,
+    state?: string | null,
+  ) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
+      : { isTestOnly: false };
+    const where: any = {
       isActive: true,
-      ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+      ...visibility,
       ...filtroPublicoDeEmpresa({ cidade }),
     };
+    if (!zipCode || !this.postalCodeLocations) return where;
+
+    const candidates = await this.db().company.findMany({
+      where,
+      select: { id: true, zipCode: true, city: true, state: true, deliveryRadiusKm: true },
+    });
+    const ids = await this.postalCodeLocations.filterCompaniesForCustomerPostalCode(
+      zipCode,
+      { city: cidade, state },
+      candidates,
+    );
+    return { ...where, id: { in: ids } };
   }
 
   /**
@@ -96,21 +118,42 @@ export class CatalogPublicService {
     if (!company) throw new NotFoundException("Loja não encontrada.");
 
     return tenantContext.runAsCompany(company.id, async () => {
-      const categories = await this.db().category.findMany({
-        where: { isActive: true },
-        orderBy: { position: "asc" },
-        include: {
-          products: {
-            where: { isActive: true },
-            include: {
-              variations: { where: { isActive: true } },
-              addons: { where: { isActive: true } },
-              optionGroups: ACTIVE_OPTION_GROUPS_INCLUDE,
-            },
+      const categories = await this.activeMenuCategories();
+      return { company: { id: company.id, name: company.name, slug: company.slug }, categories };
+    });
+  }
+
+  /**
+   * Prévia para quem administra a própria operação. A resposta usa a mesma
+   * seleção de categorias/produtos ativos da vitrine, mas não depende de
+   * assinatura, URL pública ou da localização do administrador.
+   */
+  async getMenuPreview(companyId: string) {
+    const company = await this.db().company.findUnique({
+      where: { id: companyId },
+      select: { id: true, name: true, slug: true },
+    });
+    if (!company) throw new NotFoundException("Empresa não encontrada.");
+    return tenantContext.runAsCompany(company.id, async () => ({
+      company,
+      categories: await this.activeMenuCategories(),
+    }));
+  }
+
+  private activeMenuCategories() {
+    return this.db().category.findMany({
+      where: { isActive: true },
+      orderBy: { position: "asc" },
+      include: {
+        products: {
+          where: { isActive: true },
+          include: {
+            variations: { where: { isActive: true } },
+            addons: { where: { isActive: true } },
+            optionGroups: ACTIVE_OPTION_GROUPS_INCLUDE,
           },
         },
-      });
-      return { company: { id: company.id, name: company.name, slug: company.slug }, categories };
+      },
     });
   }
 
@@ -234,16 +277,18 @@ export class CatalogPublicService {
    * `searchPublic`, paginada em SQL.
    */
   async getMarketplace(
-    params: { search?: string; city?: string; categoryId?: string },
+    params: { search?: string; city?: string; state?: string; zipCode?: string; categoryId?: string },
     viewer?: JwtPayload,
   ) {
     const search = params.search?.trim();
     const city = params.city?.trim();
+    const state = params.state?.trim();
+    const zipCode = params.zipCode?.trim();
     const publicTypeId = params.categoryId?.trim();
 
     // A cidade vai junto do filtro público: além da sede, vale a loja que
     // cadastrou área de entrega naquela cidade.
-    const companyFilter: any = await this.publicCompanyWhere(viewer, city);
+    const companyFilter: any = await this.publicCompanyWhere(viewer, city, zipCode, state);
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },
@@ -367,12 +412,16 @@ export class CatalogPublicService {
     productTypeIds?: string[];
     maxPrice?: number | null;
     city?: string;
+    state?: string;
+    zipCode?: string;
     page?: number;
     pageSize?: number;
   }, viewer?: JwtPayload) {
     const page = Math.max(1, Math.trunc(params.page ?? 1));
     const pageSize = Math.min(48, Math.max(1, Math.trunc(params.pageSize ?? 24)));
     const city = params.city?.trim();
+    const state = params.state?.trim();
+    const zipCode = params.zipCode?.trim();
 
     const typeKeywords = (params.productTypeIds ?? []).flatMap(
       (id) => PUBLIC_PRODUCT_TYPES.find((type) => type.id === id)?.keywords ?? [],
@@ -381,7 +430,7 @@ export class CatalogPublicService {
 
     // A cidade vai junto do filtro público: além da sede, vale a loja que
     // cadastrou área de entrega naquela cidade.
-    const companyFilter: any = await this.publicCompanyWhere(viewer, city);
+    const companyFilter: any = await this.publicCompanyWhere(viewer, city, zipCode, state);
     const productWhere: any = {
       isActive: true,
       company: { is: companyFilter },

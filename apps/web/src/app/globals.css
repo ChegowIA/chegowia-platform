@@ -194,6 +194,20 @@ body {
   textarea {
     -webkit-tap-highlight-color: transparent;
   }
+
+}
+
+/*
+ * O Safari do iPhone amplia a página quando um campo tem fonte menor que
+ * 16px. Campos usam `text-sm` no desktop por densidade, mas no celular a
+ * fonte de digitação precisa ficar em 16px para o zoom não prender a tela.
+ */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 ::selection {

@@ -24,6 +24,7 @@ const EMPTY_FORM = {
   tradeName: "",
   city: "",
   state: "",
+  zipCode: "",
   businessType: "",
   operationDetails: "",
   password: "",
@@ -264,6 +265,7 @@ export default function PlansPage() {
               <Field label="Cidade" field="city" form={form} setForm={setForm} />
               <FormField label="UF"><BrazilStateSelect value={form.state} onChange={(event) => setForm({ ...form, state: event.target.value })} /></FormField>
             </div>
+            <Field label="CEP operacional" field="zipCode" form={form} setForm={setForm} mask="cep" />
             <Field label="Ramo de atividade" field="businessType" form={form} setForm={setForm} />
             <FormField label="Conte como funciona sua operação"><Textarea value={form.operationDetails} minLength={80} onChange={(event) => setForm({ ...form, operationDetails: event.target.value })} /></FormField>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -276,7 +278,7 @@ export default function PlansPage() {
             {apply.error && <p className="text-sm text-rose-600 dark:text-rose-400">{apiErrorMessage(apply.error)}</p>}
             <Button
               className="w-full"
-              disabled={!form.confirmPassword || form.password !== form.confirmPassword || !form.acceptTerms || !form.acceptPrivacy || !form.acceptAutomatedAnalysis}
+              disabled={!form.confirmPassword || form.password !== form.confirmPassword || form.zipCode.replace(/\D/g, "").length !== 8 || !form.acceptTerms || !form.acceptPrivacy || !form.acceptAutomatedAnalysis}
               isLoading={apply.isPending}
               onClick={() => apply.mutate()}
             >
@@ -406,7 +408,7 @@ function Field({ label, field, form, setForm, type = "text", mask }: {
   form: typeof EMPTY_FORM;
   setForm: (next: typeof EMPTY_FORM) => void;
   type?: string;
-  mask?: "phone" | "document";
+  mask?: "phone" | "document" | "cep";
 }) {
   const value = String(form[field]);
   return (

@@ -5,12 +5,14 @@ import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
+import { PostalCodeLocationService } from "../common/geography/postal-code-location.service";
 
 @Injectable()
 export class PromotionsService {
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly legacyTestData?: LegacyTestDataService,
+    private readonly postalCodeLocations?: PostalCodeLocationService,
   ) {}
 
   private db() {
@@ -25,14 +27,29 @@ export class PromotionsService {
     return this.db().promotion.create({ data: { ...data, status: PromotionStatus.ATIVA } });
   }
 
-  async publicList(params: { city?: string }, viewer?: JwtPayload) {
+  async publicList(params: { city?: string; state?: string; zipCode?: string }, viewer?: JwtPayload) {
     const now = new Date();
     const city = params.city?.trim();
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
+      : { isTestOnly: false };
     const companyWhere: any = {
       isActive: true,
-      ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+      ...visibility,
       ...filtroPublicoDeEmpresa({ cidade: city }),
     };
+    if (params.zipCode && this.postalCodeLocations) {
+      const candidates = await this.db().company.findMany({
+        where: companyWhere,
+        select: { id: true, zipCode: true, city: true, state: true, deliveryRadiusKm: true },
+      });
+      const ids = await this.postalCodeLocations.filterCompaniesForCustomerPostalCode(
+        params.zipCode,
+        { city, state: params.state },
+        candidates,
+      );
+      companyWhere.id = { in: ids };
+    }
     return this.db().promotion.findMany({
       where: {
         status: PromotionStatus.ATIVA,

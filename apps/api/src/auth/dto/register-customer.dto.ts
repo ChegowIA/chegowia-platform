@@ -1,6 +1,9 @@
-import { Equals, IsBoolean, IsEmail, IsOptional, IsString, MinLength } from "class-validator";
+import { Transform } from "class-transformer";
+import { Equals, IsBoolean, IsEmail, IsOptional, IsString, Matches, MinLength } from "class-validator";
 import { IsStrongPassword } from "../../common/validators/strong-password.validator";
 import { MatchesProperty } from "../../common/validators/match-property.validator";
+
+const onlyDigits = ({ value }: { value: unknown }) => String(value ?? "").replace(/\D/g, "");
 
 export class RegisterCustomerDto {
   @IsString()
@@ -40,9 +43,10 @@ export class RegisterCustomerDto {
   @MinLength(2)
   state: string;
 
-  @IsOptional()
+  @Transform(onlyDigits)
   @IsString()
-  zipCode?: string;
+  @Matches(/^\d{8}$/, { message: "Informe o CEP com 8 dígitos." })
+  zipCode: string;
 
   @IsOptional()
   @IsString()

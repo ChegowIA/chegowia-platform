@@ -74,6 +74,7 @@ export default function ConfiguracoesPage() {
     addressLine: "",
     city: "",
     state: "",
+    zipCode: "",
     deliveryFeeBase: "",
     deliveryFeePerKm: "",
     deliveryRadiusKm: "",
@@ -113,6 +114,7 @@ export default function ConfiguracoesPage() {
       addressLine: company.addressLine ?? "",
       city: company.city ?? "",
       state: company.state ?? "",
+      zipCode: company.zipCode ?? "",
       deliveryFeeBase: String(company.deliveryFeeBase ?? ""),
       deliveryFeePerKm: String(company.deliveryFeePerKm ?? ""),
       deliveryRadiusKm: String(company.deliveryRadiusKm ?? ""),
@@ -150,6 +152,7 @@ export default function ConfiguracoesPage() {
         addressLine: generalForm.addressLine || undefined,
         city: generalForm.city || undefined,
         state: generalForm.state || undefined,
+        zipCode: generalForm.zipCode,
         deliveryFeeBase: generalForm.deliveryFeeBase ? Number(generalForm.deliveryFeeBase) : undefined,
         deliveryFeePerKm: generalForm.deliveryFeePerKm ? Number(generalForm.deliveryFeePerKm) : undefined,
         deliveryRadiusKm: generalForm.deliveryRadiusKm ? Number(generalForm.deliveryRadiusKm) : undefined,
@@ -270,15 +273,19 @@ export default function ConfiguracoesPage() {
           </FormField>
           <FormField label="Endereço">
             <Input
+              required
               value={generalForm.addressLine}
               onChange={(e) => setGeneralForm((f) => ({ ...f, addressLine: e.target.value }))}
             />
           </FormField>
           <FormField label="Cidade">
-            <Input value={generalForm.city} onChange={(e) => setGeneralForm((f) => ({ ...f, city: e.target.value }))} />
+            <Input required value={generalForm.city} onChange={(e) => setGeneralForm((f) => ({ ...f, city: e.target.value }))} />
           </FormField>
           <FormField label="Estado">
-            <BrazilStateSelect value={generalForm.state} onChange={(e) => setGeneralForm((f) => ({ ...f, state: e.target.value }))} />
+            <BrazilStateSelect required value={generalForm.state} onChange={(e) => setGeneralForm((f) => ({ ...f, state: e.target.value }))} />
+          </FormField>
+          <FormField label="CEP operacional">
+            <MaskedInput mask="cep" required value={generalForm.zipCode} onChange={(e) => setGeneralForm((f) => ({ ...f, zipCode: e.target.value }))} />
           </FormField>
           <FormField label="Taxa de entrega base">
             <Input
@@ -343,7 +350,12 @@ export default function ConfiguracoesPage() {
           </div>
         </CardContent>
         <CardActions>
-          <Button className="w-full sm:w-auto" isLoading={saveGeneral.isPending} onClick={() => saveGeneral.mutate()}>
+          <Button
+            className="w-full sm:w-auto"
+            disabled={!generalForm.addressLine.trim() || !generalForm.city.trim() || !generalForm.state || generalForm.zipCode.replace(/\D/g, "").length !== 8}
+            isLoading={saveGeneral.isPending}
+            onClick={() => saveGeneral.mutate()}
+          >
             Salvar dados gerais
           </Button>
         </CardActions>

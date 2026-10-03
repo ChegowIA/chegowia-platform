@@ -333,11 +333,14 @@ export class AiService {
   // -------------------------------------------------------------------------
 
   async startOrGetCustomerConversation(companySlug: string, userId: string) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhereForUserId(userId)
+      : { isTestOnly: false };
     const company = await this.db().company.findFirst({
       where: {
         slug: companySlug,
         isActive: true,
-        ...(this.legacyTestData?.publicCompanyVisibilityWhereForUserId(userId) ?? { isTestOnly: false }),
+        ...visibility,
       },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");

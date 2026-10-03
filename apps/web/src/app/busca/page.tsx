@@ -42,14 +42,15 @@ function SearchResults() {
     queryFn: async () => (await api.get<Address[]>("/addresses")).data,
     enabled: isCustomer,
   });
-  const city = (addresses?.find((address) => address.isDefault) ?? addresses?.[0])?.city;
+  const location = addresses?.find((address) => address.isDefault) ?? addresses?.[0];
+  const city = location?.city;
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["public-search", query, city, page],
+    queryKey: ["public-search", query, location?.city, location?.state, location?.zipCode, page],
     queryFn: async () =>
       (
         await api.get<PublicSearchResponse>("/catalog/public/search", {
-          params: { query, city, page },
+          params: { query, city, state: location?.state, zipCode: location?.zipCode, page },
         })
       ).data,
     enabled: query.length >= 2,

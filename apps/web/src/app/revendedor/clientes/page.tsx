@@ -11,7 +11,7 @@ import { FormField, Input, Textarea } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { Modal } from "@/components/ui/modal";
 
-const EMPTY_SALE = { sourceLeadId: "", responsibleName: "", email: "", phone: "", document: "", companyName: "", tradeName: "", city: "", state: "", businessType: "", operationDetails: "", password: "", confirmPassword: "", acceptTerms: false, acceptPrivacy: false, acceptAutomatedAnalysis: false };
+const EMPTY_SALE = { sourceLeadId: "", responsibleName: "", email: "", phone: "", document: "", companyName: "", tradeName: "", city: "", state: "", zipCode: "", businessType: "", operationDetails: "", password: "", confirmPassword: "", acceptTerms: false, acceptPrivacy: false, acceptAutomatedAnalysis: false };
 /** DISPONIVEL fica de fora de propósito: é o estágio pré-claim, exibido em /revendedor/leads. */
 const LEAD_STAGES = [
   { key: LeadStatus.EM_ATENDIMENTO, label: "Em atendimento", dot: "bg-sky-500", surface: "bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:text-sky-300" },
@@ -194,6 +194,7 @@ function SaleModal({ open, close, sale, setSale, result, mutation }: any) {
           <Field label="Razão social" k="companyName" state={sale} set={setSale} />
           <Field label="Nome fantasia" k="tradeName" state={sale} set={setSale} />
           <div className="grid gap-4 sm:grid-cols-2"><Field label="Cidade" k="city" state={sale} set={setSale} /><FormField label="UF"><BrazilStateSelect value={sale.state} onChange={(event) => setSale({ ...sale, state: event.target.value })} /></FormField></div>
+          <Field label="CEP operacional" k="zipCode" state={sale} set={setSale} mask="cep" />
           <Field label="Tipo de negócio" k="businessType" state={sale} set={setSale} />
           <FormField label="Como funciona a operação"><Textarea minLength={80} value={sale.operationDetails} onChange={(event) => setSale({ ...sale, operationDetails: event.target.value })} /></FormField>
           <div className="grid gap-4 sm:grid-cols-2"><Field label="Senha inicial do administrador" k="password" state={sale} set={setSale} type="password" /><Field label="Confirmar senha" k="confirmPassword" state={sale} set={setSale} type="password" /></div>
@@ -205,7 +206,7 @@ function SaleModal({ open, close, sale, setSale, result, mutation }: any) {
             <Consent checked={sale.acceptAutomatedAnalysis} onChange={(value) => setSale({ ...sale, acceptAutomatedAnalysis: value })}>O cliente autorizou a análise automatizada do cadastro.</Consent>
           </div>
           {mutation.error && <ErrorMessage error={mutation.error} />}
-          <Button className="w-full" disabled={!sale.confirmPassword || sale.password !== sale.confirmPassword || !sale.acceptTerms || !sale.acceptPrivacy || !sale.acceptAutomatedAnalysis} isLoading={mutation.isPending} onClick={() => mutation.mutate()}>Validar e iniciar teste grátis</Button>
+          <Button className="w-full" disabled={!sale.confirmPassword || sale.password !== sale.confirmPassword || String(sale.zipCode ?? "").replace(/\D/g, "").length !== 8 || !sale.acceptTerms || !sale.acceptPrivacy || !sale.acceptAutomatedAnalysis} isLoading={mutation.isPending} onClick={() => mutation.mutate()}>Validar e iniciar teste grátis</Button>
           <p className="text-center text-[11px] text-slate-400">Marque os consentimentos somente após a autorização expressa do cliente. Não há pagamento agora; sua comissão só nasce se ele concluir o teste, pagar a mensalidade e o Asaas creditar o valor.</p>
         </div>
       )}

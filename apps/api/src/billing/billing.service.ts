@@ -519,6 +519,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       tradeName: dto.tradeName,
       city: dto.city,
       state: dto.state.toUpperCase(),
+      zipCode: dto.zipCode,
       businessType: dto.businessType,
       operationDetails: dto.operationDetails,
       passwordHash: await bcrypt.hash(dto.password, 12),
@@ -1955,6 +1956,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           phone: application.phone,
           city: application.city,
           state: application.state,
+          zipCode: application.zipCode,
           // Uma candidatura antiga marcada como teste não é promovida
           // silenciosamente ao provisionar. A revisão é explícita.
           isTestOnly: Boolean(application.isTestOnly),
@@ -2153,6 +2155,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           phone: application.phone,
           city: application.city,
           state: application.state,
+          zipCode: application.zipCode,
           // Preserva a marcação histórica de teste até decisão explícita.
           isTestOnly: Boolean(application.isTestOnly),
           settings: { create: { plan: application.plan.slug } },

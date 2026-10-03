@@ -8,6 +8,7 @@ import { UsageService } from "../../usage/usage.service";
 import { WhatsAppOrdersService } from "../../orders/whatsapp-orders.service";
 import { JwtPayload } from "../../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../../common/legacy-test-data/legacy-test-data.service";
+import { PostalCodeLocationService } from "../../common/geography/postal-code-location.service";
 
 /**
  * Implementação das ferramentas listadas em tool-definitions.ts. Cada método recebe
@@ -26,6 +27,7 @@ export class ToolsService {
     private readonly usage: UsageService,
     private readonly whatsappOrders?: WhatsAppOrdersService,
     private readonly legacyTestData?: LegacyTestDataService,
+    private readonly postalCodeLocations?: PostalCodeLocationService,
   ) {}
 
   private db() {
@@ -343,28 +345,44 @@ export class ToolsService {
    * sinônimos local — é o que mantém a tool utilizável sem provedor de IA.
    */
   async searchPublicCatalog(
-    data: { message: string; city?: string; neighborhood?: string; terms?: string[] },
+    data: { message: string; city?: string; state?: string; zipCode?: string; neighborhood?: string; terms?: string[] },
     viewer?: JwtPayload,
   ) {
     const query = data.message.trim();
     const city = data.city?.trim();
+    const state = data.state?.trim();
+    const zipCode = data.zipCode?.trim();
     const neighborhood = data.neighborhood?.trim();
     const tokens = data.terms?.length ? data.terms : searchTokens(query);
 
-    const visibility = this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false };
-    const companyWhere: any = { isActive: true, ...visibility };
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
+      : { isTestOnly: false };
+    const deliveryCompanyWhere: any = { isActive: true, ...visibility };
     // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
     // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
     // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
-    if (city) companyWhere.city = city;
+    if (city) deliveryCompanyWhere.city = city;
+    if (zipCode && this.postalCodeLocations) {
+      const candidates = await this.db().company.findMany({
+        where: deliveryCompanyWhere,
+        select: { id: true, zipCode: true, city: true, state: true, deliveryRadiusKm: true },
+      });
+      const ids = await this.postalCodeLocations.filterCompaniesForCustomerPostalCode(
+        zipCode,
+        { city, state },
+        candidates,
+      );
+      deliveryCompanyWhere.id = { in: ids };
+    }
+    const companyWhere: any = { ...deliveryCompanyWhere };
     const companySearch = buildCompanySearch(tokens);
     if (companySearch.length) companyWhere.OR = companySearch;
 
-    const productCompanyWhere: any = { isActive: true, ...(visibility ?? {}) };
+    const productCompanyWhere: any = { ...deliveryCompanyWhere };
     // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
     // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
     // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.
-    if (city) productCompanyWhere.city = city;
     const productWhere: any = { isActive: true, company: { is: productCompanyWhere } };
     const productSearch = buildProductSearch(tokens);
     if (productSearch.length) productWhere.OR = productSearch;

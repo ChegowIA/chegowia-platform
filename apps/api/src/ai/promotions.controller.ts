@@ -39,7 +39,12 @@ export class PublicPromotionsController {
   constructor(private readonly promotionsService: PromotionsService) {}
 
   @Get()
-  list(@Query("city") city?: string, @CurrentUser() viewer?: JwtPayload) {
-    return this.promotionsService.publicList({ city }, viewer);
+  list(
+    @Query("city") city?: string,
+    @Query("state") state?: string,
+    @Query("zipCode") zipCode?: string,
+    @CurrentUser() viewer?: JwtPayload,
+  ) {
+    return this.promotionsService.publicList({ city, state, zipCode }, viewer);
   }
 }

@@ -41,6 +41,7 @@ export interface Company {
   addressLine?: string | null;
   city?: string | null;
   state?: string | null;
+  zipCode?: string | null;
   deliveryFeeBase: number;
   deliveryFeePerKm: number;
   deliveryRadiusKm: number;

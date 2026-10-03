@@ -21,6 +21,7 @@ interface CompanyForm {
   addressLine: string;
   city: string;
   state: string;
+  zipCode: string;
   deliveryFeeBase: string;
   avgDeliveryTimeMinutes: string;
   logoUrl: string;
@@ -50,6 +51,7 @@ const EMPTY_COMPANY_FORM: CompanyForm = {
   addressLine: "",
   city: "",
   state: "",
+  zipCode: "",
   deliveryFeeBase: "",
   avgDeliveryTimeMinutes: "",
   logoUrl: "",
@@ -97,6 +99,7 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
       addressLine: company.addressLine ?? "",
       city: company.city ?? "",
       state: company.state ?? "",
+      zipCode: company.zipCode ?? "",
       deliveryFeeBase: String(company.deliveryFeeBase ?? ""),
       avgDeliveryTimeMinutes: String(company.avgDeliveryTimeMinutes ?? ""),
       logoUrl: company.logoUrl ?? "",
@@ -118,9 +121,10 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
         cnpj: companyForm.cnpj || undefined,
         phone: companyForm.phone || undefined,
         whatsapp: companyForm.whatsapp || undefined,
-        addressLine: companyForm.addressLine || undefined,
-        city: companyForm.city || undefined,
-        state: companyForm.state || undefined,
+        addressLine: companyForm.addressLine,
+        city: companyForm.city,
+        state: companyForm.state,
+        zipCode: companyForm.zipCode,
         deliveryFeeBase: companyForm.deliveryFeeBase ? Number(companyForm.deliveryFeeBase) : undefined,
         avgDeliveryTimeMinutes: companyForm.avgDeliveryTimeMinutes ? Number(companyForm.avgDeliveryTimeMinutes) : undefined,
         logoUrl: companyForm.logoUrl || undefined,
@@ -254,16 +258,20 @@ export default function CompanyDetailPage({ params }: { params: Promise<{ id: st
             </div>
             <FormField label="Endereço">
               <Input
+                required
                 value={companyForm.addressLine}
                 onChange={(e) => setCompanyForm((f) => ({ ...f, addressLine: e.target.value }))}
               />
             </FormField>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField label="Cidade">
-                <Input value={companyForm.city} onChange={(e) => setCompanyForm((f) => ({ ...f, city: e.target.value }))} />
+                <Input required value={companyForm.city} onChange={(e) => setCompanyForm((f) => ({ ...f, city: e.target.value }))} />
               </FormField>
               <FormField label="UF">
-                <BrazilStateSelect value={companyForm.state} onChange={(e) => setCompanyForm((f) => ({ ...f, state: e.target.value }))} />
+                <BrazilStateSelect required value={companyForm.state} onChange={(e) => setCompanyForm((f) => ({ ...f, state: e.target.value }))} />
+              </FormField>
+              <FormField label="CEP operacional">
+                <MaskedInput mask="cep" required value={companyForm.zipCode} onChange={(e) => setCompanyForm((f) => ({ ...f, zipCode: e.target.value }))} />
               </FormField>
               <FormField label="Taxa de entrega base (R$)">
                 <Input

@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PermissionKey, Role, TaxRegime } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/auth-store";
-import { Category, FiscalStatus, Paginated, Product } from "@/lib/types";
+import { Category, Company, FiscalStatus, Paginated, Product } from "@/lib/types";
 import { formatCurrency } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -96,6 +96,12 @@ export default function CardapioPage() {
       const { data } = await api.get<Category[]>("/catalog/categories");
       return data;
     },
+  });
+
+  const { data: company } = useQuery({
+    queryKey: ["company-me"],
+    queryFn: async () => (await api.get<Company>("/companies/me")).data,
+    enabled: user?.role === Role.ADMIN,
   });
 
   const { data: productsData, isLoading: loadingProducts } = useQuery({
@@ -276,6 +282,11 @@ export default function CardapioPage() {
         </div>
         {canEditMenu && (
           <div className="flex flex-wrap gap-2">
+            {company?.slug && (
+              <a href={`/loja/${encodeURIComponent(company.slug)}?preview=1`} target="_blank" rel="noreferrer">
+                <Button variant="outline">Pré-visualizar como cliente</Button>
+              </a>
+            )}
             <Button variant="outline" onClick={openCreateCategory}>
               Nova categoria
             </Button>
@@ -332,7 +343,7 @@ export default function CardapioPage() {
                       {category.isActive ? "Desativar" : "Ativar"}
                     </Button>
                     <Button size="sm" onClick={() => openCreateProduct(category.id)}>
-                      Produto
+                      Adicionar produto
                     </Button>
                   </div>
                 )}

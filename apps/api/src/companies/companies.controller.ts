@@ -25,11 +25,13 @@ export class CompaniesController {
   @Get("public")
   publicList(
     @Query("city") city?: string,
+    @Query("state") state?: string,
+    @Query("zipCode") zipCode?: string,
     @Query("neighborhood") neighborhood?: string,
     @Query("search") search?: string,
     @CurrentUser() viewer?: JwtPayload,
   ) {
-    return this.companiesService.publicList({ city, neighborhood, search }, viewer);
+    return this.companiesService.publicList({ city, state, zipCode, neighborhood, search }, viewer);
   }
 
   @Public()

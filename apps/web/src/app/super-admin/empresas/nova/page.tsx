@@ -19,6 +19,7 @@ interface CreateCompanyForm {
   addressLine: string;
   city: string;
   state: string;
+  zipCode: string;
   deliveryFeeBase: string;
   avgDeliveryTimeMinutes: string;
   logoUrl: string;
@@ -33,6 +34,7 @@ const INITIAL_FORM: CreateCompanyForm = {
   addressLine: "",
   city: "",
   state: "",
+  zipCode: "",
   deliveryFeeBase: "",
   avgDeliveryTimeMinutes: "",
   logoUrl: "",
@@ -51,9 +53,10 @@ export default function NewCompanyPage() {
         cnpj: form.cnpj || undefined,
         phone: form.phone || undefined,
         whatsapp: form.whatsapp || undefined,
-        addressLine: form.addressLine || undefined,
-        city: form.city || undefined,
-        state: form.state || undefined,
+        addressLine: form.addressLine,
+        city: form.city,
+        state: form.state,
+        zipCode: form.zipCode,
         deliveryFeeBase: form.deliveryFeeBase ? Number(form.deliveryFeeBase) : undefined,
         avgDeliveryTimeMinutes: form.avgDeliveryTimeMinutes ? Number(form.avgDeliveryTimeMinutes) : undefined,
         logoUrl: form.logoUrl || undefined,
@@ -105,14 +108,17 @@ export default function NewCompanyPage() {
               </FormField>
             </div>
             <FormField label="Endereço">
-              <Input value={form.addressLine} onChange={(e) => update("addressLine", e.target.value)} />
+              <Input required value={form.addressLine} onChange={(e) => update("addressLine", e.target.value)} />
             </FormField>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField label="Cidade">
-                <Input value={form.city} onChange={(e) => update("city", e.target.value)} />
+                <Input required value={form.city} onChange={(e) => update("city", e.target.value)} />
               </FormField>
               <FormField label="UF">
-                <BrazilStateSelect value={form.state} onChange={(e) => update("state", e.target.value)} />
+                <BrazilStateSelect required value={form.state} onChange={(e) => update("state", e.target.value)} />
+              </FormField>
+              <FormField label="CEP operacional">
+                <MaskedInput mask="cep" required value={form.zipCode} onChange={(e) => update("zipCode", e.target.value)} />
               </FormField>
               <FormField label="Taxa de entrega base (R$)">
                 <Input

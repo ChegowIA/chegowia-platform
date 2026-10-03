@@ -14,7 +14,7 @@ import { FloatingAssistantChat } from "@/components/ai/floating-assistant-chat";
 
 const PRESETS = ["Quero um lanche caprichado", "Sugira algo para o almoço", "Quero uma sobremesa"];
 
-export function PublicDiscoveryPanel({ city, neighborhood }: { city: string; neighborhood: string }) {
+export function PublicDiscoveryPanel({ city, state, zipCode, neighborhood }: { city: string; state: string; zipCode: string; neighborhood: string }) {
   const [message, setMessage] = useState("");
   const [result, setResult] = useState<PublicDiscoveryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +33,8 @@ export function PublicDiscoveryPanel({ city, neighborhood }: { city: string; nei
       const { data } = await api.post<PublicDiscoveryResponse>("/ai/public-discovery/search", {
         message,
         city,
+        state,
+        zipCode,
         neighborhood,
       });
       return data;

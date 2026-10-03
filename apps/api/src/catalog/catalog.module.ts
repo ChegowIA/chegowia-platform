@@ -7,9 +7,10 @@ import { CatalogPublicController } from "./catalog-public.controller";
 import { CatalogPublicService } from "./catalog-public.service";
 import { AiModule } from "../ai/ai.module";
 import { CatalogImportService } from "./catalog-import.service";
+import { GeographyModule } from "../common/geography/geography.module";
 
 @Module({
-  imports: [AiModule],
+  imports: [AiModule, GeographyModule],
   controllers: [CategoriesController, ProductsController, CatalogPublicController],
   providers: [CategoriesService, ProductsService, CatalogPublicService, CatalogImportService],
   exports: [CategoriesService, ProductsService, CatalogPublicService, CatalogImportService],

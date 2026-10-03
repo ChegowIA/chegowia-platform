@@ -16,7 +16,7 @@ interface RegisterPayload extends LoginPayload {
   neighborhood: string;
   city: string;
   state: string;
-  zipCode?: string;
+  zipCode: string;
   complement?: string;
   acceptTerms: boolean;
   acceptPrivacy: boolean;

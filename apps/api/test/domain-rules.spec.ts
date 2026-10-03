@@ -89,8 +89,8 @@ describe("Regras críticas de domínio", () => {
     };
     const orders = new OrdersService({} as never, {} as never, geography as never, { emitForOrder: jest.fn() } as never);
     const quote = await (orders as any).calculateDeliveryQuote(
-      { latitude: -23.56, longitude: -46.65, deliveryRadiusKm: 10, deliveryFeeBase: 6.9, deliveryFeePerKm: 1.5 },
-      { latitude: -23.57, longitude: -46.66 },
+      { latitude: -23.56, longitude: -46.65, zipCode: "01001000", deliveryRadiusKm: 10, deliveryFeeBase: 6.9, deliveryFeePerKm: 1.5 },
+      { latitude: -23.57, longitude: -46.66, zipCode: "01002000" },
     );
 
     expect(quote).toEqual({ distanceKm: 2.4, durationMinutes: 9, deliveryFee: 10.5 });
@@ -103,8 +103,8 @@ describe("Regras críticas de domínio", () => {
     const orders = new OrdersService({} as never, {} as never, geography as never, { emitForOrder: jest.fn() } as never);
 
     await expect((orders as any).calculateDeliveryQuote(
-      { latitude: -23.56, longitude: -46.65, deliveryRadiusKm: 10, deliveryFeeBase: 6.9, deliveryFeePerKm: 1.5 },
-      { latitude: -23.57, longitude: -46.66 },
+      { latitude: -23.56, longitude: -46.65, zipCode: "01001000", deliveryRadiusKm: 10, deliveryFeeBase: 6.9, deliveryFeePerKm: 1.5 },
+      { latitude: -23.57, longitude: -46.66, zipCode: "01002000" },
     )).rejects.toBeInstanceOf(BadRequestException);
   });
 

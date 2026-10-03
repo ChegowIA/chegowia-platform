@@ -8,6 +8,8 @@ import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { CatalogPublicService } from "./catalog-public.service";
 import { SearchIntentService } from "../ai/search/search-intent.service";
 import { PublicSearchDto } from "./dto/public-search.dto";
+import { PermissionKey } from "@chegowia/shared";
+import { RequirePermission } from "../common/decorators/require-permission.decorator";
 
 @ApiTags("catalog-public")
 @Controller("catalog/public")
@@ -36,6 +38,8 @@ export class CatalogPublicController {
       productTypeIds: intent.productTypeIds,
       maxPrice: intent.maxPrice,
       city: dto.city,
+      state: dto.state,
+      zipCode: dto.zipCode,
       page: dto.page,
       pageSize: dto.pageSize,
     }, viewer);
@@ -57,10 +61,12 @@ export class CatalogPublicController {
   getMarketplace(
     @Query("search") search?: string,
     @Query("city") city?: string,
+    @Query("state") state?: string,
+    @Query("zipCode") zipCode?: string,
     @Query("categoryId") categoryId?: string,
     @CurrentUser() viewer?: JwtPayload,
   ) {
-    return this.catalogPublicService.getMarketplace({ search, city, categoryId }, viewer);
+    return this.catalogPublicService.getMarketplace({ search, city, state, zipCode, categoryId }, viewer);
   }
 
   /**
@@ -73,6 +79,13 @@ export class CatalogPublicController {
   @Get("sitemap")
   getSitemap(@CurrentUser() viewer?: JwtPayload) {
     return this.catalogPublicService.getSitemapEntries(viewer);
+  }
+
+  /** Prévia autenticada: mesma seleção ativa do cardápio público, sem exigir que a loja esteja publicada. */
+  @RequirePermission(PermissionKey.CARDAPIO_VISUALIZAR)
+  @Get("preview/me")
+  getMyPreview(@CurrentUser("companyId") companyId: string) {
+    return this.catalogPublicService.getMenuPreview(companyId);
   }
 
   /** Página pública individual: dá URL canônica e conteúdo verificável a

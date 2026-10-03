@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from "class-validator";
+import { IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from "class-validator";
 
 export class PublicSearchDto {
   @IsString()
@@ -10,6 +10,16 @@ export class PublicSearchDto {
   @IsString()
   @MaxLength(120)
   city?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  state?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{5}-?\d{3}$/, { message: "Informe o CEP com 8 dígitos." })
+  zipCode?: string;
 
   @IsOptional()
   @Type(() => Number)

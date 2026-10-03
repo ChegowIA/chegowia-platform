@@ -136,9 +136,12 @@ async function main() {
         name: DEMO_NAME,
         phone: "5562000000000",
         whatsapp: "5562000000000",
-        addressLine: "Rua da Demonstração, 100",
+        addressLine: "Rua 1, 1",
         city: "Goiânia",
         state: "GO",
+        zipCode: "74013010",
+        latitude: -16.6784398,
+        longitude: -49.2563466,
         deliveryFeeBase: 6,
         deliveryFeePerKm: 1.5,
         deliveryRadiusKm: 12,
@@ -151,9 +154,12 @@ async function main() {
         slug: DEMO_SLUG,
         phone: "5562000000000",
         whatsapp: "5562000000000",
-        addressLine: "Rua da Demonstração, 100",
+        addressLine: "Rua 1, 1",
         city: "Goiânia",
         state: "GO",
+        zipCode: "74013010",
+        latitude: -16.6784398,
+        longitude: -49.2563466,
         deliveryFeeBase: 6,
         deliveryFeePerKm: 1.5,
         deliveryRadiusKm: 12,
@@ -314,7 +320,7 @@ async function main() {
   console.log("\nOperação demo criada e pronta para testes.\n");
   console.log(`  empresa: ${result.company.name}`);
   console.log(`  slug:    ${result.company.slug}`);
-  console.log("  visibilidade pública: ocultada (isTestOnly=true)");
+  console.log("  visibilidade pública: ocultada para o público geral (isTestOnly=true)");
   console.log("  assinatura: ativa somente para teste, sem cobrança no Asaas/Stripe\n");
   console.log("Contas para entrar em /acesso:");
   for (const person of result.staff) console.log(`  ${person.role.padEnd(10)} ${person.email}`);
@@ -489,13 +495,13 @@ async function upsertCustomer(tx, companyId, passwordHash) {
   const address = await tx.address.findFirst({ where: { userId: user.id, label: "Casa demo" } });
   const addressData = {
     label: "Casa demo",
-    street: "Avenida da Demonstração",
+    street: "Rua 1",
     number: "200",
     complement: "Apartamento 12",
     neighborhood: "Setor Central",
     city: "Goiânia",
     state: "GO",
-    zipCode: "74000000",
+    zipCode: "74013010",
     reference: "Portaria azul",
     isDefault: true,
   };

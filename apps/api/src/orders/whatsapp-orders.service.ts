@@ -599,10 +599,8 @@ function requiredText(value: unknown, message: string, maxLength: number) {
 function normalizeAddress(input: Partial<WhatsAppDeliveryAddress>): WhatsAppDeliveryAddress {
   const state = requiredText(input.state, "Informe a UF com duas letras.", 2).toUpperCase();
   if (!/^[A-Z]{2}$/.test(state)) throw new BadRequestException("Informe a UF com duas letras, por exemplo MG.");
-  const zipCode = input.zipCode === undefined || input.zipCode === null || input.zipCode === ""
-    ? null
-    : String(input.zipCode).replace(/\D/g, "");
-  if (zipCode && zipCode.length !== 8) throw new BadRequestException("Informe um CEP com 8 dígitos.");
+  const zipCode = String(input.zipCode ?? "").replace(/\D/g, "");
+  if (zipCode.length !== 8) throw new BadRequestException("Informe o CEP com 8 dígitos.");
   return {
     street: requiredText(input.street, "Informe a rua ou avenida.", 191),
     number: requiredText(input.number, "Informe o número do endereço.", 40),

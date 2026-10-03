@@ -83,7 +83,7 @@ export default function AddressesPage() {
         ...form,
         label: form.label || undefined,
         complement: form.complement || undefined,
-        zipCode: form.zipCode || undefined,
+        zipCode: form.zipCode,
         reference: form.reference || undefined,
       };
       if (editing) {
@@ -201,7 +201,7 @@ export default function AddressesPage() {
               <BrazilStateSelect required value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
             </FormField>
             <FormField label="CEP">
-              <MaskedInput mask="cep" placeholder="00000-000" value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
+              <MaskedInput mask="cep" placeholder="00000-000" required value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
             </FormField>
           </div>
           <FormField label="Referência">
@@ -220,7 +220,7 @@ export default function AddressesPage() {
             <Button variant="ghost" onClick={() => setModalOpen(false)}>
               Cancelar
             </Button>
-            <Button isLoading={saveAddress.isPending} onClick={() => saveAddress.mutate()}>
+            <Button disabled={form.zipCode.replace(/\D/g, "").length !== 8} isLoading={saveAddress.isPending} onClick={() => saveAddress.mutate()}>
               Salvar
             </Button>
           </div>

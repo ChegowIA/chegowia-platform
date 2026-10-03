@@ -18,9 +18,22 @@ export interface DrivingRoute {
   durationMinutes: number;
 }
 
+export interface PostalCodeHint {
+  city?: string | null;
+  state?: string | null;
+}
+
 interface NominatimResult {
   lat?: string;
   lon?: string;
+}
+
+interface ViaCepResult {
+  erro?: boolean | string;
+  logradouro?: string;
+  bairro?: string;
+  localidade?: string;
+  uf?: string;
 }
 
 interface OsrmRouteResponse {
@@ -63,6 +76,39 @@ export class GeographyService {
     });
   }
 
+  /**
+   * Localiza o centro aproximado de um CEP. Esta coordenada serve para a
+   * triagem leve do catálogo; a rota de entrega continua sendo calculada com
+   * rua e número no checkout.
+   */
+  async geocodePostalCode(zipCode: string, hint: PostalCodeHint = {}): Promise<GeographicPoint> {
+    const normalizedZipCode = String(zipCode ?? "").replace(/\D/g, "");
+    if (!/^\d{8}$/.test(normalizedZipCode)) {
+      throw new BadRequestException("Informe um CEP com 8 dígitos.");
+    }
+
+    // O Nominatim não indexa CEPs brasileiros de forma consistente. Primeiro
+    // traduzimos o CEP para logradouro/localidade via ViaCEP e só então usamos
+    // o geocodificador configurado para obter a coordenada aproximada.
+    const postalAddress = await this.lookupPostalCode(normalizedZipCode);
+    if (postalAddress.erro === true || postalAddress.erro === "true") {
+      throw new BadRequestException("Não foi possível localizar esse CEP.");
+    }
+    const city = postalAddress.localidade?.trim() || hint.city?.trim();
+    const state = postalAddress.uf?.trim() || hint.state?.trim();
+    if (!city || !state) {
+      throw new BadRequestException("Não foi possível identificar cidade e estado desse CEP.");
+    }
+
+    return this.geocode({
+      addressLine: postalAddress.logradouro?.trim() || postalAddress.bairro?.trim() || `CEP ${normalizedZipCode}`,
+      neighborhood: postalAddress.bairro?.trim(),
+      city,
+      state,
+      zipCode: normalizedZipCode,
+    });
+  }
+
   async calculateDrivingRoute(origin: GeographicPoint, destination: GeographicPoint): Promise<DrivingRoute> {
     const endpoint = (process.env.ROUTING_BASE_URL ?? "https://router.project-osrm.org/route/v1/driving")
       .replace(/\/+$/, "");
@@ -94,6 +140,15 @@ export class GeographyService {
     const result = this.geocodingChain.then(execute, execute) as Promise<T>;
     this.geocodingChain = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  private async lookupPostalCode(zipCode: string) {
+    const baseUrl = (process.env.VIACEP_BASE_URL ?? "https://viacep.com.br/ws").replace(/\/+$/, "");
+    const url = new URL(`${baseUrl}/${zipCode}/json/`);
+    return this.requestJson<ViaCepResult>(url, {
+      Accept: "application/json",
+      "User-Agent": process.env.GEOCODING_USER_AGENT ?? "ChegowIA/1.0 (local development)",
+    });
   }
 
   private async requestJson<T>(url: URL, headers: Record<string, string>): Promise<T> {

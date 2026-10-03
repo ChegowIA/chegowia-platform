@@ -14,6 +14,7 @@ import { PromotionsController, PublicPromotionsController } from "./promotions.c
 import { UsageModule } from "../usage/usage.module";
 import { SearchIntentService } from "./search/search-intent.service";
 import { OrdersModule } from "../orders/orders.module";
+import { GeographyModule } from "../common/geography/geography.module";
 
 /**
  * Troca de provedor de IA é configuração, não código: AI_PROVIDER=deepseek (padrão)
@@ -33,7 +34,7 @@ const aiProviderFactory = {
 };
 
 @Module({
-  imports: [UsageModule, OrdersModule],
+  imports: [UsageModule, OrdersModule, GeographyModule],
   controllers: [
     AiController,
     AiMotoboyController,

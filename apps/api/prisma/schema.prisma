@@ -577,6 +577,9 @@ model Company {
   addressLine            String?
   city                   String?
   state                  String?
+  // CEP operacional do ponto que prepara/expede os pedidos. É obrigatório
+  // nos novos cadastros e permite a triagem geográfica antes da rota exata.
+  zipCode                String?  @db.VarChar(8)
   latitude               Decimal? @db.Decimal(10, 7)
   longitude              Decimal? @db.Decimal(10, 7)
   deliveryFeeBase        Decimal  @default(0) @db.Decimal(10, 2)
@@ -624,6 +627,7 @@ model Company {
   superAdminCompanyAccesses SuperAdminCompanyAccess[]
 
   @@index([city, state])
+  @@index([zipCode])
   @@index([isActive, isTestOnly, city, state])
 }
 
@@ -978,7 +982,9 @@ model Address {
   neighborhood String
   city         String
   state        String
-  zipCode      String?
+  // Mantido nullable no banco somente para não quebrar endereços históricos.
+  // A API exige CEP válido em toda criação/edição e antes do checkout.
+  zipCode      String?  @db.VarChar(8)
   reference    String?
   latitude     Decimal? @db.Decimal(10, 7)
   longitude    Decimal? @db.Decimal(10, 7)
@@ -990,6 +996,18 @@ model Address {
   orders Order[]
 
   @@index([userId])
+  @@index([zipCode])
+}
+
+// Centro aproximado de cada CEP já consultado. O catálogo usa esta referência
+// leve para decidir o que faz sentido mostrar; o checkout continua usando a
+// rota real até o endereço completo, que é a decisão definitiva de entrega.
+model PostalCodeLocation {
+  zipCode   String   @id @db.VarChar(8)
+  latitude  Decimal  @db.Decimal(10, 7)
+  longitude Decimal  @db.Decimal(10, 7)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------
@@ -1583,6 +1601,9 @@ model ClientApplication {
   tradeName                   String?
   city                        String
   state                       String
+  // CEP do estabelecimento informado na contratação. Registros históricos
+  // podem não tê-lo até o dono completar o endereço no painel.
+  zipCode                     String?           @db.VarChar(8)
   businessType                String
   operationDetails            String            @db.Text
   passwordHash                String

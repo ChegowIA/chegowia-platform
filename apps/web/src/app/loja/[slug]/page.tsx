@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Role } from "@chegowia/shared";
 import { api } from "@/lib/api-client";
@@ -33,6 +33,7 @@ interface MenuResponse {
 
 export default function StorePage() {
   const params = useParams<{ slug: string }>();
+  const searchParams = useSearchParams();
   const slug = params.slug;
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
   const [search, setSearch] = useState("");
@@ -40,26 +41,28 @@ export default function StorePage() {
   const user = useAuthStore((state) => state.user);
   const hasHydrated = useAuthStore((state) => state.hasHydrated);
   const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
-  const readOnly = user?.role === Role.SUPER_ADMIN;
+  const previewMode = searchParams.get("preview") === "1" && user?.role === Role.ADMIN;
+  const readOnly = user?.role === Role.SUPER_ADMIN || previewMode;
   const blockedProfessional = Boolean(user && user.role !== Role.CLIENTE && !readOnly);
 
   const { data: company, isLoading: loadingCompany } = useQuery({
-    queryKey: ["public-company", slug],
+    queryKey: ["public-company", slug, previewMode],
     queryFn: async () => {
-      const { data } = await api.get<Company>(`/companies/public/${slug}`);
+      const { data } = await api.get<Company>(previewMode ? "/companies/me" : `/companies/public/${slug}`);
       return data;
     },
   });
 
   const { data: menu, isLoading: loadingMenu } = useQuery({
-    queryKey: ["public-menu", slug],
+    queryKey: ["public-menu", slug, previewMode],
     queryFn: async () => {
-      const { data } = await api.get<MenuResponse>(`/catalog/public/${slug}`);
+      const { data } = await api.get<MenuResponse>(previewMode ? "/catalog/public/preview/me" : `/catalog/public/${slug}`);
       return data;
     },
   });
 
   const categories = useMemo(() => menu?.categories ?? [], [menu?.categories]);
+  const storeSlug = previewMode ? company?.slug ?? menu?.company.slug ?? slug : slug;
   const featuredProducts = useMemo(
     () => categories.flatMap((category) => category.products ?? []).filter((product) => product.isFeatured).slice(0, 4),
     [categories],
@@ -91,7 +94,8 @@ export default function StorePage() {
     <>
       <PublicHeader />
       <main className="mx-auto max-w-6xl px-4 py-5 pb-32 sm:py-8">
-        {readOnly && <div className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:bg-violet-950/30 dark:border-violet-900/60"><p className="text-xs font-black uppercase tracking-wider text-violet-700 dark:text-violet-300">Super-admin · somente leitura</p><p className="mt-1 text-sm text-violet-900 dark:text-violet-200">Você pode inspecionar loja e produtos. Para comprar, troque para uma conta de cliente.</p></div>}
+        {previewMode && <div className="mb-5 rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/30"><p className="text-xs font-black uppercase tracking-wider text-brand-700 dark:text-brand-300">Prévia do cardápio · somente leitura</p><p className="mt-1 text-sm text-brand-900 dark:text-brand-200">Esta é a mesma seleção de produtos ativos que o cliente vê. Botões de compra ficam desativados nesta prévia.</p></div>}
+        {readOnly && !previewMode && <div className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 p-4 dark:bg-violet-950/30 dark:border-violet-900/60"><p className="text-xs font-black uppercase tracking-wider text-violet-700 dark:text-violet-300">Super-admin · somente leitura</p><p className="mt-1 text-sm text-violet-900 dark:text-violet-200">Você pode inspecionar loja e produtos. Para comprar, troque para uma conta de cliente.</p></div>}
         {loadingCompany && <p className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400">Carregando loja...</p>}
         {!loadingCompany && !company && <p className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400">Loja não encontrada.</p>}
 
@@ -176,7 +180,7 @@ export default function StorePage() {
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                   {featuredProducts.map((product) => (
-                    <ProductCard key={product.id} product={product} companySlug={slug} onAdd={() => setActiveProduct(product)} featured readOnly={readOnly} />
+                    <ProductCard key={product.id} product={product} companySlug={storeSlug} onAdd={() => setActiveProduct(product)} featured readOnly={readOnly} />
                   ))}
                 </div>
               </section>
@@ -191,7 +195,7 @@ export default function StorePage() {
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     {category.products?.map((product) => (
-                      <ProductCard key={product.id} product={product} companySlug={slug} onAdd={() => setActiveProduct(product)} readOnly={readOnly} />
+                      <ProductCard key={product.id} product={product} companySlug={storeSlug} onAdd={() => setActiveProduct(product)} readOnly={readOnly} />
                     ))}
                   </div>
                 </section>
@@ -206,10 +210,10 @@ export default function StorePage() {
         )}
       </main>
 
-      {company && <StoreAssistant slug={slug} companyName={company.name} />}
+      {company && !previewMode && <StoreAssistant slug={storeSlug} companyName={company.name} />}
 
       {activeProduct && (
-        <ProductModal product={activeProduct} companySlug={slug} onClose={() => setActiveProduct(null)} readOnly={readOnly} />
+        <ProductModal product={activeProduct} companySlug={storeSlug} onClose={() => setActiveProduct(null)} readOnly={readOnly} previewMode={previewMode} />
       )}
 
       {!readOnly && cartCount > 0 && (
@@ -314,11 +318,13 @@ function ProductModal({
   companySlug,
   onClose,
   readOnly = false,
+  previewMode = false,
 }: {
   product: Product;
   companySlug: string;
   onClose: () => void;
   readOnly?: boolean;
+  previewMode?: boolean;
 }) {
   const [variationId, setVariationId] = useState<string | undefined>(product.variations[0]?.id);
   const [addonIds, setAddonIds] = useState<string[]>([]);
@@ -466,7 +472,7 @@ function ProductModal({
           <span className="text-xl font-black text-brand-700 dark:text-brand-300">{formatCurrency(unitPrice * quantity)}</span>
         </div>
 
-        {readOnly ? <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 text-center dark:bg-violet-950/30 dark:border-violet-900/60"><p className="text-sm font-black text-violet-900 dark:text-violet-200">Visualização de super-admin</p><p className="mt-1 text-xs text-violet-700 dark:text-violet-300">Compras exigem uma conta separada com perfil de cliente.</p><Link href="/login?trocar-conta=cliente"><Button variant="outline" className="mt-3">Entrar como cliente</Button></Link></div> : <Button className="w-full" disabled={!configuredOptionsValid} onClick={handleConfirm}>Adicionar ao carrinho</Button>}
+        {readOnly ? <div className={`rounded-2xl border p-4 text-center ${previewMode ? "border-brand-200 bg-brand-50 dark:border-brand-900/60 dark:bg-brand-950/30" : "border-violet-200 bg-violet-50 dark:border-violet-900/60 dark:bg-violet-950/30"}`}><p className={`text-sm font-black ${previewMode ? "text-brand-900 dark:text-brand-200" : "text-violet-900 dark:text-violet-200"}`}>{previewMode ? "Prévia do cliente" : "Visualização de super-admin"}</p><p className={`mt-1 text-xs ${previewMode ? "text-brand-700 dark:text-brand-300" : "text-violet-700 dark:text-violet-300"}`}>{previewMode ? "As escolhas e os preços aparecem como para o cliente; pedidos não são criados nesta tela." : "Compras exigem uma conta separada com perfil de cliente."}</p>{!previewMode && <Link href="/login?trocar-conta=cliente"><Button variant="outline" className="mt-3">Entrar como cliente</Button></Link>}</div> : <Button className="w-full" disabled={!configuredOptionsValid} onClick={handleConfirm}>Adicionar ao carrinho</Button>}
       </div>
     </Modal>
   );

@@ -21,7 +21,11 @@ em operações futuras.
 
 Empresas legadas com `isTestOnly = true` continuam preservadas, mas não
 aparecem no catálogo, busca, sitemap, IA pública ou fluxos públicos de pedido.
-Não promova nem apague esses registros automaticamente.
+A única exceção é a operação `operacao-demo-chegowia`, mantida para uma
+verificação privada: só a conta `thiagolpssouza@gmail.com`, autenticada e com
+endereço salvo no raio real de entrega, pode enxergá-la. Essa regra é aplicada
+no servidor, por e-mail e rota, e não transforma as demais empresas de teste
+em públicas. Não promova nem apague esses registros automaticamente.
 
 No **Shell** do Render, dentro de `/app`, use o comando abaixo para listar os
 registros antes de qualquer decisão administrativa:

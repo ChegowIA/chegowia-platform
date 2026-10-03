@@ -61,23 +61,23 @@ export default function HomePage() {
     enabled: isCustomer,
   });
   const location = addresses?.find((address) => address.isDefault) ?? addresses?.[0];
-  const hasLocation = !!location;
+  const hasLocation = Boolean(location && /^\d{5}-?\d{3}$/.test(location.zipCode ?? ""));
   const canBrowseMarketplace = hasLocation || isSuperAdmin;
 
   const { data: companies, isLoading: loadingCompanies } = useQuery({
-    queryKey: ["public-companies", location?.city],
+    queryKey: ["public-companies", location?.city, location?.state, location?.zipCode],
     queryFn: async () => {
-      const { data } = await api.get<Company[]>("/companies/public", { params: { city: location?.city } });
+      const { data } = await api.get<Company[]>("/companies/public", { params: { city: location?.city, state: location?.state, zipCode: location?.zipCode } });
       return data;
     },
     enabled: canBrowseMarketplace,
   });
 
   const { data: marketplace, isLoading: loadingMarketplace } = useQuery({
-    queryKey: ["public-marketplace", location?.city, categoryId],
+    queryKey: ["public-marketplace", location?.city, location?.state, location?.zipCode, categoryId],
     queryFn: async () => {
       const { data } = await api.get<MarketplaceResponse>("/catalog/public/marketplace", {
-        params: { city: location?.city, categoryId: categoryId || undefined },
+        params: { city: location?.city, state: location?.state, zipCode: location?.zipCode, categoryId: categoryId || undefined },
       });
       return data;
     },
@@ -85,9 +85,9 @@ export default function HomePage() {
   });
 
   const { data: promotions } = useQuery({
-    queryKey: ["public-promotions", location?.city],
+    queryKey: ["public-promotions", location?.city, location?.state, location?.zipCode],
     queryFn: async () => {
-      const { data } = await api.get<PublicPromotion[]>("/promotions/public", { params: { city: location?.city } });
+      const { data } = await api.get<PublicPromotion[]>("/promotions/public", { params: { city: location?.city, state: location?.state, zipCode: location?.zipCode } });
       return data;
     },
     enabled: canBrowseMarketplace,
@@ -137,7 +137,7 @@ export default function HomePage() {
             ) : (
               <LocationGate user={user} loading={loadingAddress || !hasHydrated || isSessionLoading} />
             )}
-            {hasLocation && (
+            {location && hasLocation && (
             <div className="mt-4 flex items-center gap-2 text-sm text-slate-300">
               <span className="text-brand-400">📍</span>
               <span>Mostrando opções que atendem <strong className="text-white">{location.city}</strong></span>
@@ -254,7 +254,7 @@ export default function HomePage() {
         </>
         )}
       </main>
-      {hasLocation && <PublicDiscoveryPanel city={location.city} neighborhood={location.neighborhood} />}
+      {location && hasLocation && <PublicDiscoveryPanel city={location.city} state={location.state} zipCode={location.zipCode ?? ""} neighborhood={location.neighborhood} />}
     </>
   );
 }
@@ -288,11 +288,11 @@ function LocationGate({ user, loading }: { user: ReturnType<typeof useAuthStore.
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
         <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-brand-600 text-xl">📍</span>
         <div className="flex-1">
-          <p className="font-black text-white">{user ? "Cadastre seu endereço para continuar" : "Informe seu endereço para ver o que está perto"}</p>
-          <p className="mt-1 text-sm text-slate-300">Assim mostramos apenas lojas, produtos e ofertas disponíveis na sua cidade.</p>
+          <p className="font-black text-white">{user ? "Cadastre ou complete seu endereço com CEP" : "Informe seu endereço para ver o que está perto"}</p>
+          <p className="mt-1 text-sm text-slate-300">O CEP ajuda a mostrar apenas lojas, produtos e ofertas que provavelmente atendem sua região.</p>
         </div>
         <Link href={href} className="shrink-0 rounded-xl bg-white px-4 py-3 text-sm font-black text-slate-950 transition hover:bg-brand-50">
-          {user ? "Adicionar endereço" : "Criar conta"}
+          {user ? "Ver endereços" : "Criar conta"}
         </Link>
       </div>
     </div>

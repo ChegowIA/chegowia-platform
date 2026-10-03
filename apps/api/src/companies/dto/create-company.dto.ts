@@ -1,5 +1,10 @@
-import { IsNumber, IsOptional, IsString, Min, MinLength } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsNumber, IsOptional, IsString, Matches, Min, MinLength } from "class-validator";
 import { IsCnpj } from "../../common/validators/brazil-document.validator";
+
+const onlyDigits = ({ value }: { value: unknown }) => String(value ?? "").replace(/\D/g, "");
+const trimmed = ({ value }: { value: unknown }) => typeof value === "string" ? value.trim() : value;
+const upper = ({ value }: { value: unknown }) => typeof value === "string" ? value.trim().toUpperCase() : value;
 
 export class CreateCompanyDto {
   @IsString()
@@ -23,17 +28,25 @@ export class CreateCompanyDto {
   @IsString()
   whatsapp?: string;
 
-  @IsOptional()
+  @Transform(trimmed)
   @IsString()
-  addressLine?: string;
+  @MinLength(2)
+  addressLine: string;
 
-  @IsOptional()
+  @Transform(trimmed)
   @IsString()
-  city?: string;
+  @MinLength(2)
+  city: string;
 
-  @IsOptional()
+  @Transform(upper)
   @IsString()
-  state?: string;
+  @Matches(/^[A-Z]{2}$/, { message: "Informe a UF com duas letras." })
+  state: string;
+
+  @Transform(onlyDigits)
+  @IsString()
+  @Matches(/^\d{8}$/, { message: "Informe o CEP com 8 dígitos." })
+  zipCode: string;
 
   @IsOptional()
   @IsNumber()

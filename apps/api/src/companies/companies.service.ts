@@ -18,6 +18,7 @@ import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
+import { normalizePostalCode, PostalCodeLocationService } from "../common/geography/postal-code-location.service";
 
 @Injectable()
 export class CompaniesService {
@@ -27,6 +28,7 @@ export class CompaniesService {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     private readonly auth: AuthService,
     private readonly storage: LocalStorageService,
+    private readonly postalCodeLocations: PostalCodeLocationService,
     // Opcional apenas para manter testes unitários que instanciam o serviço
     // diretamente. No app real o módulo global sempre o injeta.
     private readonly legacyTestData?: LegacyTestDataService,
@@ -52,6 +54,10 @@ export class CompaniesService {
 
   async create(dto: CreateCompanyDto) {
     const slug = dto.slug ? slugify(dto.slug) : await this.uniqueSlug(dto.name);
+    const zipCode = normalizePostalCode(dto.zipCode);
+    if (!zipCode) {
+      throw new BadRequestException("Informe o CEP operacional da empresa antes de criar o cadastro.");
+    }
     const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : null;
     if (cnpj) {
       const [company, user] = await Promise.all([
@@ -61,7 +67,7 @@ export class CompaniesService {
       if (company || user) throw new ConflictException("Este CNPJ já está vinculado a uma conta.");
     }
     try {
-      return await this.db().$transaction(async (tx: any) => {
+      const company = await this.db().$transaction(async (tx: any) => {
         const company = await tx.company.create({
           data: {
             name: dto.name,
@@ -72,6 +78,7 @@ export class CompaniesService {
             addressLine: dto.addressLine,
             city: dto.city,
             state: dto.state,
+            zipCode,
             deliveryFeeBase: dto.deliveryFeeBase ?? 0,
             deliveryFeePerKm: dto.deliveryFeePerKm ?? 1.5,
             deliveryRadiusKm: dto.deliveryRadiusKm ?? 10,
@@ -91,6 +98,8 @@ export class CompaniesService {
         }
         return company;
       });
+      this.postalCodeLocations.warm(company.zipCode, { city: company.city, state: company.state });
+      return company;
     } catch (error) {
       if (isUniqueConstraint(error)) {
         throw new ConflictException("Este CNPJ ou identificador da empresa já está em uso.");
@@ -131,8 +140,12 @@ export class CompaniesService {
 
   async update(id: string, dto: UpdateCompanyDto) {
     const current = await this.findById(id);
-    const locationChanged = ["addressLine", "city", "state"]
+    const locationChanged = ["addressLine", "city", "state", "zipCode"]
       .some((field) => dto[field as keyof UpdateCompanyDto] !== undefined && dto[field as keyof UpdateCompanyDto] !== current[field as keyof typeof current]);
+    const zipCode = normalizePostalCode(dto.zipCode ?? current.zipCode);
+    if (!zipCode) {
+      throw new BadRequestException("Informe o CEP operacional da empresa antes de salvar.");
+    }
     const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : dto.cnpj;
     if (cnpj) {
       const [company, user] = await Promise.all([
@@ -142,7 +155,7 @@ export class CompaniesService {
       if (company || user) throw new ConflictException("Este CNPJ já está vinculado a uma conta.");
     }
     try {
-      return await this.db().$transaction(async (tx: any) => {
+      const company = await this.db().$transaction(async (tx: any) => {
         if (current.cnpj !== cnpj) {
           if (current.cnpj) {
             await tx.identityDocument.deleteMany({
@@ -159,12 +172,15 @@ export class CompaniesService {
           where: { id },
           data: {
             ...dto,
+            zipCode,
             cnpj,
             slug: dto.slug ? slugify(dto.slug) : undefined,
             ...(locationChanged ? { latitude: null, longitude: null } : {}),
           },
         });
       });
+      this.postalCodeLocations.warm(company.zipCode, { city: company.city, state: company.state });
+      return company;
     } catch (error) {
       if (isUniqueConstraint(error)) {
         throw new ConflictException("Este CNPJ ou slug já está vinculado a outra conta.");
@@ -290,11 +306,17 @@ export class CompaniesService {
     });
   }
 
-  /** Diretório público — a elegibilidade exata é calculada pela rota no checkout. */
-  async publicList(params: { city?: string; neighborhood?: string; search?: string }, viewer?: JwtPayload) {
+  /**
+   * Diretório público: CEP reduz as candidatas por proximidade média; a rota
+   * completa no checkout é a confirmação definitiva da entrega.
+   */
+  async publicList(params: { city?: string; state?: string; neighborhood?: string; search?: string; zipCode?: string }, viewer?: JwtPayload) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
+      : { isTestOnly: false };
     const where: any = {
       isActive: true,
-      ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+      ...visibility,
       // `contains` era o filtro aqui, e casava "Rio Branco" com "Rio Branco do
       // Sul", em outro estado. A comparação passou a ser por igualdade, somada à
       // loja que cadastrou área de entrega naquela cidade.
@@ -302,7 +324,7 @@ export class CompaniesService {
     };
     if (params.search) where.name = { contains: params.search };
 
-    return this.db().company.findMany({
+    const companies = await this.db().company.findMany({
       where,
       select: {
         id: true,
@@ -310,6 +332,7 @@ export class CompaniesService {
         slug: true,
         city: true,
         state: true,
+        zipCode: true,
         logoUrl: true,
         deliveryFeeBase: true,
         deliveryFeePerKm: true,
@@ -318,6 +341,16 @@ export class CompaniesService {
       },
       orderBy: { name: "asc" },
     });
+    const eligibleIds = params.zipCode
+      ? new Set(await this.postalCodeLocations.filterCompaniesForCustomerPostalCode(
+        params.zipCode,
+        { city: params.city, state: params.state },
+        companies,
+      ))
+      : null;
+    return companies
+      .filter((company: any) => !eligibleIds || eligibleIds.has(company.id))
+      .map(({ zipCode: _zipCode, ...company }: any) => company);
   }
 
   /**
@@ -327,11 +360,14 @@ export class CompaniesService {
    * `publicList`. Só entra aqui o que a loja realmente mostra ao cliente.
    */
   async publicFindBySlug(slug: string, viewer?: JwtPayload) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
+      : { isTestOnly: false };
     const company = await this.db().company.findFirst({
       where: {
         slug,
         isActive: true,
-        ...(this.legacyTestData?.publicCompanyVisibilityWhere(viewer) ?? { isTestOnly: false }),
+        ...visibility,
         ...filtroPublicoDeEmpresa(),
       },
       select: {
