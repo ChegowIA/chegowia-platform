@@ -324,21 +324,16 @@ export class GupshupWhatsAppProvider {
     });
   }
 
-  /** Botões para 2–3 alternativas; lista nativa para 4–10 alternativas. */
+  /** Lista nativa no self-serve; no Partner, botões para até 3 alternativas. */
   async sendInteractiveChoices(params: GupshupSendParams & { body: string; choices: GupshupChoice[] }): Promise<GupshupSendResult> {
     const { choices, body } = params;
     if (choices.length < 2 || choices.length > 10) {
       throw new Error("O menu interativo exige de 2 a 10 opções.");
     }
     if (this.mode() === "SELF_SERVE") {
-      if (choices.length <= 3) {
-        return this.sendSelfServe(params, {
-          type: "quick_reply",
-          msgid: randomUUID(),
-          content: { type: "text", text: body },
-          options: choices.map((choice) => ({ type: "text", title: choice.title, postbackText: choice.title })),
-        });
-      }
+      // A lista é o formato que já chega com "Ver opções" no WhatsApp real.
+      // Ela funciona também com duas ou três opções e evita a renderização
+      // inconsistente dos quick replies neste app self-serve.
       return this.sendSelfServe(params, {
         type: "list",
         title: "ChegowIA",

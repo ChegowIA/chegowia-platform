@@ -45,7 +45,7 @@ describe("mensagens interativas e contato do Gupshup", () => {
     }));
   });
 
-  it("usa botões para até três opções e lista para quatro ou mais", async () => {
+  it("usa a lista nativa self-serve também para duas ou três opções", async () => {
     const { provider, fetchMock } = selfServe();
     await provider.sendInteractiveChoices({
       ...params,
@@ -53,12 +53,12 @@ describe("mensagens interativas e contato do Gupshup", () => {
       choices: [{ title: "Plano" }, { title: "Implantação" }],
     });
     expect(sentMessage(fetchMock)).toEqual(expect.objectContaining({
-      type: "quick_reply",
+      type: "list",
       msgid: expect.any(String),
-      options: [
+      items: [expect.objectContaining({ options: [
         expect.objectContaining({ title: "Plano" }),
         expect.objectContaining({ title: "Implantação" }),
-      ],
+      ] })],
     }));
 
     fetchMock.mockClear();

@@ -1,5 +1,5 @@
 import { ConflictException } from "@nestjs/common";
-import { needsHumanSupportReferral, parseSalesAssistantReply, withSalesOverviewChoices } from "../src/messaging/platform-whatsapp.service";
+import { needsHumanSupportReferral, parseSalesAssistantReply, stripSalesMenuMetadata, withSalesOverviewChoices } from "../src/messaging/platform-whatsapp.service";
 import { buildPlatformWhatsAppService } from "./support/messaging-services";
 
 describe("Canal institucional do WhatsApp", () => {
@@ -207,6 +207,30 @@ describe("Canal institucional do WhatsApp", () => {
     expect(parseSalesAssistantReply(JSON.stringify({ text: `${text} {\"text\":\"não envie\"}`, choices: [] }))).toBeNull();
   });
 
+  it("transforma o rodapé textual antigo em menu e não o mostra ao cliente", () => {
+    const text = "Quer ver como começar ou prefere outra área?";
+    const legacy = `${text}\n\nOpções: Cadastro de mesas · Fechamento de conta · Fila da cozinha`;
+    const choices = ["Cadastro de mesas", "Fechamento de conta", "Fila da cozinha"].map((title) => ({ title }));
+
+    expect(stripSalesMenuMetadata(legacy)).toEqual({ text, choices });
+    expect(parseSalesAssistantReply(legacy)).toEqual({ text, choices, humanSupport: false });
+    expect(parseSalesAssistantReply(JSON.stringify({ text: legacy, choices: [], humanSupport: false })))
+      .toEqual({ text, choices, humanSupport: false });
+  });
+
+  it("retira o rodapé de menus antigos antes de montar o histórico da IA", async () => {
+    const { instance } = serviceWith({
+      platformWhatsAppMessage: { findMany: jest.fn().mockResolvedValue([
+        { direction: "ENVIADA", body: "Qual área?\n\nOpções: Mesas e cozinha · Planos e teste" },
+      ]) },
+    });
+    const messages = await (instance as any).messagesForAssistant("conversa-1", {
+      welcomeMessage: null, salesInstructions: null,
+    });
+
+    expect(messages.at(-1)?.content).toBe("Qual área?");
+  });
+
   it("oferece menu automaticamente ao listar recursos, sem exigir que o cliente peça botões", () => {
     const reply = { text: "Tem pedidos, cardápio, mesas e entregas.", choices: [], humanSupport: false };
     const enriched = withSalesOverviewChoices(reply, "Quais recursos vocês têm?");
@@ -246,6 +270,41 @@ describe("Canal institucional do WhatsApp", () => {
     expect(chat).toHaveBeenCalledTimes(1);
   });
 
+  it("envia as opções escritas pela IA como lista nativa após a primeira escolha", async () => {
+    const text = "Quer ver como começar ou prefere outra área?";
+    const legacy = `${text}\n\nOpções: Cadastro de mesas · Fechamento de conta · Fila da cozinha`;
+    const chat = jest.fn().mockResolvedValue({ content: JSON.stringify({ text: legacy, choices: [], humanSupport: false }) });
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" },
+      { role: "assistant", content: "Qual área você quer explorar primeiro?" },
+      { role: "user", content: "Mesas e cozinha" },
+    ]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    const persistOutbound = jest.fn().mockResolvedValue(undefined);
+    (instance as any).persistOutbound = persistOutbound;
+    const sendText = jest.fn();
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
+      body: text,
+      choices: ["Cadastro de mesas", "Fechamento de conta", "Fila da cozinha"].map((title) => ({ title })),
+    }));
+    expect(persistOutbound).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
+      body: text, type: "list",
+    }));
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("envia explicação longa inteira e depois o menu, sem truncar o texto", async () => {
     const longText = `Pedidos, cardápio, mesas e entregas. ${"Detalhes da operação para quem está conhecendo o sistema. ".repeat(22)}`;
     const chat = jest.fn().mockResolvedValue({ content: JSON.stringify({ text: longText, choices: [], humanSupport: false }) });
@@ -276,7 +335,7 @@ describe("Canal institucional do WhatsApp", () => {
     }));
   });
 
-  it("envia botões nativos quando a IA apresenta uma escolha real", async () => {
+  it("envia lista nativa quando a IA apresenta uma escolha real", async () => {
     const chat = jest.fn().mockResolvedValue({ content: JSON.stringify({
       text: "Você quer conhecer o plano ou ver como começar?",
       choices: [{ title: "Conhecer plano" }, { title: "Como começar" }],
@@ -305,7 +364,9 @@ describe("Canal institucional do WhatsApp", () => {
     expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
       choices: [{ title: "Conhecer plano" }, { title: "Como começar" }],
     }));
-    expect(persistOutbound).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ type: "quick_reply" }));
+    expect(persistOutbound).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
+      type: "list", body: "Você quer conhecer o plano ou ver como começar?",
+    }));
     expect(sendText).not.toHaveBeenCalled();
   });
 

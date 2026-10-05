@@ -913,7 +913,7 @@ export class PlatformWhatsAppService {
       const isRepeated = (text: string) => {
         const normalized = normalizeSalesAnswer(text);
         return normalized === normalizeSalesAnswer(OLD_GENERIC_SALES_REPLY)
-          || previousAnswers.some((message) => normalizeSalesAnswer(message.content) === normalized);
+          || previousAnswers.some((message) => normalizeSalesAnswer(stripSalesMenuMetadata(message.content).text) === normalized);
       };
       // Não force responseFormat: json_object aqui. Com este prompt completo,
       // o DeepSeek retornou apenas espaços em perguntas subsequentes, mesmo
@@ -994,8 +994,10 @@ export class PlatformWhatsAppService {
           try {
             await this.persistOutbound(latest, channel, {
               providerMessageId: sent.messageId,
-              body: `${menuBody}\n\nOpções: ${choices.map((choice) => choice.title).join(" · ")}`,
-              type: choices.length <= 3 ? "quick_reply" : "list",
+              // O menu é metadado da mensagem interativa, não texto visível.
+              // Salvar "Opções: ..." aqui contaminava o histórico da IA.
+              body: menuBody,
+              type: this.gupshup.mode() === "SELF_SERVE" || choices.length > 3 ? "list" : "quick_reply",
               rawPayload: sent.raw,
             });
           } catch (error) {
@@ -1191,7 +1193,7 @@ export class PlatformWhatsAppService {
       [
         "Responda exclusivamente como um único objeto JSON válido, sem bloco Markdown nem texto antes ou depois, com as chaves text (string), choices (array) e humanSupport (boolean). O campo text é somente a mensagem visível ao cliente: não coloque outro objeto JSON nem nomes de campos dentro dele.",
         'Exemplo de formato JSON para uma pergunta sobre preços: {"text":"O plano ChegowIA Profissional custa o valor indicado acima por mês. Quer saber o que ele inclui?","choices":[{"title":"Ver recursos"},{"title":"Como começar"}],"humanSupport":false}. Use os valores reais do contexto, não copie a frase de exemplo.',
-        "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Se terminar perguntando qual área ou caminho a pessoa prefere, preencha choices com as opções correspondentes, não deixe vazio. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. A pessoa também pode responder digitando normalmente.",
+        "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Se terminar perguntando qual área ou caminho a pessoa prefere, preencha choices com as opções correspondentes, não deixe vazio. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. Nunca escreva uma linha 'Opções:' no campo text: as opções pertencem exclusivamente ao campo choices e serão mostradas pelo WhatsApp. A pessoa também pode responder digitando normalmente.",
         "Depois de explicar preço, plano ou primeiros passos, quando fizer sentido, ofereça uma escolha simples de próximo passo (por exemplo, ver recursos ou iniciar o teste) e preencha choices com botões correspondentes. Não force essa pergunta em toda resposta nem repita opções já respondidas.",
         "Exemplos de escolha útil: tipo de estabelecimento quando ainda não foi dito; conhecer o plano ou entender a implantação; escolher qual recurso explicar. Não transforme respostas diretas em menu nem proponha opções que você não consegue cumprir.",
         `Quando recomendar atendimento humano/avançado, ponha humanSupport: true, choices: [] e inclua ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER} e ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL} em text. Em todos os outros casos, humanSupport: false.`,
@@ -1218,7 +1220,9 @@ export class PlatformWhatsAppService {
       { role: "system", content: system },
       ...history.reverse().map((message: any) => ({
         role: message.direction === WhatsAppMessageDirection.RECEBIDA ? "user" as const : "assistant" as const,
-        content: String(message.body || "Mensagem sem texto"),
+        content: message.direction === WhatsAppMessageDirection.RECEBIDA
+          ? String(message.body || "Mensagem sem texto")
+          : stripSalesMenuMetadata(String(message.body || "Mensagem sem texto")).text,
       })),
     ];
   }
@@ -1651,6 +1655,17 @@ function structuredSalesPayload(raw: string): any | undefined {
   return undefined;
 }
 
+export function stripSalesMenuMetadata(value: string): { text: string; choices: GupshupChoice[] } {
+  // Mensagens antigas guardaram esta linha como texto no banco. A IA a imita
+  // nas respostas seguintes; converta-a de volta em opções estruturadas.
+  const match = /(?:^|\n)\s*Opções:\s*([^\n]+)\s*$/iu.exec(value);
+  if (!match) return { text: value.trim(), choices: [] };
+  const text = value.slice(0, match.index).trim();
+  const titles = match[1].split(/\s*[·•]\s*/u).map((title) => title.trim()).filter(Boolean);
+  if (!text || titles.length < 2 || titles.length > 10) return { text: value.trim(), choices: [] };
+  return { text, choices: titles.map((title) => ({ title })) };
+}
+
 export function parseSalesAssistantReply(content: string | null | undefined): SalesAssistantReply | null {
   const raw = content?.trim() ?? "";
   if (!raw) return null;
@@ -1658,26 +1673,32 @@ export function parseSalesAssistantReply(content: string | null | undefined): Sa
   if (parsed === undefined) {
     // Texto livre é permitido, mas código/JSON malformado nunca vai ao WhatsApp.
     if (raw.startsWith("[") || /[{}]|```|"(?:text|choices|humanSupport)"\s*:/.test(raw)) return null;
-    return { text: raw, choices: [], humanSupport: false };
+    const extracted = stripSalesMenuMetadata(raw);
+    return { text: extracted.text, choices: normalizeSalesChoices(extracted.choices), humanSupport: false };
   }
   if (typeof parsed?.text !== "string" || !parsed.text.trim()) return null;
-  const text = parsed.text.trim();
+  const extracted = stripSalesMenuMetadata(parsed.text.trim());
+  const text = extracted.text;
   if (/```|\{\s*"(?:text|choices|humanSupport)"\s*:/.test(text)) return null;
   const humanSupport = parsed?.humanSupport === true;
-  const candidates = Array.isArray(parsed?.choices) ? parsed.choices.slice(0, 10) : [];
+  const candidates = Array.isArray(parsed?.choices) && parsed.choices.length ? parsed.choices : extracted.choices;
+  return { text, choices: humanSupport ? [] : normalizeSalesChoices(candidates), humanSupport };
+}
+
+function normalizeSalesChoices(candidates: unknown[]): GupshupChoice[] {
   const seen = new Set<string>();
   const choices: GupshupChoice[] = [];
-  if (!humanSupport) {
-    for (const item of candidates) {
-      const title = typeof item?.title === "string" ? item.title.trim().slice(0, 20) : "";
-      const key = title.toLocaleLowerCase("pt-BR");
-      if (!title || seen.has(key)) continue;
-      seen.add(key);
-      const description = typeof item?.description === "string" ? item.description.trim().slice(0, 72) : "";
-      choices.push({ title, ...(description ? { description } : {}) });
-    }
+  for (const item of candidates.slice(0, 10)) {
+    if (!item || typeof item !== "object") continue;
+    const candidate = item as { title?: unknown; description?: unknown };
+    const title = typeof candidate.title === "string" ? candidate.title.trim().slice(0, 20) : "";
+    const key = title.toLocaleLowerCase("pt-BR");
+    if (!title || seen.has(key)) continue;
+    seen.add(key);
+    const description = typeof candidate.description === "string" ? candidate.description.trim().slice(0, 72) : "";
+    choices.push({ title, ...(description ? { description } : {}) });
   }
-  return { text, choices: choices.length >= 2 ? choices : [], humanSupport };
+  return choices.length >= 2 ? choices : [];
 }
 
 /**
