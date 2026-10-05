@@ -951,6 +951,8 @@ export class PlatformWhatsAppService {
         };
       }
       if (!reply) throw new Error("Resposta comercial não disponível após tentativa de recuperação.");
+      const lastQuestion = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
+      reply = withSalesOverviewChoices(reply, lastQuestion);
       const sendSupportCard = reply.humanSupport || reply.text.includes(CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER);
       const choices = sendSupportCard ? [] : reply.choices;
       const answer = truncateWhatsappText(
@@ -971,22 +973,28 @@ export class PlatformWhatsAppService {
           this.realtime.emitToSuperAdmins("platform.whatsapp.conversation.updated", { conversationId: latest.id });
         }
         if (choices.length) {
+          // O corpo interativo tem limite de 1024 caracteres. Se a explicação
+          // for maior, envie-a inteira antes do menu, sem cortar a resposta.
+          const menuBody = answer.length > 1024
+            ? "Qual área da ChegowIA você quer explorar primeiro?"
+            : answer;
+          if (answer.length > 1024) await this.sendText(latest, channel, answer, undefined, "ai");
           let sent: { messageId: string | null; raw: unknown };
           try {
             sent = await this.gupshup.sendInteractiveChoices({
               ...await this.providerParams(channel, latest.customerPhone),
-              body: answer.slice(0, 1024),
+              body: menuBody,
               choices,
             });
           } catch (error) {
             this.logger.warn(`Menu interativo indisponível; enviando texto: ${error instanceof Error ? error.message : String(error)}`);
-            await this.sendText(latest, channel, `${answer}\n\n${choices.map((choice, index) => `${index + 1}. ${choice.title}`).join("\n")}`, undefined, "ai");
+            await this.sendText(latest, channel, `${answer.length > 1024 ? menuBody : answer}\n\n${choices.map((choice, index) => `${index + 1}. ${choice.title}`).join("\n")}`, undefined, "ai");
             return;
           }
           try {
             await this.persistOutbound(latest, channel, {
               providerMessageId: sent.messageId,
-              body: `${answer.slice(0, 1024)}\n\nOpções: ${choices.map((choice) => choice.title).join(" · ")}`,
+              body: `${menuBody}\n\nOpções: ${choices.map((choice) => choice.title).join(" · ")}`,
               type: choices.length <= 3 ? "quick_reply" : "list",
               rawPayload: sent.raw,
             });
@@ -1181,7 +1189,7 @@ export class PlatformWhatsAppService {
       // modelo pretendia.
       "Escreva em texto corrido, sem Markdown. Para destacar, use um único asterisco (*assim*), nunca dois. Escreva a URL sozinha, sem asteriscos ou colchetes ao redor, senão o WhatsApp não reconhece o link. Não use travessão longo, títulos com # nem tabelas. Prefira frases curtas separadas por linha em branco a listas com marcadores.",
       [
-        "Responda exclusivamente como objeto JSON válido, sem bloco Markdown, com as chaves text (string), choices (array) e humanSupport (boolean). O campo text é a mensagem visível ao cliente; não mencione JSON.",
+        "Responda exclusivamente como um único objeto JSON válido, sem bloco Markdown nem texto antes ou depois, com as chaves text (string), choices (array) e humanSupport (boolean). O campo text é somente a mensagem visível ao cliente: não coloque outro objeto JSON nem nomes de campos dentro dele.",
         'Exemplo de formato JSON para uma pergunta sobre preços: {"text":"O plano ChegowIA Profissional custa o valor indicado acima por mês. Quer saber o que ele inclui?","choices":[{"title":"Ver recursos"},{"title":"Como começar"}],"humanSupport":false}. Use os valores reais do contexto, não copie a frase de exemplo.',
         "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Se terminar perguntando qual área ou caminho a pessoa prefere, preencha choices com as opções correspondentes, não deixe vazio. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. A pessoa também pode responder digitando normalmente.",
         "Depois de explicar preço, plano ou primeiros passos, quando fizer sentido, ofereça uma escolha simples de próximo passo (por exemplo, ver recursos ou iniciar o teste) e preencha choices com botões correspondentes. Não force essa pergunta em toda resposta nem repita opções já respondidas.",
@@ -1578,23 +1586,83 @@ function normalizeSalesAnswer(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-export function parseSalesAssistantReply(content: string | null | undefined): {
+type SalesAssistantReply = {
   text: string;
   choices: GupshupChoice[];
   humanSupport: boolean;
-} | null {
+};
+
+const SALES_OVERVIEW_CHOICES: GupshupChoice[] = [
+  { title: "Pedidos e delivery", description: "Site, WhatsApp e balcão" },
+  { title: "Cardápio", description: "Produtos, tamanhos e adicionais" },
+  { title: "Mesas e cozinha", description: "QR, preparo e conta" },
+  { title: "Entregas e frete", description: "Motoboy, rota e área de atendimento" },
+  { title: "Planos e teste", description: "Valor e primeiros passos" },
+];
+
+export function withSalesOverviewChoices(reply: SalesAssistantReply, question: string): SalesAssistantReply {
+  if (reply.humanSupport || reply.choices.length) return reply;
+  const normalized = normalizeSalesAnswer(question);
+  const askedForMenu = /\b(caixa de opcoes|caixas de opcoes|botoes|menu)\b/.test(normalized);
+  const askedForOverview = /\b(quais (sao os )?recursos|quais funcionalidades|visao geral|o que (a chegowia|o sistema) (faz|oferece))\b/.test(normalized)
+    || normalized === "tudo";
+  if (!askedForMenu && !askedForOverview) return reply;
+  if (!askedForMenu && !/\b(pedidos?|cardapio|mesas?|cozinha|entregas?|frete|caixa)\b/.test(normalizeSalesAnswer(reply.text))) return reply;
+  return {
+    ...reply,
+    text: /\?\s*$/.test(reply.text) ? reply.text : `${reply.text}\n\nQual área você quer explorar primeiro?`,
+    choices: SALES_OVERVIEW_CHOICES,
+  };
+}
+
+/** Procura um objeto JSON válido inclusive depois de texto livre ou cercas ```json. */
+function structuredSalesPayload(raw: string): any | undefined {
+  const withoutFence = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    return JSON.parse(withoutFence);
+  } catch {
+    // A IA pode gerar texto legível e, logo depois, o mesmo conteúdo em JSON.
+    // Nunca repasse esse bruto ao cliente: extraia apenas o objeto estruturado.
+  }
+  for (let start = 0; start < raw.length; start++) {
+    if (raw[start] !== "{") continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let end = start; end < raw.length; end++) {
+      const char = raw[end];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+      } else if (char === '"') inString = true;
+      else if (char === "{") depth++;
+      else if (char === "}" && --depth === 0) {
+        try {
+          const parsed = JSON.parse(raw.slice(start, end + 1));
+          if (typeof parsed?.text === "string") return parsed;
+        } catch {
+          // Pode ser uma chave em texto comum; continue buscando outro objeto.
+        }
+        break;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function parseSalesAssistantReply(content: string | null | undefined): SalesAssistantReply | null {
   const raw = content?.trim() ?? "";
   if (!raw) return null;
-  let parsed: any;
-  try {
-    parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
-  } catch {
-    // Se o provedor ignorar o formato JSON, ainda enviamos uma resposta legível.
-    if (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith("```")) return null;
+  const parsed = structuredSalesPayload(raw);
+  if (parsed === undefined) {
+    // Texto livre é permitido, mas código/JSON malformado nunca vai ao WhatsApp.
+    if (raw.startsWith("[") || /[{}]|```|"(?:text|choices|humanSupport)"\s*:/.test(raw)) return null;
     return { text: raw, choices: [], humanSupport: false };
   }
   if (typeof parsed?.text !== "string" || !parsed.text.trim()) return null;
   const text = parsed.text.trim();
+  if (/```|\{\s*"(?:text|choices|humanSupport)"\s*:/.test(text)) return null;
   const humanSupport = parsed?.humanSupport === true;
   const candidates = Array.isArray(parsed?.choices) ? parsed.choices.slice(0, 10) : [];
   const seen = new Set<string>();

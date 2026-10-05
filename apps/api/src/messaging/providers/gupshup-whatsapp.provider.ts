@@ -1,4 +1,5 @@
 import { BadGatewayException, Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 
 type GupshupAppToken = {
   token: string;
@@ -333,13 +334,16 @@ export class GupshupWhatsAppProvider {
       if (choices.length <= 3) {
         return this.sendSelfServe(params, {
           type: "quick_reply",
+          msgid: randomUUID(),
           content: { type: "text", text: body },
           options: choices.map((choice) => ({ type: "text", title: choice.title, postbackText: choice.title })),
         });
       }
       return this.sendSelfServe(params, {
         type: "list",
+        title: "ChegowIA",
         body,
+        msgid: randomUUID(),
         globalButtons: [{ type: "text", title: "Ver opções" }],
         items: [{
           title: "Escolha um assunto",

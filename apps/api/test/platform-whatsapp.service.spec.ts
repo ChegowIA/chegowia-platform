@@ -1,5 +1,5 @@
 import { ConflictException } from "@nestjs/common";
-import { needsHumanSupportReferral, parseSalesAssistantReply } from "../src/messaging/platform-whatsapp.service";
+import { needsHumanSupportReferral, parseSalesAssistantReply, withSalesOverviewChoices } from "../src/messaging/platform-whatsapp.service";
 import { buildPlatformWhatsAppService } from "./support/messaging-services";
 
 describe("Canal institucional do WhatsApp", () => {
@@ -194,6 +194,86 @@ describe("Canal institucional do WhatsApp", () => {
     expect(parseSalesAssistantReply("       ")).toBeNull();
     expect(parseSalesAssistantReply("{\"choices\":[]}")).toBeNull();
     expect(parseSalesAssistantReply("{\"text\":")).toBeNull();
+  });
+
+  it("extrai o JSON misturado a texto sem mostrar código e preserva as opções", () => {
+    const text = "As opções são as áreas abaixo. Qual você quer detalhar?";
+    const choices = ["Pedidos e delivery", "Mesas e cozinha", "Caixa e fiscal", "Entregas e frete", "Planos e teste"]
+      .map((title) => ({ title }));
+    const mixed = `${text}\n\n${JSON.stringify({ text, choices, humanSupport: false })}`;
+
+    expect(parseSalesAssistantReply(mixed)).toEqual({ text, choices, humanSupport: false });
+    expect(parseSalesAssistantReply(`${text}\n\n{\"text\":\"cortado\"`)).toBeNull();
+    expect(parseSalesAssistantReply(JSON.stringify({ text: `${text} {\"text\":\"não envie\"}`, choices: [] }))).toBeNull();
+  });
+
+  it("oferece menu automaticamente ao listar recursos, sem exigir que o cliente peça botões", () => {
+    const reply = { text: "Tem pedidos, cardápio, mesas e entregas.", choices: [], humanSupport: false };
+    const enriched = withSalesOverviewChoices(reply, "Quais recursos vocês têm?");
+
+    expect(enriched.text).toContain("Qual área você quer explorar primeiro?");
+    expect(enriched.choices.map((choice) => choice.title)).toEqual([
+      "Pedidos e delivery", "Cardápio", "Mesas e cozinha", "Entregas e frete", "Planos e teste",
+    ]);
+    expect(withSalesOverviewChoices(reply, "Quanto custa?").choices).toEqual([]);
+  });
+
+  it("envia lista nativa para resposta com texto e JSON misturados", async () => {
+    const text = "As opções são as áreas abaixo. Qual você quer detalhar?";
+    const choices = ["Pedidos e delivery", "Mesas e cozinha", "Caixa e fiscal", "Entregas e frete", "Planos e teste"]
+      .map((title) => ({ title }));
+    const chat = jest.fn().mockResolvedValue({ content: `${text}\n\n${JSON.stringify({ text, choices, humanSupport: false })}` });
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" }, { role: "user", content: "Manda caixa de opções, por favor" },
+    ]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    (instance as any).persistOutbound = jest.fn();
+    const sendText = jest.fn();
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({ body: text, choices }));
+    expect(sendText).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("envia explicação longa inteira e depois o menu, sem truncar o texto", async () => {
+    const longText = `Pedidos, cardápio, mesas e entregas. ${"Detalhes da operação para quem está conhecendo o sistema. ".repeat(22)}`;
+    const chat = jest.fn().mockResolvedValue({ content: JSON.stringify({ text: longText, choices: [], humanSupport: false }) });
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" }, { role: "user", content: "Quais recursos?" },
+    ]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    (instance as any).persistOutbound = jest.fn();
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.stringContaining("Detalhes da operação"), undefined, "ai",
+    );
+    expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
+      body: "Qual área da ChegowIA você quer explorar primeiro?",
+      choices: expect.arrayContaining([{ title: "Cardápio", description: "Produtos, tamanhos e adicionais" }]),
+    }));
   });
 
   it("envia botões nativos quando a IA apresenta uma escolha real", async () => {

@@ -54,6 +54,7 @@ describe("mensagens interativas e contato do Gupshup", () => {
     });
     expect(sentMessage(fetchMock)).toEqual(expect.objectContaining({
       type: "quick_reply",
+      msgid: expect.any(String),
       options: [
         expect.objectContaining({ title: "Plano" }),
         expect.objectContaining({ title: "Implantação" }),
@@ -68,6 +69,8 @@ describe("mensagens interativas e contato do Gupshup", () => {
     });
     const list = sentMessage(fetchMock);
     expect(list.type).toBe("list");
+    expect(list.title).toBe("ChegowIA");
+    expect(list.msgid).toEqual(expect.any(String));
     expect(list.items[0].options).toHaveLength(4);
     expect(list.globalButtons[0].title).toBe("Ver opções");
   });
