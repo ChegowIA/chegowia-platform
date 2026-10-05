@@ -915,8 +915,10 @@ export class PlatformWhatsAppService {
         return normalized === normalizeSalesAnswer(OLD_GENERIC_SALES_REPLY)
           || previousAnswers.some((message) => normalizeSalesAnswer(message.content) === normalized);
       };
+      // Não force responseFormat: json_object aqui. Com este prompt completo,
+      // o DeepSeek retornou apenas espaços em perguntas subsequentes, mesmo
+      // com HTTP 200; em modo normal ele respondeu à sequência inteira.
       const result = await this.aiProvider.chat(messages, undefined, {
-        responseFormat: "json_object",
         thinking: false,
         maxTokens: 1000,
       });
@@ -925,9 +927,8 @@ export class PlatformWhatsAppService {
       await this.recordPlatformAiUsage(channel.id, result);
       let reply = parseSalesAssistantReply(result.content);
       if (!reply || isRepeated(reply.text)) {
-        // JSON mode pode devolver content vazio. Uma segunda chamada, sem a
-        // restrição de formato, recupera a conversa sem expor um texto padrão
-        // repetitivo ao possível cliente.
+        // Mesmo sem JSON mode, uma resposta truncada ou inválida pode ocorrer.
+        // A nova tentativa pede a resposta direta sem a exigência de formato.
         this.logger.warn(`Resposta comercial vazia, inválida ou repetida; tentando novamente (conversa ${conversation.id}, request ${result.requestId ?? "sem-id"}).`);
         const retryMessages: AIChatMessage[] = messages.map((message, index) => index === 0
           ? {
@@ -1129,6 +1130,7 @@ export class PlatformWhatsAppService {
       // com isso em vez de tentar adivinhar o conteúdo.
       "Quando a mensagem for áudio, imagem ou documento, você recebe só o aviso do tipo, não o conteúdo. Diga em uma frase que não consegue abrir o arquivo e peça que a pessoa escreva o que precisa. Não tente adivinhar o que havia ali.",
       "Seu objetivo é tirar dúvidas reais, qualificar o interesse de forma natural (nome, empresa, cidade e tipo de operação quando fizer sentido) e convidar a pessoa a conhecer/contratar em https://chegowia.com.br/planos. Nunca diga que uma contratação foi concluída, nunca peça senha, código de verificação, token, cartão ou dado sensível.",
+      "Na implantação, a pessoa configura sua própria operação no painel; você pode orientar os passos. Não prometa que a equipe da ChegowIA fará a configuração por ela ou que há implantação assistida sem confirmação de uma política comercial.",
       `Plano atual: ${planName}, ${formatBRL(planPrice)} por mês.`,
       // Antes havia uma linha só listando módulos, e o assistente não conhecia
       // partes reais do produto — chegou a não saber que existe programa de
@@ -1181,7 +1183,8 @@ export class PlatformWhatsAppService {
       [
         "Responda exclusivamente como objeto JSON válido, sem bloco Markdown, com as chaves text (string), choices (array) e humanSupport (boolean). O campo text é a mensagem visível ao cliente; não mencione JSON.",
         'Exemplo de formato JSON para uma pergunta sobre preços: {"text":"O plano ChegowIA Profissional custa o valor indicado acima por mês. Quer saber o que ele inclui?","choices":[{"title":"Ver recursos"},{"title":"Como começar"}],"humanSupport":false}. Use os valores reais do contexto, não copie a frase de exemplo.',
-        "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. A pessoa também pode responder digitando normalmente.",
+        "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Se terminar perguntando qual área ou caminho a pessoa prefere, preencha choices com as opções correspondentes, não deixe vazio. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. A pessoa também pode responder digitando normalmente.",
+        "Depois de explicar preço, plano ou primeiros passos, quando fizer sentido, ofereça uma escolha simples de próximo passo (por exemplo, ver recursos ou iniciar o teste) e preencha choices com botões correspondentes. Não force essa pergunta em toda resposta nem repita opções já respondidas.",
         "Exemplos de escolha útil: tipo de estabelecimento quando ainda não foi dito; conhecer o plano ou entender a implantação; escolher qual recurso explicar. Não transforme respostas diretas em menu nem proponha opções que você não consegue cumprir.",
         `Quando recomendar atendimento humano/avançado, ponha humanSupport: true, choices: [] e inclua ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER} e ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL} em text. Em todos os outros casos, humanSupport: false.`,
       ].join(" "),

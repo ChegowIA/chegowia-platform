@@ -191,6 +191,7 @@ describe("Canal institucional do WhatsApp", () => {
     });
     expect(parseSalesAssistantReply("Resposta em texto livre")?.choices).toEqual([]);
     expect(parseSalesAssistantReply(null)).toBeNull();
+    expect(parseSalesAssistantReply("       ")).toBeNull();
     expect(parseSalesAssistantReply("{\"choices\":[]}")).toBeNull();
     expect(parseSalesAssistantReply("{\"text\":")).toBeNull();
   });
@@ -219,7 +220,7 @@ describe("Canal institucional do WhatsApp", () => {
     );
 
     expect(chat).toHaveBeenCalledWith([], undefined, {
-      responseFormat: "json_object", thinking: false, maxTokens: 1000,
+      thinking: false, maxTokens: 1000,
     });
     expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
       choices: [{ title: "Conhecer plano" }, { title: "Como começar" }],
@@ -230,7 +231,7 @@ describe("Canal institucional do WhatsApp", () => {
 
   it("refaz resposta vazia sem repetir a frase genérica para a pergunta do cliente", async () => {
     const chat = jest.fn()
-      .mockResolvedValueOnce({ content: "", requestId: "req-vazio" })
+      .mockResolvedValueOnce({ content: "                    ", requestId: "req-vazio" })
       .mockResolvedValueOnce({ content: "Nossa missão é ajudar negócios de alimentação a organizar pedidos, atendimento e entregas em um só lugar.", requestId: "req-recuperado" });
     const { instance } = serviceWith({
       platformWhatsAppConversation: {
