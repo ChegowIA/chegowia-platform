@@ -189,7 +189,10 @@ describe("Canal institucional do WhatsApp", () => {
       choices: [{ title: "Pizzaria" }, { title: "Restaurante", description: "Atendimento e delivery" }],
       humanSupport: false,
     });
-    expect(parseSalesAssistantReply("Resposta em texto livre").choices).toEqual([]);
+    expect(parseSalesAssistantReply("Resposta em texto livre")?.choices).toEqual([]);
+    expect(parseSalesAssistantReply(null)).toBeNull();
+    expect(parseSalesAssistantReply("{\"choices\":[]}")).toBeNull();
+    expect(parseSalesAssistantReply("{\"text\":")).toBeNull();
   });
 
   it("envia botões nativos quando a IA apresenta uma escolha real", async () => {
@@ -215,12 +218,138 @@ describe("Canal institucional do WhatsApp", () => {
       { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
     );
 
-    expect(chat).toHaveBeenCalledWith([], undefined, { responseFormat: "json_object" });
+    expect(chat).toHaveBeenCalledWith([], undefined, {
+      responseFormat: "json_object", thinking: false, maxTokens: 1000,
+    });
     expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
       choices: [{ title: "Conhecer plano" }, { title: "Como começar" }],
     }));
     expect(persistOutbound).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ type: "quick_reply" }));
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("refaz resposta vazia sem repetir a frase genérica para a pergunta do cliente", async () => {
+    const chat = jest.fn()
+      .mockResolvedValueOnce({ content: "", requestId: "req-vazio" })
+      .mockResolvedValueOnce({ content: "Nossa missão é ajudar negócios de alimentação a organizar pedidos, atendimento e entregas em um só lugar.", requestId: "req-recuperado" });
+    const { instance } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    const history = [
+      { role: "system", content: "Contexto da ChegowIA" },
+      { role: "user", content: "Qual a missão de vocês?" },
+    ];
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue(history);
+    const recordUsage = jest.fn();
+    (instance as any).recordPlatformAiUsage = recordUsage;
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(chat.mock.calls[1][0][0].content).toContain("responda diretamente à última mensagem");
+    expect(recordUsage).toHaveBeenCalledTimes(2);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.stringContaining("Nossa missão é ajudar negócios"), undefined, "ai",
+    );
+  });
+
+  it("rejeita resposta antiga repetida e recupera um menu útil", async () => {
+    const chat = jest.fn()
+      .mockResolvedValueOnce({ content: JSON.stringify({ text: "Posso explicar os planos, os recursos da ChegowIA ou ajudar você a começar. O que gostaria de saber?", choices: [], humanSupport: false }) })
+      .mockResolvedValueOnce({ content: JSON.stringify({ text: "O sistema reúne pedidos, cardápio, mesas, entregas e caixa. Qual área quer ver primeiro?", choices: [{ title: "Pedidos" }, { title: "Cardápio" }], humanSupport: false }) });
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" }, { role: "user", content: "Quais recursos?" },
+    ]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    (instance as any).persistOutbound = jest.fn();
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [{ title: "Pedidos" }, { title: "Cardápio" }],
+    }));
+  });
+
+  it("encerra a automação e oferece contato humano se as duas respostas forem inválidas", async () => {
+    const chat = jest.fn()
+      .mockResolvedValueOnce({ content: "{\"text\":" })
+      .mockResolvedValueOnce({ content: null });
+    const update = jest.fn().mockResolvedValue({});
+    const { instance, gupshup, realtime } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+        update,
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" }, { role: "user", content: "Quais os recursos?" },
+    ]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    (instance as any).persistOutbound = jest.fn();
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "conversa-1" },
+      data: expect.objectContaining({ mode: "HUMANO" }),
+    }));
+    expect(realtime.emitToSuperAdmins).toHaveBeenCalledWith(
+      "platform.whatsapp.conversation.updated", { conversationId: "conversa-1" },
+    );
+    expect(sendText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.stringContaining("https://wa.me/556225900295"), undefined, "ai",
+    );
+    expect(gupshup.sendContact).toHaveBeenCalledTimes(1);
+  });
+
+  it("desativa a automação se o provedor de IA falhar", async () => {
+    const update = jest.fn().mockResolvedValue({});
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: { update },
+    }, { aiProvider: { chat: jest.fn().mockRejectedValue(new Error("IA indisponível")) } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" }, { role: "user", content: "Como começo?" },
+    ]);
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+    (instance as any).persistOutbound = jest.fn();
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ mode: "HUMANO" }),
+    }));
+    expect(sendText).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(),
+      expect.stringContaining("indisponível neste instante"), undefined, "text",
+    );
+    expect(gupshup.sendContact).toHaveBeenCalledTimes(1);
   });
 
   it("mantém opções em texto se o menu interativo falhar no provedor", async () => {

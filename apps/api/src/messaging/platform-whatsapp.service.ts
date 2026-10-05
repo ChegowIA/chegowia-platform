@@ -909,11 +909,47 @@ export class PlatformWhatsAppService {
   private async answerWithSalesAssistant(conversation: any, channel: any) {
     try {
       const messages = await this.messagesForAssistant(conversation.id, channel);
-      const result = await this.aiProvider.chat(messages, undefined, { responseFormat: "json_object" });
+      const previousAnswers = messages.filter((message) => message.role === "assistant").slice(-4);
+      const isRepeated = (text: string) => {
+        const normalized = normalizeSalesAnswer(text);
+        return normalized === normalizeSalesAnswer(OLD_GENERIC_SALES_REPLY)
+          || previousAnswers.some((message) => normalizeSalesAnswer(message.content) === normalized);
+      };
+      const result = await this.aiProvider.chat(messages, undefined, {
+        responseFormat: "json_object",
+        thinking: false,
+        maxTokens: 1000,
+      });
       // Custo da plataforma: o assistente comercial pertence à ChegowIA,
       // portanto seu consumo não pode entrar no ledger de nenhuma empresa.
       await this.recordPlatformAiUsage(channel.id, result);
-      const reply = parseSalesAssistantReply(result.content);
+      let reply = parseSalesAssistantReply(result.content);
+      if (!reply || isRepeated(reply.text)) {
+        // JSON mode pode devolver content vazio. Uma segunda chamada, sem a
+        // restrição de formato, recupera a conversa sem expor um texto padrão
+        // repetitivo ao possível cliente.
+        this.logger.warn(`Resposta comercial vazia, inválida ou repetida; tentando novamente (conversa ${conversation.id}, request ${result.requestId ?? "sem-id"}).`);
+        const retryMessages: AIChatMessage[] = messages.map((message, index) => index === 0
+          ? {
+            ...message,
+            content: `${message.content}\n\nNesta tentativa, responda diretamente à última mensagem do cliente com informação concreta. Não repita nenhuma resposta anterior do assistente. Se não souber, diga isso e indique o atendimento humano. Pode responder em texto simples, sem JSON.`,
+          }
+          : message);
+        // Custo da plataforma também nesta segunda chamada, registrado abaixo.
+        const retry = await this.aiProvider.chat(retryMessages, undefined, { thinking: false, maxTokens: 1000 });
+        await this.recordPlatformAiUsage(channel.id, retry);
+        reply = parseSalesAssistantReply(retry.content);
+      }
+      const needsHumanHandoff = !reply || isRepeated(reply.text);
+      if (needsHumanHandoff) {
+        this.logger.warn(`Assistente comercial não produziu resposta útil para a conversa ${conversation.id}.`);
+        reply = {
+          text: `Não consegui confirmar essa informação agora e prefiro não te passar algo errado. Nossa equipe pode te ajudar diretamente pelo WhatsApp ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER}: ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL}`,
+          choices: [],
+          humanSupport: true,
+        };
+      }
+      if (!reply) throw new Error("Resposta comercial não disponível após tentativa de recuperação.");
       const sendSupportCard = reply.humanSupport || reply.text.includes(CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER);
       const choices = sendSupportCard ? [] : reply.choices;
       const answer = truncateWhatsappText(
@@ -923,6 +959,16 @@ export class PlatformWhatsAppService {
       );
       const latest = await this.db().platformWhatsAppConversation.findUnique({ where: { id: conversation.id } });
       if (latest?.mode === WhatsAppConversationMode.VIRTUAL) {
+        if (needsHumanHandoff) {
+          // Duas respostas ruins são falha da automação, não do cliente.
+          // Mantemos o caso na caixa de entrada para uma pessoa assumir e
+          // impedimos que novas mensagens disparem a mesma falha em loop.
+          await this.db().platformWhatsAppConversation.update({
+            where: { id: latest.id },
+            data: { mode: WhatsAppConversationMode.HUMANO, humanRequestedAt: new Date() },
+          });
+          this.realtime.emitToSuperAdmins("platform.whatsapp.conversation.updated", { conversationId: latest.id });
+        }
         if (choices.length) {
           let sent: { messageId: string | null; raw: unknown };
           try {
@@ -958,6 +1004,17 @@ export class PlatformWhatsAppService {
         `Assistente comercial indisponível para a conversa ${conversation.id}`,
         error instanceof Error ? error.stack : String(error),
       );
+      // Falha do provedor, do registro de uso ou do envio não pode responder
+      // com o mesmo aviso em toda mensagem futura. Deixe a conversa na caixa
+      // humana, onde a equipe consegue ver e assumir o atendimento.
+      await this.db().platformWhatsAppConversation.update({
+        where: { id: conversation.id },
+        data: { mode: WhatsAppConversationMode.HUMANO, humanRequestedAt: new Date() },
+      }).then(() => {
+        this.realtime.emitToSuperAdmins("platform.whatsapp.conversation.updated", { conversationId: conversation.id });
+      }).catch((handoffError: unknown) => {
+        this.logger.error(`Falha ao entregar a conversa ${conversation.id} para atendimento humano`, handoffError instanceof Error ? handoffError.stack : String(handoffError));
+      });
       await this.sendText(
         conversation,
         channel,
@@ -1061,6 +1118,7 @@ export class PlatformWhatsAppService {
       // nome, com o exemplo do que não fazer.
       "Cumprimente só na primeira mensagem da conversa. Depois disso responda direto: quem já está conversando não precisa de \"Olá\" outra vez.",
       "Responda a pergunta feita antes de qualquer outra coisa. Não abra apresentando a si mesmo nem listando o que sabe fazer — quem escreveu já sabe com quem está falando.",
+      "Se a pessoa perguntar sobre a missão da ChegowIA, explique que é ajudar negócios de alimentação a organizar atendimento, pedidos e entregas em uma operação mais simples e eficiente. Se ela disser 'tudo' depois de pedir recursos, dê uma visão geral concreta das áreas disponíveis antes de perguntar o que aprofundar.",
       "Não pergunte \"como posso te ajudar\" quando a pessoa já disse o que quer, e não repita pergunta que ela já respondeu.",
       "Seja concreto: diga o nome do plano, o valor, o recurso exato. Frases como \"posso te ajudar com planos, recursos ou funcionamento\" não informam nada e só ocupam a tela.",
       "Não narre o próprio raciocínio nem as próprias limitações. Em vez de \"não consigo fazer isso por você, mas posso te acompanhar\", diga direto o que a pessoa precisa fazer.",
@@ -1122,6 +1180,7 @@ export class PlatformWhatsAppService {
       "Escreva em texto corrido, sem Markdown. Para destacar, use um único asterisco (*assim*), nunca dois. Escreva a URL sozinha, sem asteriscos ou colchetes ao redor, senão o WhatsApp não reconhece o link. Não use travessão longo, títulos com # nem tabelas. Prefira frases curtas separadas por linha em branco a listas com marcadores.",
       [
         "Responda exclusivamente como objeto JSON válido, sem bloco Markdown, com as chaves text (string), choices (array) e humanSupport (boolean). O campo text é a mensagem visível ao cliente; não mencione JSON.",
+        'Exemplo de formato JSON para uma pergunta sobre preços: {"text":"O plano ChegowIA Profissional custa o valor indicado acima por mês. Quer saber o que ele inclui?","choices":[{"title":"Ver recursos"},{"title":"Como começar"}],"humanSupport":false}. Use os valores reais do contexto, não copie a frase de exemplo.',
         "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. A pessoa também pode responder digitando normalmente.",
         "Exemplos de escolha útil: tipo de estabelecimento quando ainda não foi dito; conhecer o plano ou entender a implantação; escolher qual recurso explicar. Não transforme respostas diretas em menu nem proponha opções que você não consegue cumprir.",
         `Quando recomendar atendimento humano/avançado, ponha humanSupport: true, choices: [] e inclua ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER} e ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL} em text. Em todos os outros casos, humanSupport: false.`,
@@ -1509,24 +1568,30 @@ function truncateWhatsappText(value: string) {
   return formatForWhatsapp(value);
 }
 
-const DEFAULT_SALES_REPLY = "Posso explicar os planos, os recursos da ChegowIA ou ajudar você a começar. O que gostaria de saber?";
+// Era a resposta silenciosa para JSON vazio/inválido e acabava virando um loop.
+const OLD_GENERIC_SALES_REPLY = "Posso explicar os planos, os recursos da ChegowIA ou ajudar você a começar. O que gostaria de saber?";
+
+function normalizeSalesAnswer(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
 
 export function parseSalesAssistantReply(content: string | null | undefined): {
   text: string;
   choices: GupshupChoice[];
   humanSupport: boolean;
-} {
+} | null {
   const raw = content?.trim() ?? "";
+  if (!raw) return null;
   let parsed: any;
   try {
     parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
   } catch {
     // Se o provedor ignorar o formato JSON, ainda enviamos uma resposta legível.
-    return { text: raw.startsWith("{") ? DEFAULT_SALES_REPLY : raw || DEFAULT_SALES_REPLY, choices: [], humanSupport: false };
+    if (raw.startsWith("{") || raw.startsWith("[") || raw.startsWith("```")) return null;
+    return { text: raw, choices: [], humanSupport: false };
   }
-  const text = typeof parsed?.text === "string" && parsed.text.trim()
-    ? parsed.text.trim()
-    : DEFAULT_SALES_REPLY;
+  if (typeof parsed?.text !== "string" || !parsed.text.trim()) return null;
+  const text = parsed.text.trim();
   const humanSupport = parsed?.humanSupport === true;
   const candidates = Array.isArray(parsed?.choices) ? parsed.choices.slice(0, 10) : [];
   const seen = new Set<string>();
