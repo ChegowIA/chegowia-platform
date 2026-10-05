@@ -887,12 +887,24 @@ export class PlatformWhatsAppService {
 
   private async sendHumanSupportContact(conversation: any, channel: any) {
     const body = `ChegowIA | Atendimento humano · ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER}`;
+    let sent: { messageId: string | null; raw: unknown };
     try {
-      const sent = await this.gupshup.sendContact({
+      sent = await this.gupshup.sendContact({
         ...await this.providerParams(channel, conversation.customerPhone),
         name: "ChegowIA | Atendimento humano",
         phone: CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER,
       });
+    } catch (error) {
+      // O texto anterior já contém número e link; falha do cartão não pode
+      // bloquear o atendimento nem fazer o webhook repetir a mensagem.
+      this.logger.warn(`Não foi possível enviar o cartão do atendimento humano: ${error instanceof Error ? error.message : String(error)}`);
+      await this.persistFailedOutbound(conversation, channel, body, "contact", error)
+        .catch((persistError) => this.logger.error(
+          `Falha também ao registrar o cartão de contato não entregue: ${persistError instanceof Error ? persistError.message : String(persistError)}`,
+        ));
+      return;
+    }
+    try {
       await this.persistOutbound(conversation, channel, {
         providerMessageId: sent.messageId,
         body,
@@ -900,9 +912,9 @@ export class PlatformWhatsAppService {
         rawPayload: sent.raw,
       });
     } catch (error) {
-      // O texto anterior já contém número e link; falha do cartão não pode
-      // bloquear o atendimento nem fazer o webhook repetir a mensagem.
-      this.logger.warn(`Não foi possível enviar o cartão do atendimento humano: ${error instanceof Error ? error.message : String(error)}`);
+      // A Gupshup já aceitou o cartão; marcar falha e reenviar criaria
+      // registros incorretos ou duplicaria a mensagem para o destinatário.
+      this.logger.error(`Cartão do atendimento humano enviado, mas não registrado: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -953,8 +965,13 @@ export class PlatformWhatsAppService {
       if (!reply) throw new Error("Resposta comercial não disponível após tentativa de recuperação.");
       const lastQuestion = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
       reply = withSalesOverviewChoices(reply, lastQuestion);
-      const sendSupportCard = reply.humanSupport || reply.text.includes(CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER);
-      const choices = sendSupportCard ? [] : reply.choices;
+      const sendSupportCard = reply.humanSupport
+        || reply.text.includes(CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER)
+        || reply.text.includes(CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL);
+      // Uma menção incidental ao contato humano não anula uma escolha que a
+      // própria resposta acabou de oferecer. Só o encaminhamento explícito
+      // encerra o menu comercial.
+      const choices = reply.humanSupport ? [] : reply.choices;
       const answer = truncateWhatsappText(
         reply.humanSupport && !reply.text.includes(CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL)
           ? `${reply.text}\n\nAtendimento humano: ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER}\n${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL}`
@@ -1132,6 +1149,8 @@ export class PlatformWhatsAppService {
       "Se a pessoa perguntar sobre a missão da ChegowIA, explique que é ajudar negócios de alimentação a organizar atendimento, pedidos e entregas em uma operação mais simples e eficiente. Se ela disser 'tudo' depois de pedir recursos, dê uma visão geral concreta das áreas disponíveis antes de perguntar o que aprofundar.",
       "Não pergunte \"como posso te ajudar\" quando a pessoa já disse o que quer, e não repita pergunta que ela já respondeu.",
       "Seja concreto: diga o nome do plano, o valor, o recurso exato. Frases como \"posso te ajudar com planos, recursos ou funcionamento\" não informam nada e só ocupam a tela.",
+      "Tenha um tom caloroso e profissional: reconheça o interesse específico da pessoa em uma frase natural, explique o benefício com um exemplo do cotidiano de um negócio de alimentação e convide para um próximo passo sem pressão. Varie a forma de falar; não repita aberturas ou perguntas prontas em mensagens consecutivas.",
+      "Quando a pessoa pedir opções, áreas ou assuntos para conhecer, apresente imediatamente escolhas úteis no campo choices. Não explique como os botões funcionam, não especule sobre falha de exibição e não a mande ao suporte apenas para conseguir ver um menu.",
       "Não narre o próprio raciocínio nem as próprias limitações. Em vez de \"não consigo fazer isso por você, mas posso te acompanhar\", diga direto o que a pessoa precisa fazer.",
       "No máximo um emoji por mensagem, e só quando ele acrescenta algo. Evite enfeites como \"viu?\", \"me conta\", \"que bom te ver por aqui\" e \"fico à disposição\".",
       "Se não souber, diga que não sabe e indique o contato humano informado acima. Não diga que a conversa foi encaminhada; a pessoa precisará iniciar o contato. Não improvise nem enrole para parecer útil.",
@@ -1193,7 +1212,7 @@ export class PlatformWhatsAppService {
       [
         "Responda exclusivamente como um único objeto JSON válido, sem bloco Markdown nem texto antes ou depois, com as chaves text (string), choices (array) e humanSupport (boolean). O campo text é somente a mensagem visível ao cliente: não coloque outro objeto JSON nem nomes de campos dentro dele.",
         'Exemplo de formato JSON para uma pergunta sobre preços: {"text":"O plano ChegowIA Profissional custa o valor indicado acima por mês. Quer saber o que ele inclui?","choices":[{"title":"Ver recursos"},{"title":"Como começar"}],"humanSupport":false}. Use os valores reais do contexto, não copie a frase de exemplo.',
-        "Use choices somente se a resposta terminar com UMA pergunta de escolha útil e concreta, sem repetir algo que a pessoa já informou. Se terminar perguntando qual área ou caminho a pessoa prefere, preencha choices com as opções correspondentes, não deixe vazio. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. Nunca escreva uma linha 'Opções:' no campo text: as opções pertencem exclusivamente ao campo choices e serão mostradas pelo WhatsApp. A pessoa também pode responder digitando normalmente.",
+        "Use choices sempre que oferecer duas ou mais alternativas concretas para a pessoa escolher, inclusive após explicar um recurso ou quando ela pedir opções. Se perguntar qual área ou caminho prefere, preencha choices: não deixe vazio e não escreva as alternativas como lista no campo text. Cada opção deve ser {title: string, description?: string}; forneça de 2 a 5 opções distintas, títulos com até 20 caracteres e descrições com até 72. Se não houver escolha genuína, use choices: []. Nunca escreva uma linha 'Opções:' no campo text. A pessoa também pode responder digitando normalmente.",
         "Depois de explicar preço, plano ou primeiros passos, quando fizer sentido, ofereça uma escolha simples de próximo passo (por exemplo, ver recursos ou iniciar o teste) e preencha choices com botões correspondentes. Não force essa pergunta em toda resposta nem repita opções já respondidas.",
         "Exemplos de escolha útil: tipo de estabelecimento quando ainda não foi dito; conhecer o plano ou entender a implantação; escolher qual recurso explicar. Não transforme respostas diretas em menu nem proponha opções que você não consegue cumprir.",
         `Quando recomendar atendimento humano/avançado, ponha humanSupport: true, choices: [] e inclua ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER} e ${CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL} em text. Em todos os outros casos, humanSupport: false.`,
@@ -1604,14 +1623,88 @@ const SALES_OVERVIEW_CHOICES: GupshupChoice[] = [
   { title: "Planos e teste", description: "Valor e primeiros passos" },
 ];
 
-export function withSalesOverviewChoices(reply: SalesAssistantReply, question: string): SalesAssistantReply {
-  if (reply.humanSupport || reply.choices.length) return reply;
+const SALES_FULL_MENU_CHOICES: GupshupChoice[] = [
+  ...SALES_OVERVIEW_CHOICES.slice(0, 4),
+  { title: "Caixa e fiscal", description: "Movimentações e NFC-e" },
+  { title: "Equipe", description: "Papéis e permissões" },
+  { title: "Clientes e vendas", description: "Cadastro, relatórios e desempenho" },
+  { title: "WhatsApp com IA", description: "Atendimento e automação" },
+  SALES_OVERVIEW_CHOICES[4],
+  { title: "Revenda", description: "Indicações e comissão" },
+];
+
+function requestedSalesMenu(question: string) {
   const normalized = normalizeSalesAnswer(question);
-  const askedForMenu = /\b(caixa de opcoes|caixas de opcoes|botoes|menu)\b/.test(normalized);
+  return /\b(caixa de opcoes|caixas de opcoes|botoes|menu)\b/.test(normalized)
+    || /\b(opcoes|areas|assuntos|temas)\b/.test(normalized)
+      && /\b(apresent\w*|mostr\w*|ver|saber|conhec\w*|escolh\w*|list\w*|quais|quero|pode)\b/.test(normalized);
+}
+
+function extractSalesLineChoices(value: string, requested: boolean): { text: string; choices: GupshupChoice[] } | null {
+  const lines = value.split(/\r?\n/u);
+  const normalized = normalizeSalesAnswer(value);
+  if (!requested && !/\b(qual dessas|qual delas|qual voce quer|qual prefere|qual assunto|qual area|me diz qual|faz mais sentido|quer conhecer|quer detalhar|escolha|escolher|prefere)\b/.test(normalized)) return null;
+
+  let start = -1;
+  let end = -1;
+  for (let index = 0; index < lines.length;) {
+    const candidate = lines[index].trim().replace(/^(?:[-•]\s*|\d+[.)]\s*)/u, "").trim();
+    if (!candidate || candidate.length > 50 || /[.!?:;,]$/u.test(candidate) || /https?:\/\//iu.test(candidate)) {
+      index++;
+      continue;
+    }
+    let next = index + 1;
+    while (next < lines.length) {
+      const option = lines[next].trim().replace(/^(?:[-•]\s*|\d+[.)]\s*)/u, "").trim();
+      if (!option || option.length > 50 || /[.!?:;,]$/u.test(option) || /https?:\/\//iu.test(option)) break;
+      next++;
+    }
+    if (next - index >= 2 && next - index > end - start) {
+      start = index;
+      end = next;
+    }
+    index = next;
+  }
+  if (start < 0) return null;
+  const choices = lines.slice(start, end)
+    .map((line) => ({ title: line.trim().replace(/^(?:[-•]\s*|\d+[.)]\s*)/u, "").trim() }));
+  const text = [...lines.slice(0, start), ...lines.slice(end)].join("\n").trim()
+    .replace(/:\s*\n/u, ".\n").replace(/:\s*$/u, ".")
+    .replace(/\n{3,}/gu, "\n\n");
+  return text ? { text, choices } : null;
+}
+
+export function withSalesOverviewChoices(reply: SalesAssistantReply, question: string): SalesAssistantReply {
+  const askedForMenu = requestedSalesMenu(question);
+  if (reply.humanSupport) {
+    // Pedir um menu não é solicitar suporte avançado. A IA pode confundir uma
+    // observação sobre botões com incidente e desviar a conversa por engano.
+    if (askedForMenu && !needsHumanSupportReferral(question)) return {
+      text: "Claro! Escolha o assunto que mais combina com o que você quer explorar e eu te explico como funciona na prática.",
+      choices: SALES_FULL_MENU_CHOICES,
+      humanSupport: false,
+    };
+    return reply;
+  }
+  const listed = extractSalesLineChoices(reply.text, askedForMenu);
+  if (reply.choices.length) return listed ? { ...reply, text: listed.text } : reply;
+  if (listed) return {
+    ...reply,
+    text: listed.choices.length > 10
+      ? "Boa! Agrupei os assuntos para ficar mais fácil escolher. Toque na área que chama sua atenção e eu te explico como ela funciona na prática."
+      : listed.text,
+    choices: listed.choices.length > 10 ? SALES_FULL_MENU_CHOICES : normalizeSalesChoices(listed.choices),
+  };
+  const normalized = normalizeSalesAnswer(question);
   const askedForOverview = /\b(quais (sao os )?recursos|quais funcionalidades|visao geral|o que (a chegowia|o sistema) (faz|oferece))\b/.test(normalized)
     || normalized === "tudo";
   if (!askedForMenu && !askedForOverview) return reply;
   if (!askedForMenu && !/\b(pedidos?|cardapio|mesas?|cozinha|entregas?|frete|caixa)\b/.test(normalizeSalesAnswer(reply.text))) return reply;
+  if (askedForMenu) return {
+    ...reply,
+    text: "Claro! Separei os principais assuntos da ChegowIA para você escolher. Qual deles você quer conhecer primeiro?",
+    choices: SALES_FULL_MENU_CHOICES,
+  };
   return {
     ...reply,
     text: /\?\s*$/.test(reply.text) ? reply.text : `${reply.text}\n\nQual área você quer explorar primeiro?`,

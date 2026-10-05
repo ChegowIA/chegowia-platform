@@ -175,6 +175,23 @@ describe("Canal institucional do WhatsApp", () => {
     expect(persistOutbound).toHaveBeenCalledWith(conversation, channel, expect.objectContaining({ type: "contact" }));
   });
 
+  it("registra falha de envio do cartão de contato sem duplicar o texto de atendimento", async () => {
+    const create = jest.fn().mockResolvedValue({ id: "mensagem-falhou" });
+    const { instance } = serviceWith({
+      platformWhatsAppMessage: { create },
+      platformWhatsAppChannel: { update: jest.fn().mockResolvedValue({}) },
+    }, { gupshup: { sendContact: jest.fn().mockRejectedValue(new Error("contato recusado")) } });
+
+    await (instance as any).sendHumanSupportContact(
+      { id: "conversa-1", customerPhone: "5562999998888" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      type: "contact", status: "FALHOU", errorMessage: "contato recusado",
+    }) }));
+  });
+
   it("aceita resposta estruturada e filtra opções inválidas ou repetidas", () => {
     expect(parseSalesAssistantReply(JSON.stringify({
       text: "Qual tipo de operação você tem?",
@@ -240,6 +257,87 @@ describe("Canal institucional do WhatsApp", () => {
       "Pedidos e delivery", "Cardápio", "Mesas e cozinha", "Entregas e frete", "Planos e teste",
     ]);
     expect(withSalesOverviewChoices(reply, "Quanto custa?").choices).toEqual([]);
+  });
+
+  it("entende 'me apresente as opções' e troca uma lista longa por menu nativo completo", () => {
+    const reply = {
+      text: [
+        "Aqui vão as áreas para você escolher e eu detalhar:",
+        "Pedidos e delivery", "Cardápio", "Mesas", "Cozinha", "Entregas",
+        "Frete e área de atendimento", "Caixa", "Fiscal", "Equipe",
+        "Clientes e relatórios", "WhatsApp com IA",
+        "Me diz qual dessas você quer conhecer.",
+      ].join("\n"),
+      choices: [], humanSupport: false,
+    };
+
+    const result = withSalesOverviewChoices(reply, "Me apresente as opções de saber mais no sistema");
+    expect(result.choices).toHaveLength(10);
+    expect(result.choices).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Caixa e fiscal" }),
+      expect.objectContaining({ title: "WhatsApp com IA" }),
+    ]));
+    expect(result.text).not.toContain("Pedidos e delivery\nCardápio");
+    expect(result.text).toContain("funciona na prática");
+  });
+
+  it("não transforma um pedido de menu em encaminhamento humano por engano", () => {
+    const result = withSalesOverviewChoices({
+      text: "Para problema no painel, fale com o atendimento humano.",
+      choices: [], humanSupport: true,
+    }, "Menu nas mensagens que quero dizer");
+    expect(result.humanSupport).toBe(false);
+    expect(result.choices).toHaveLength(10);
+    expect(result.text).not.toContain("atendimento humano");
+  });
+
+  it("converte opções curtas em linhas em menu sem repetir a lista no texto", () => {
+    const reply = {
+      text: "Qual assunto faz mais sentido para você?\n\nCadastro de mesas\nFila da cozinha\nFechamento de conta",
+      choices: [], humanSupport: false,
+    };
+    const result = withSalesOverviewChoices(reply, "Como funcionam mesas e cozinha?");
+    expect(result).toEqual({
+      text: "Qual assunto faz mais sentido para você?",
+      choices: ["Cadastro de mesas", "Fila da cozinha", "Fechamento de conta"].map((title) => ({ title })),
+      humanSupport: false,
+    });
+  });
+
+  it("envia menu na conversa quando o cliente pede opções e a IA devolve uma lista escrita", async () => {
+    const text = [
+      "Aqui vão as áreas para você escolher:",
+      "Pedidos e delivery", "Cardápio", "Mesas", "Cozinha", "Entregas",
+      "Frete e área de atendimento", "Caixa", "Fiscal", "Equipe",
+      "Clientes e relatórios", "WhatsApp com IA",
+      "Me diz qual dessas você quer conhecer.",
+    ].join("\n");
+    const chat = jest.fn().mockResolvedValue({ content: JSON.stringify({ text, choices: [], humanSupport: false }) });
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([
+      { role: "system", content: "Contexto" },
+      { role: "user", content: "Me apresente as opções de saber mais no sistema" },
+    ]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    const persistOutbound = jest.fn().mockResolvedValue(undefined);
+    (instance as any).persistOutbound = persistOutbound;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.stringContaining("funciona na prática"),
+      choices: expect.arrayContaining([{ title: "Caixa e fiscal", description: "Movimentações e NFC-e" }]),
+    }));
+    expect(persistOutbound).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
+      type: "list", body: expect.not.stringContaining("Pedidos e delivery\nCardápio"),
+    }));
   });
 
   it("envia lista nativa para resposta com texto e JSON misturados", async () => {
