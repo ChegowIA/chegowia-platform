@@ -17,6 +17,15 @@ type GupshupAppDetails = {
 
 type GupshupSendResult = { messageId: string | null; raw: unknown };
 
+export type GupshupTemplate = {
+  id: string;
+  name: string;
+  languageCode: string;
+  category: string;
+  status: string;
+  content: string | null;
+};
+
 /**
  * `source` e `appName` só são usados no self-serve, onde uma única apikey atende
  * todos os apps da conta e é o par número + nome do app que identifica o canal.
@@ -29,6 +38,8 @@ export type GupshupSendParams = {
   source?: string | null;
   appName?: string | null;
 };
+
+export type GupshupChoice = { title: string; description?: string };
 
 /**
  * Perfil comercial do WhatsApp.
@@ -201,6 +212,72 @@ export class GupshupWhatsAppProvider {
     return { token, expiresAt: new Date(Date.now() + 23 * 60 * 60 * 1000) };
   }
 
+  /** Modelos pertencem ao WABA do aplicativo, não à conta ChegowIA inteira. */
+  async listTemplates(params: { appId: string; appToken: string }): Promise<GupshupTemplate[]> {
+    const path = `/app/${encodeURIComponent(params.appId)}/${this.mode() === "SELF_SERVE" ? "template" : "templates"}`;
+    const rows: any[] = [];
+    // A API self-serve pagina em lotes de 100. Conferir só a primeira página
+    // poderia criar um homônimo e deixar a loja sem avisos.
+    for (let page = 0; page < 20; page++) {
+      const result = await this.appRequest(this.mode() === "SELF_SERVE" ? `${path}?pageNo=${page}&pageSize=100` : path, {
+        method: "GET", appToken: params.appToken,
+      });
+      this.assertGupshupAccepted(result, "consultar modelos");
+      const batch = Array.isArray(result?.templates) ? result.templates
+        : Array.isArray(result?.template) ? result.template
+        : Array.isArray(result?.data) ? result.data
+        : Array.isArray(result) ? result : null;
+      if (!batch) throw new BadGatewayException("O Gupshup devolveu uma lista de modelos em formato inesperado.");
+      rows.push(...batch);
+      if (this.mode() !== "SELF_SERVE" || batch.length < 100) break;
+    }
+    return rows.map((row: any) => ({
+      id: readString(row?.id) ?? "",
+      name: readString(row?.elementName) ?? readString(row?.name) ?? "",
+      languageCode: readString(row?.languageCode) ?? readString(row?.language) ?? "",
+      category: readString(row?.category) ?? "",
+      status: readString(row?.status) ?? "",
+      content: readString(row?.content) ?? readString(row?.data),
+    }));
+  }
+
+  /** Submete um modelo de texto Utility à revisão da Meta para este WABA. */
+  async createUtilityTemplate(params: {
+    appId: string;
+    appToken: string;
+    name: string;
+    languageCode: string;
+    content: string;
+    example: string;
+  }): Promise<GupshupTemplate> {
+    const path = `/app/${encodeURIComponent(params.appId)}/${this.mode() === "SELF_SERVE" ? "template" : "templates"}`;
+    const result = await this.appRequest(path, {
+      method: "POST",
+      appToken: params.appToken,
+      form: {
+        elementName: params.name,
+        languageCode: params.languageCode,
+        content: params.content,
+        category: "UTILITY",
+        vertical: "Atualizacao de pedido",
+        templateType: "TEXT",
+        example: params.example,
+      },
+    });
+    this.assertGupshupAccepted(result, "criar modelo de pedido");
+    const template = result?.template ?? result;
+    const id = readString(template?.id);
+    if (!id) throw new BadGatewayException("O Gupshup não devolveu o ID do modelo criado.");
+    return {
+      id,
+      name: readString(template?.elementName) ?? params.name,
+      languageCode: readString(template?.languageCode) ?? params.languageCode,
+      category: readString(template?.category) ?? "UTILITY",
+      status: readString(template?.status) ?? "PENDING",
+      content: readString(template?.content) ?? params.content,
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // Envio (token de app, formato Meta via passthrough v3)
   // ---------------------------------------------------------------------------
@@ -215,6 +292,95 @@ export class GupshupWhatsAppProvider {
       to: normalizePhone(params.to),
       type: "text",
       text: { preview_url: false, body: params.body },
+    });
+  }
+
+  /** Cartão nativo do WhatsApp: o destinatário pode salvar o contato. */
+  async sendContact(params: GupshupSendParams & { name: string; phone: string }): Promise<GupshupSendResult> {
+    const waId = normalizePhone(params.phone);
+    if (this.mode() === "SELF_SERVE") {
+      return this.sendSelfServe(params, {
+        type: "contact",
+        contact: {
+          name: { formattedName: params.name, firstName: "ChegowIA" },
+          org: { company: "ChegowIA", department: "Atendimento" },
+          phones: [{ phone: params.phone, type: "WORK", wa_id: waId }],
+          urls: [{ url: "https://chegowia.com.br", type: "WORK" }],
+        },
+      });
+    }
+    return this.sendMessage(params.appId, params.appToken, {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normalizePhone(params.to),
+      type: "contacts",
+      contacts: [{
+        name: { formatted_name: params.name, first_name: "ChegowIA" },
+        org: { company: "ChegowIA", department: "Atendimento" },
+        phones: [{ phone: params.phone, type: "WORK", wa_id: waId }],
+        urls: [{ url: "https://chegowia.com.br", type: "WORK" }],
+      }],
+    });
+  }
+
+  /** Botões para 2–3 alternativas; lista nativa para 4–10 alternativas. */
+  async sendInteractiveChoices(params: GupshupSendParams & { body: string; choices: GupshupChoice[] }): Promise<GupshupSendResult> {
+    const { choices, body } = params;
+    if (choices.length < 2 || choices.length > 10) {
+      throw new Error("O menu interativo exige de 2 a 10 opções.");
+    }
+    if (this.mode() === "SELF_SERVE") {
+      if (choices.length <= 3) {
+        return this.sendSelfServe(params, {
+          type: "quick_reply",
+          content: { type: "text", text: body },
+          options: choices.map((choice) => ({ type: "text", title: choice.title, postbackText: choice.title })),
+        });
+      }
+      return this.sendSelfServe(params, {
+        type: "list",
+        body,
+        globalButtons: [{ type: "text", title: "Ver opções" }],
+        items: [{
+          title: "Escolha um assunto",
+          options: choices.map((choice) => ({
+            type: "text",
+            title: choice.title,
+            ...(choice.description ? { description: choice.description } : {}),
+            postbackText: choice.title,
+          })),
+        }],
+      });
+    }
+    return this.sendMessage(params.appId, params.appToken, {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normalizePhone(params.to),
+      type: "interactive",
+      interactive: choices.length <= 3
+        ? {
+          type: "button",
+          body: { text: body },
+          action: { buttons: choices.map((choice, index) => ({
+            type: "reply",
+            reply: { id: `option-${index + 1}`, title: choice.title },
+          })) },
+        }
+        : {
+          type: "list",
+          body: { text: body },
+          action: {
+            button: "Ver opções",
+            sections: [{
+              title: "Escolha um assunto",
+              rows: choices.map((choice, index) => ({
+                id: `option-${index + 1}`,
+                title: choice.title,
+                ...(choice.description ? { description: choice.description } : {}),
+              })),
+            }],
+          },
+        },
     });
   }
 

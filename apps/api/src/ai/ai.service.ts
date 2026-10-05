@@ -1075,7 +1075,8 @@ function looksLikeExplicitOrderConfirmation(value: string) {
     .toUpperCase()
     .replace(/[.!]/g, "")
     .replace(/\s+/g, " ");
-  return /^(?:SIM,? )?(?:PODE )?(?:CONFIRMAR|CONFIRMO)(?: (?:O )?(?:PEDIDO|COMPRA))?$/.test(normalized);
+  return /^(?:SIM,? )?(?:PODE )?(?:CONFIRMAR|CONFIRMO)(?: (?:O )?(?:PEDIDO|COMPRA))?$/.test(normalized)
+    || normalized === "CONFIRMAR COM AVISOS";
 }
 
 function automaticConfirmationText(result: any) {
@@ -1087,6 +1088,7 @@ function automaticConfirmationText(result: any) {
       `Frete: R$ ${Number(order.deliveryFee ?? 0).toFixed(2)}`,
       `Total: R$ ${Number(order.total ?? 0).toFixed(2)}`,
       "Já enviei para a equipe preparar. Obrigado pelo pedido!",
+      ...(order.whatsappNotificationsAccepted ? ["Você receberá as atualizações deste pedido por aqui."] : []),
     ].join("\n");
   }
   const summary = result.summary;

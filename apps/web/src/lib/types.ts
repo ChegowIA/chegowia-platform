@@ -276,6 +276,7 @@ export interface DeliveryQuote {
   distanceKm: number;
   durationMinutes: number;
   deliveryFee: number;
+  whatsappNotificationsAvailable?: boolean;
 }
 
 export interface Employee {
@@ -393,6 +394,14 @@ export interface MessagingChannel {
   number?: string | null;
   automationEnabled: boolean;
   welcomeMessage?: string | null;
+  orderNotifications?: {
+    configured: boolean;
+    templateId: string | null;
+    templateName: string | null;
+    languageCode: string;
+    state?: string | null;
+    error?: string | null;
+  };
   connected: boolean;
   provider: "GUPSHUP";
   gupshup: {

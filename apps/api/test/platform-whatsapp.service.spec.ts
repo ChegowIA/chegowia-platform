@@ -1,4 +1,5 @@
 import { ConflictException } from "@nestjs/common";
+import { needsHumanSupportReferral, parseSalesAssistantReply } from "../src/messaging/platform-whatsapp.service";
 import { buildPlatformWhatsAppService } from "./support/messaging-services";
 
 describe("Canal institucional do WhatsApp", () => {
@@ -41,6 +42,8 @@ describe("Canal institucional do WhatsApp", () => {
       isEnabled: jest.fn().mockReturnValue(true),
       mode: jest.fn().mockReturnValue("SELF_SERVE"),
       sendText: jest.fn().mockResolvedValue({ messageId: "gs-1", raw: {} }),
+      sendContact: jest.fn().mockResolvedValue({ messageId: "gs-contact", raw: {} }),
+      sendInteractiveChoices: jest.fn().mockResolvedValue({ messageId: "gs-choices", raw: {} }),
       ...((overrides.gupshup as Record<string, unknown>) ?? {}),
     };
     const secrets = {
@@ -53,7 +56,7 @@ describe("Canal institucional do WhatsApp", () => {
       prisma: prisma,
       gupshup: gupshup,
       secrets: secrets,
-      aiProvider: { chat: jest.fn() },
+      aiProvider: { chat: jest.fn(), ...((overrides.aiProvider as Record<string, unknown>) ?? {}) },
       realtime: realtime,
     });
     return { instance, prisma, gupshup, secrets, realtime };
@@ -136,6 +139,192 @@ describe("Canal institucional do WhatsApp", () => {
     expect(messages[0].content).toContain("R$ 159,90 por mês");
     expect(messages[0].content).toContain("https://chegowia.com.br/planos");
     expect(messages[0].content).toContain("nunca peça senha, código de verificação, token, cartão ou dado sensível");
+    expect(messages[0].content).toContain("+55 62 2590-0295");
+    expect(messages[0].content).toContain("https://wa.me/556225900295");
+    expect(messages[0].content).toContain("suporte leve");
+  });
+
+  it("encaminha pedidos explícitos de suporte humano ou avançado ao canal correto", async () => {
+    expect(needsHumanSupportReferral("Preciso de suporte técnico para uma falha no sistema")).toBe(true);
+    expect(needsHumanSupportReferral("Quero falar com um atendente da ChegowIA")).toBe(true);
+    expect(needsHumanSupportReferral("Minha cobrança está com erro")).toBe(true);
+    expect(needsHumanSupportReferral("Não consigo entrar na minha conta")).toBe(true);
+    expect(needsHumanSupportReferral("Sou pessoa jurídica e quero conhecer o plano")).toBe(false);
+
+    const { instance, gupshup } = serviceWith();
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    const persistOutbound = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+    (instance as any).persistOutbound = persistOutbound;
+    const conversation = { id: "conversa-1", customerPhone: "5562999998888" };
+    const channel = { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" };
+    await (instance as any).referToHumanSupport(conversation, channel);
+
+    expect(sendText).toHaveBeenCalledWith(
+      conversation,
+      channel,
+      expect.stringContaining("https://wa.me/556225900295"),
+      undefined,
+      "text",
+    );
+    expect(gupshup.sendContact).toHaveBeenCalledWith(expect.objectContaining({
+      to: "5562999998888",
+      phone: "+55 62 2590-0295",
+      name: "ChegowIA | Atendimento humano",
+    }));
+    expect(persistOutbound).toHaveBeenCalledWith(conversation, channel, expect.objectContaining({ type: "contact" }));
+  });
+
+  it("aceita resposta estruturada e filtra opções inválidas ou repetidas", () => {
+    expect(parseSalesAssistantReply(JSON.stringify({
+      text: "Qual tipo de operação você tem?",
+      choices: [
+        { title: "Pizzaria" },
+        { title: "pizzaria" },
+        { title: "Restaurante", description: "Atendimento e delivery" },
+      ],
+      humanSupport: false,
+    }))).toEqual({
+      text: "Qual tipo de operação você tem?",
+      choices: [{ title: "Pizzaria" }, { title: "Restaurante", description: "Atendimento e delivery" }],
+      humanSupport: false,
+    });
+    expect(parseSalesAssistantReply("Resposta em texto livre").choices).toEqual([]);
+  });
+
+  it("envia botões nativos quando a IA apresenta uma escolha real", async () => {
+    const chat = jest.fn().mockResolvedValue({ content: JSON.stringify({
+      text: "Você quer conhecer o plano ou ver como começar?",
+      choices: [{ title: "Conhecer plano" }, { title: "Como começar" }],
+      humanSupport: false,
+    }) });
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, { aiProvider: { chat } });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    const persistOutbound = jest.fn().mockResolvedValue(undefined);
+    (instance as any).persistOutbound = persistOutbound;
+    const sendText = jest.fn();
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(chat).toHaveBeenCalledWith([], undefined, { responseFormat: "json_object" });
+    expect(gupshup.sendInteractiveChoices).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [{ title: "Conhecer plano" }, { title: "Como começar" }],
+    }));
+    expect(persistOutbound).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ type: "quick_reply" }));
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("mantém opções em texto se o menu interativo falhar no provedor", async () => {
+    const { instance } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, {
+      aiProvider: { chat: jest.fn().mockResolvedValue({ content: JSON.stringify({
+        text: "Qual assunto prefere?",
+        choices: [{ title: "Plano" }, { title: "Cardápio" }],
+        humanSupport: false,
+      }) }) },
+      gupshup: { sendInteractiveChoices: jest.fn().mockRejectedValue(new Error("menu indisponível")) },
+    });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "Qual assunto prefere?\n\n1. Plano\n2. Cardápio",
+      undefined,
+      "ai",
+    );
+  });
+
+  it("acrescenta o contato oficial se a IA sinalizar atendimento humano sem o link", async () => {
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue({ id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" }),
+      },
+    }, {
+      aiProvider: { chat: jest.fn().mockResolvedValue({ content: JSON.stringify({
+        text: "Esse caso precisa de análise da equipe.",
+        choices: [{ title: "Plano" }, { title: "Cardápio" }],
+        humanSupport: true,
+      }) }) },
+    });
+    (instance as any).messagesForAssistant = jest.fn().mockResolvedValue([]);
+    (instance as any).recordPlatformAiUsage = jest.fn();
+    (instance as any).persistOutbound = jest.fn().mockResolvedValue(undefined);
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+
+    await (instance as any).answerWithSalesAssistant(
+      { id: "conversa-1" },
+      { id: "canal-1", status: "ATIVO", gupshupAppName: "institucional" },
+    );
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining("https://wa.me/556225900295"),
+      undefined,
+      "ai",
+    );
+    expect(gupshup.sendContact).toHaveBeenCalledTimes(1);
+    expect(gupshup.sendInteractiveChoices).not.toHaveBeenCalled();
+  });
+
+  it("não aciona a IA comercial quando chega um pedido de suporte avançado pelo webhook", async () => {
+    const conversation = { id: "conversa-1", customerPhone: "5562999998888", mode: "VIRTUAL" };
+    const platformMessages = {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: "mensagem-1" }),
+    };
+    const { instance, gupshup } = serviceWith({
+      platformWhatsAppMessage: platformMessages,
+      platformWhatsAppConversation: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue(conversation),
+      },
+      platformOutreachTarget: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    const sendText = jest.fn().mockResolvedValue(undefined);
+    (instance as any).sendText = sendText;
+    (instance as any).persistOutbound = jest.fn().mockResolvedValue(undefined);
+    const answerWithSalesAssistant = jest.spyOn(instance as any, "answerWithSalesAssistant");
+
+    await (instance as any).processIncomingMessage(
+      { id: "canal-1", automationEnabled: true, status: "ATIVO", gupshupAppName: "institucional" },
+      [],
+      { id: "wamid-suporte", from: "5562999998888", type: "text", text: { body: "Preciso de suporte avançado" } },
+      {},
+    );
+
+    expect(platformMessages.create).toHaveBeenCalledTimes(1);
+    expect(sendText).toHaveBeenCalledWith(
+      conversation,
+      expect.objectContaining({ id: "canal-1" }),
+      expect.stringContaining("+55 62 2590-0295"),
+      undefined,
+      "text",
+    );
+    expect(answerWithSalesAssistant).not.toHaveBeenCalled();
+    expect(gupshup.sendContact).toHaveBeenCalledTimes(1);
   });
 
   it("contabiliza a IA comercial como custo da plataforma, sem companyId", async () => {

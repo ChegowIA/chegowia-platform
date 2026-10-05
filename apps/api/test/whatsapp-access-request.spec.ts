@@ -23,6 +23,7 @@ describe("pedido de acesso ao WhatsApp", () => {
     const service = buildMessagingService({
       prisma: prisma,
       secrets: { isConfigured: jest.fn().mockReturnValue(true) },
+      gupshup: { mode: () => "SELF_SERVE" },
       mail: mail,
       realtime: realtime,
     });

@@ -3,10 +3,12 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   ValidateNested,
 } from "class-validator";
@@ -50,6 +52,7 @@ export class CreateOrderItemDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
 }
 
 export class CreateOrderDto {
@@ -65,6 +68,16 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /** Consentimento opcional e específico para avisos deste pedido. */
+  @IsOptional()
+  @IsBoolean()
+  whatsappNotificationsAccepted?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  whatsappPhone?: string;
 
   @IsArray()
   @ArrayMinSize(1)

@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { createHash } from "node:crypto";
-import { DeliveryStatus, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role, WhatsAppOrderDraftStatus } from "@prisma/client";
+import { DeliveryStatus, MessagingChannelStatus, MessagingChannelType, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role, WhatsAppOrderDraftStatus } from "@prisma/client";
 import { ORDER_STATUS_FLOW } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { businessDayRange, dateKeyInTimeZone, formatDateKey } from "../common/utils/business-date";
@@ -23,6 +23,7 @@ import { CreateOrderDto } from "./dto/create-order.dto";
 import { DeliveryQuoteDto } from "./dto/delivery-quote.dto";
 import { LOJA_INDISPONIVEL_POR_ASSINATURA, assinaturaDentroDaCarencia } from "../common/public-visibility/subscription-grace";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
+import { normalizarTelefoneBrasileiro } from "../messaging/outreach-contacts";
 
 const ORDER_INCLUDE = {
   items: true,
@@ -43,6 +44,7 @@ export interface DeliveryQuote {
   distanceKm: number;
   durationMinutes: number;
   deliveryFee: number;
+  whatsappNotificationsAvailable?: boolean;
 }
 
 /**
@@ -189,6 +191,14 @@ export class OrdersService {
     if (!address) throw new NotFoundException("Endereço não encontrado.");
     this.assertCompanyCanReceiveOrder(company, dto.paymentMethod);
     const deliveryQuote = await this.calculateDeliveryQuote(company, address);
+    const wantsWhatsApp = dto.whatsappNotificationsAccepted === true;
+    const notificationPhone = wantsWhatsApp ? normalizarTelefoneBrasileiro(dto.whatsappPhone ?? "") : null;
+    if (wantsWhatsApp && (!notificationPhone || notificationPhone.length !== 13)) {
+      throw new BadRequestException("Informe um celular brasileiro válido para receber os avisos pelo WhatsApp.");
+    }
+    if (wantsWhatsApp && !(await this.orderUpdateTemplateAvailable(company.id))) {
+      throw new BadRequestException("Os avisos pelo WhatsApp não estão disponíveis para esta loja no momento. Desmarque a opção para continuar.");
+    }
 
     return tenantContext.runAsCompany(company.id, async () => {
       // O checkout do site usa a mesma resolução confiável do WhatsApp: o
@@ -200,9 +210,12 @@ export class OrdersService {
       const deliveryFee = deliveryQuote.deliveryFee;
       const total = this.roundCurrency(subtotal + deliveryFee);
 
-      const order = await this.db().order.create({
-        data: {
+      const order = await this.db().$transaction(async (tx: any) => {
+        const created = await tx.order.create({
+          data: {
           customerId,
+          customerPhone: notificationPhone,
+          whatsappNotificationConsentAt: notificationPhone ? new Date() : null,
           addressId: address.id,
           deliveryStreet: address.street,
           deliveryNumber: address.number,
@@ -222,14 +235,20 @@ export class OrdersService {
           statusHistory: { create: { status: OrderStatus.RECEBIDO, changedByUserId: customerId } },
           delivery: { create: { companyId: company.id } },
           payment: { create: { companyId: company.id, method: dto.paymentMethod, amount: total } },
-        },
-        include: ORDER_INCLUDE,
-      });
-
-      await this.db().customerProfile.upsert({
-        where: { userId_companyId: { userId: customerId, companyId: company.id } },
-        create: { userId: customerId, companyId: company.id, totalOrders: 1, lastOrderAt: new Date() },
-        update: { totalOrders: { increment: 1 }, lastOrderAt: new Date() },
+          },
+          include: ORDER_INCLUDE,
+        });
+        await tx.customerProfile.upsert({
+          where: { userId_companyId: { userId: customerId, companyId: company.id } },
+          create: { userId: customerId, companyId: company.id, totalOrders: 1, lastOrderAt: new Date() },
+          update: { totalOrders: { increment: 1 }, lastOrderAt: new Date() },
+        });
+        if (notificationPhone) {
+          await tx.orderWhatsAppNotification.create({
+            data: { companyId: company.id, orderId: created.id, orderStatus: OrderStatus.RECEBIDO, phone: notificationPhone },
+          });
+        }
+        return created;
       });
 
       this.realtime.emitToCompany(company.id, "order.created", order);
@@ -257,7 +276,10 @@ export class OrdersService {
     }
     const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });
     if (!address) throw new NotFoundException("Endereço não encontrado.");
-    return this.calculateDeliveryQuote(company, address);
+    return {
+      ...await this.calculateDeliveryQuote(company, address),
+      whatsappNotificationsAvailable: await this.orderUpdateTemplateAvailable(company.id),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -321,6 +343,7 @@ export class OrdersService {
       conversationId: string;
       customerName: string;
       customerPhone: string;
+      whatsappNotificationsAccepted?: boolean;
       items: TrustedOrderItemInput[];
       address: WhatsAppDeliveryAddress;
       paymentMethod: PaymentMethod;
@@ -344,6 +367,7 @@ export class OrdersService {
               customerId: null,
               customerName: input.customerName,
               customerPhone: input.customerPhone,
+              whatsappNotificationConsentAt: input.whatsappNotificationsAccepted ? new Date() : null,
               source: OrderSource.WHATSAPP,
               whatsappConversationId: input.conversationId,
               whatsappOrderDraftId: input.draftId,
@@ -584,6 +608,11 @@ export class OrdersService {
         throw new ConflictException("O status deste pedido mudou enquanto você confirmava. Recarregue e tente de novo.");
       }
       await tx.orderStatusHistory.create({ data: { orderId: id, status: nextStatus, changedByUserId } });
+      if (order.customerPhone && (order.source === OrderSource.WHATSAPP || order.whatsappNotificationConsentAt)) {
+        await tx.orderWhatsAppNotification.create({
+          data: { companyId: order.companyId, orderId: id, orderStatus: nextStatus, phone: order.customerPhone },
+        });
+      }
       if (deliveryStatus && order.delivery) {
         await tx.delivery.update({
           where: { orderId: id },
@@ -631,6 +660,21 @@ export class OrdersService {
     if (nextIndex !== currentIndex + 1) {
       throw new BadRequestException(`Transição de status inválida: ${current} -> ${next}.`);
     }
+  }
+
+  async orderUpdateTemplateAvailable(companyId: string): Promise<boolean> {
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    const config = channel?.config && typeof channel.config === "object" ? channel.config : {};
+    return Boolean(
+      process.env.GUPSHUP_ENABLED === "true"
+      && channel?.status === MessagingChannelStatus.ATIVO
+      && channel.gupshupAppName
+      && (process.env.GUPSHUP_MODE !== "PARTNER" || channel.gupshupAppId)
+      && (process.env.GUPSHUP_MODE === "PARTNER" || config.number)
+      && (process.env.GUPSHUP_MODE === "PARTNER" ? config.orderUpdateTemplateName : config.orderUpdateTemplateId),
+    );
   }
 
   private assertCompanyCanReceiveOrder(company: any, paymentMethod: any) {

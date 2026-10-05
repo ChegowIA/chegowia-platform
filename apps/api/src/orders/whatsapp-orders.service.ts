@@ -223,6 +223,7 @@ export class WhatsAppOrdersService {
       const context = await this.getContext(companyId, aiConversationId);
       this.assertDraftEditable(context.draft);
       const checkout = await this.buildCheckout(context);
+      const updatesAvailable = await this.orders.orderUpdateTemplateAvailable(companyId);
       const snapshot = proposalSnapshot(checkout);
       const draft = await this.saveDraft(context, {
         status: WhatsAppOrderDraftStatus.AGUARDANDO_CONFIRMACAO,
@@ -234,7 +235,11 @@ export class WhatsAppOrdersService {
       this.emitDraftUpdated(companyId, context.conversation.id, draft);
       return {
         ...this.proposalResult(snapshot, draft.status),
-        nextStep: "Peça para o cliente responder exatamente CONFIRMAR. Não crie o pedido antes dessa resposta.",
+        nextStep: updatesAvailable
+          ? "Peça para o cliente responder CONFIRMAR para finalizar sem avisos fora da janela de atendimento, ou CONFIRMAR COM AVISOS para autorizar atualizações deste pedido pelo WhatsApp, sem ofertas. Não crie o pedido antes dessa resposta."
+          : "Peça para o cliente responder exatamente CONFIRMAR. Avisos fora da janela de atendimento não estão disponíveis nesta loja. Não crie o pedido antes dessa resposta.",
+        orderUpdatesAvailable: updatesAvailable,
+        ...(updatesAvailable ? { notificationKeyword: "CONFIRMAR COM AVISOS" } : {}),
       };
     });
   }
@@ -253,11 +258,18 @@ export class WhatsAppOrdersService {
       if (!hasExplicitConfirmation(customerMessage)) {
         return {
           confirmed: false,
-          message: "Ainda não criei o pedido. Para autorizar a compra, peça que o cliente responda exatamente CONFIRMAR após receber o resumo.",
+          message: "Ainda não criei o pedido. Após o resumo, peça ao cliente que use uma das opções de confirmação apresentadas.",
         };
       }
       if (context.draft.status !== WhatsAppOrderDraftStatus.AGUARDANDO_CONFIRMACAO || !context.draft.quoteFingerprint) {
         throw new BadRequestException("Mostre o resumo atualizado e peça CONFIRMAR antes de finalizar o pedido.");
+      }
+      if (wantsOrderNotifications(customerMessage) && !(await this.orders.orderUpdateTemplateAvailable(companyId))) {
+        return {
+          confirmed: false,
+          requiresNewConfirmation: true,
+          message: "Avisos pelo WhatsApp não estão disponíveis nesta loja. Para finalizar sem essa opção, responda CONFIRMAR.",
+        };
       }
 
       const checkout = await this.buildCheckout(context);
@@ -285,6 +297,7 @@ export class WhatsAppOrdersService {
           conversationId: context.conversation.id,
           customerName: this.customerNameFor(context),
           customerPhone: context.conversation.customerPhone,
+          whatsappNotificationsAccepted: wantsOrderNotifications(customerMessage),
           items: readCart(context.draft.cart),
           address: addressFromDraft(context.draft),
           paymentMethod: normalizePaymentMethod(context.draft.paymentMethod),
@@ -750,14 +763,23 @@ function nextSteps(draft: any, cartSize: number) {
 }
 
 function hasExplicitConfirmation(value: string) {
-  const normalized = String(value ?? "")
+  const normalized = normalizedConfirmation(value);
+  return /^(?:SIM,? )?(?:PODE )?(?:CONFIRMAR|CONFIRMO)(?: (?:O )?(?:PEDIDO|COMPRA))?$/.test(normalized)
+    || normalized === "CONFIRMAR COM AVISOS";
+}
+
+function wantsOrderNotifications(value: string) {
+  return normalizedConfirmation(value) === "CONFIRMAR COM AVISOS";
+}
+
+function normalizedConfirmation(value: string) {
+  return String(value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toUpperCase()
     .replace(/[.!]/g, "")
     .replace(/\s+/g, " ");
-  return /^(?:SIM,? )?(?:PODE )?(?:CONFIRMAR|CONFIRMO)(?: (?:O )?(?:PEDIDO|COMPRA))?$/.test(normalized);
 }
 
 function orderResult(order: any, created: boolean) {
@@ -776,6 +798,7 @@ function orderResult(order: any, created: boolean) {
       distanceKm: order.deliveryDistanceKm === null || order.deliveryDistanceKm === undefined ? null : Number(order.deliveryDistanceKm),
       durationMinutes: order.deliveryRouteDurationMinutes ?? null,
       total: Number(order.total),
+      whatsappNotificationsAccepted: Boolean(order.whatsappNotificationConsentAt),
       paymentMethod: order.paymentMethod,
       items: (order.items ?? []).map((item: any) => ({
         name: item.productName,

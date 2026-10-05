@@ -205,13 +205,13 @@ export const WHATSAPP_ORDER_TOOLS: AIToolDefinition[] = [
   {
     name: "prepareWhatsAppOrderConfirmation",
     description:
-      "Calcula e congela um resumo atualizado com itens, rota, frete e total. Chame somente depois de ter itens, nome, endereço e pagamento. Após o resultado, peça a palavra exata CONFIRMAR e não crie o pedido ainda.",
+      "Calcula e congela um resumo atualizado com itens, rota, frete e total. Chame somente depois de ter itens, nome, endereço e pagamento. Após o resultado, siga nextStep: peça CONFIRMAR ou, se orderUpdatesAvailable for true, ofereça também CONFIRMAR COM AVISOS para atualizações deste pedido sem ofertas. Não crie o pedido ainda.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "confirmWhatsAppOrder",
     description:
-      "Tenta criar o pedido somente quando a mensagem atual do cliente contiver confirmação explícita (CONFIRMAR, CONFIRMO ou PODE CONFIRMAR) e um resumo vigente já tiver sido apresentado. Nunca chame apenas porque o cliente disse oi, sim genérico ou pediu orçamento.",
+      "Tenta criar o pedido somente quando a mensagem atual do cliente contiver confirmação explícita (CONFIRMAR, CONFIRMO, PODE CONFIRMAR ou CONFIRMAR COM AVISOS) e um resumo vigente já tiver sido apresentado. A última opção autoriza avisos deste pedido, sem ofertas. Nunca chame apenas porque o cliente disse oi, sim genérico ou pediu orçamento.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
 ];

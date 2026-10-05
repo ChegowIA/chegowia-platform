@@ -128,6 +128,7 @@ describe("checkout automatizado pelo WhatsApp", () => {
         longitude: -43.94,
       }),
       prepareWhatsAppCheckout: jest.fn().mockResolvedValue(checkout()),
+      orderUpdateTemplateAvailable: jest.fn().mockResolvedValue(true),
       createWhatsAppOrder: jest.fn().mockResolvedValue({
         created: true,
         order: {
@@ -201,6 +202,26 @@ describe("checkout automatizado pelo WhatsApp", () => {
     expect(orders.createWhatsAppOrder).not.toHaveBeenCalled();
   });
 
+  it("só oferece autorização de avisos se a loja tiver modelo configurado", async () => {
+    const prepared = checkout();
+    const { service, orders } = whatsappService(draft({
+      cart: [{ id: "linha-1", productId: "produto-alfa", quantity: 2, variationId: null, addonIds: [], notes: null }],
+      addressStreet: prepared.address.street,
+      addressNumber: prepared.address.number,
+      addressNeighborhood: prepared.address.neighborhood,
+      addressCity: prepared.address.city,
+      addressState: prepared.address.state,
+      addressZipCode: prepared.address.zipCode,
+      paymentMethod: prepared.paymentMethod,
+    }));
+    orders.orderUpdateTemplateAvailable.mockResolvedValueOnce(false);
+
+    const proposal = await service.prepareConfirmation(companyId, aiConversationId);
+
+    expect(proposal.orderUpdatesAvailable).toBe(false);
+    expect(proposal.nextStep).not.toContain("CONFIRMAR COM AVISOS");
+  });
+
   it("cria o pedido com o telefone da conversa e sem conta/login do cliente", async () => {
     const prepared = checkout();
     const { service, orders, state } = whatsappService(draft({
@@ -223,10 +244,33 @@ describe("checkout automatizado pelo WhatsApp", () => {
       conversationId: conversation.id,
       customerName: "Ana",
       customerPhone: conversation.customerPhone,
+      whatsappNotificationsAccepted: false,
       expectedFingerprint: whatsappCheckoutFingerprint(prepared),
     }));
     expect(state.draft.status).toBe(WhatsAppOrderDraftStatus.CONCLUIDO);
     expect(result).toMatchObject({ confirmed: true, created: true, order: { id: "pedido-whatsapp-1" } });
+  });
+
+  it("registra autorização específica ao confirmar o pedido com avisos", async () => {
+    const prepared = checkout();
+    const { service, orders } = whatsappService(draft({
+      status: WhatsAppOrderDraftStatus.AGUARDANDO_CONFIRMACAO,
+      cart: [{ id: "linha-1", productId: "produto-alfa", quantity: 2, variationId: null, addonIds: [], notes: null }],
+      addressStreet: prepared.address.street,
+      addressNumber: prepared.address.number,
+      addressNeighborhood: prepared.address.neighborhood,
+      addressCity: prepared.address.city,
+      addressState: prepared.address.state,
+      addressZipCode: prepared.address.zipCode,
+      paymentMethod: prepared.paymentMethod,
+      quoteFingerprint: whatsappCheckoutFingerprint(prepared),
+    }));
+
+    await service.confirmOrder(companyId, aiConversationId, "CONFIRMAR COM AVISOS");
+
+    expect(orders.createWhatsAppOrder).toHaveBeenCalledWith(companyId, expect.objectContaining({
+      whatsappNotificationsAccepted: true,
+    }));
   });
 
   it("abre um novo carrinho depois de concluir, sem reutilizar o rascunho já ligado ao pedido anterior", async () => {
@@ -266,6 +310,7 @@ describe("checkout automatizado pelo WhatsApp", () => {
       conversationId: conversation.id,
       customerName: "Ana",
       customerPhone: conversation.customerPhone,
+      whatsappNotificationsAccepted: true,
       items: [],
       address: prepared.address,
       paymentMethod: prepared.paymentMethod,
@@ -278,6 +323,7 @@ describe("checkout automatizado pelo WhatsApp", () => {
         customerId: null,
         customerName: "Ana",
         customerPhone: conversation.customerPhone,
+        whatsappNotificationConsentAt: expect.any(Date),
         source: OrderSource.WHATSAPP,
         whatsappConversationId: conversation.id,
         whatsappOrderDraftId: "rascunho-alfa",
@@ -312,7 +358,7 @@ describe("checkout automatizado pelo WhatsApp", () => {
     expect(tools.confirmWhatsAppOrder).not.toHaveBeenCalled();
   });
 
-  it("usa confirmação determinística no WhatsApp em vez de depender da decisão do provedor de IA", async () => {
+  it.each(["CONFIRMAR", "CONFIRMAR COM AVISOS"])("usa confirmação determinística para %s", async (confirmation) => {
     const createdMessages: any[] = [];
     const prisma: any = {
       aIConversation: {
@@ -351,9 +397,9 @@ describe("checkout automatizado pelo WhatsApp", () => {
     };
     const ai = new AiService(prisma as never, provider as never, {} as never, tools as never, {} as never, {} as never);
 
-    const result = await ai.sendMessage(aiConversationId, "CONFIRMAR");
+    const result = await ai.sendMessage(aiConversationId, confirmation);
 
-    expect(tools.confirmWhatsAppOrder).toHaveBeenCalledWith(companyId, aiConversationId, "CONFIRMAR");
+    expect(tools.confirmWhatsAppOrder).toHaveBeenCalledWith(companyId, aiConversationId, confirmation);
     expect(provider.chat).not.toHaveBeenCalled();
     expect(result.message.content).toContain("Pedido #IDO-001 confirmado");
     expect(createdMessages).toHaveLength(2);

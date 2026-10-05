@@ -13,6 +13,7 @@ import { ConnectWhatsAppGupshupDto } from "./dto/connect-whatsapp-gupshup.dto";
 import { SendWhatsAppMessageDto } from "./dto/send-whatsapp-message.dto";
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
+import { UpdateOrderWhatsAppTemplateDto } from "./dto/update-order-whatsapp-template.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { MessagingService } from "./messaging.service";
 import { OptionalJwtAuthGuard } from "../common/guards/jwt-auth.guard";
@@ -113,6 +114,19 @@ export class MessagingController {
   @Get("companies/:companyId/whatsapp")
   getCompanyChannel(@Param("companyId") companyId: string) {
     return this.messagingService.getWhatsappChannel(companyId);
+  }
+
+  @Roles(Role.SUPER_ADMIN)
+  @Put("companies/:companyId/whatsapp/order-notifications")
+  updateOrderNotificationsTemplate(@Param("companyId") companyId: string, @Body() dto: UpdateOrderWhatsAppTemplateDto) {
+    return this.messagingService.updateOrderNotificationsTemplate(companyId, dto);
+  }
+
+  @Roles(Role.SUPER_ADMIN)
+  @Post("companies/:companyId/whatsapp/order-notifications/sync")
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  syncOrderNotificationsTemplate(@Param("companyId") companyId: string) {
+    return this.messagingService.syncOrderNotificationsTemplate(companyId);
   }
 
   @Roles(Role.ADMIN)

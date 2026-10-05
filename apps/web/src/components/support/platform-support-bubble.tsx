@@ -15,6 +15,7 @@ import { FloatingAssistantChat } from "@/components/ai/floating-assistant-chat";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
+import { HumanSupportWhatsAppLink } from "@/components/support/human-support-whatsapp-link";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/auth-store";
 import { connectSocket } from "@/lib/socket-client";
@@ -277,6 +278,7 @@ export function PlatformSupportBubble() {
               {visibleError && <p className="mx-3 mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">{visibleError}</p>}
 
               <div className="shrink-0 border-t border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                <HumanSupportWhatsAppLink className="mb-2" />
                 {conversation.mode === PlatformSupportConversationMode.IA && (
                   <Button
                     type="button"
@@ -400,6 +402,7 @@ function SupportUnavailable() {
       <span className="grid h-14 w-14 place-items-center rounded-2xl bg-amber-50 text-2xl dark:bg-amber-950/35">🛟</span>
       <p className="mt-5 text-xl font-black text-slate-950 dark:text-slate-100">Não foi possível abrir o suporte</p>
       <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">O restante do sistema continua disponível. Reabra este painel para tentar conectar ao atendimento novamente.</p>
+      <HumanSupportWhatsAppLink className="mt-5" />
       <button type="button" className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-black text-white shadow-[0_8px_24px_-12px_rgba(234,88,12,.8)] transition hover:bg-brand-700" onClick={() => window.location.reload()}>
         Tentar novamente
       </button>
@@ -413,6 +416,7 @@ function AnonymousSupport() {
       <span className="grid h-14 w-14 place-items-center rounded-2xl bg-brand-50 text-2xl dark:bg-brand-950/35">💬</span>
       <p className="mt-5 text-xl font-black text-slate-950 dark:text-slate-100">Suporte que já sabe quem você é</p>
       <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">Entre na sua conta para conversar com a IA de suporte ou pedir uma pessoa da equipe. Assim o atendimento chega com o contexto correto e seguro.</p>
+      <HumanSupportWhatsAppLink className="mt-5" />
       <Link href="/acesso" className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-brand-600 px-4 py-2.5 text-sm font-black text-white shadow-[0_8px_24px_-12px_rgba(234,88,12,.8)] transition hover:bg-brand-700">Entrar para falar com o suporte</Link>
     </div>
   );
@@ -431,7 +435,7 @@ function SuperAdminSupport() {
 
 function SupportChoice({ error, loading, onAi, onHuman, onRetry }: { error: string | null; loading: boolean; onAi: () => void; onHuman: () => void; onRetry: () => void }) {
   return (
-    <div className="flex h-full min-h-0 flex-col justify-center p-5">
+    <div className="flex h-full min-h-0 flex-col justify-start overflow-y-auto overscroll-contain p-5 sm:justify-center">
       <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-600 dark:text-brand-300">Você escolhe o atendimento</p>
       <h3 className="mt-2 text-xl font-black tracking-tight text-slate-950 dark:text-slate-100">Como prefere falar com a ChegowIA?</h3>
       <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">A IA resolve dúvidas rapidamente. Se preferir, encaminhamos direto para uma pessoa da equipe.</p>
@@ -443,6 +447,7 @@ function SupportChoice({ error, loading, onAi, onHuman, onRetry }: { error: stri
           <span className="flex items-start gap-3"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-600 text-lg text-white">🤝</span><span><span className="block text-sm font-black text-slate-950 dark:text-slate-100">Falar com uma pessoa</span><span className="mt-1 block text-xs leading-5 text-slate-600 dark:text-slate-300">A IA avisa a equipe e deixa a conversa em modo humano.</span></span></span>
         </button>
       </div>
+      <HumanSupportWhatsAppLink className="mt-3" />
       {error && (
         <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 dark:border-rose-900/60 dark:bg-rose-950/30">
           <p className="text-xs font-semibold text-rose-700 dark:text-rose-200">{error}</p>

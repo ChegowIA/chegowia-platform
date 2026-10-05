@@ -101,6 +101,8 @@ function CheckoutForm() {
   const [addressId, setAddressId] = useState<string>("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.DINHEIRO);
   const [notes, setNotes] = useState("");
+  const [whatsappNotificationsAccepted, setWhatsappNotificationsAccepted] = useState(false);
+  const [whatsappPhone, setWhatsappPhone] = useState("");
   const [showAddressForm, setShowAddressForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -137,6 +139,8 @@ function CheckoutForm() {
         addressId,
         paymentMethod,
         notes: notes || undefined,
+        whatsappNotificationsAccepted: Boolean(deliveryQuote.data?.whatsappNotificationsAvailable && whatsappNotificationsAccepted),
+        whatsappPhone: whatsappNotificationsAccepted ? whatsappPhone : undefined,
         items: items.map((i) => ({
           productId: i.productId,
           quantity: i.quantity,
@@ -159,6 +163,13 @@ function CheckoutForm() {
     if (!addressId) {
       setFormError("Selecione ou cadastre um endereço de entrega.");
       return;
+    }
+    if (deliveryQuote.data?.whatsappNotificationsAvailable && whatsappNotificationsAccepted) {
+      const phone = whatsappPhone.replace(/\D/g, "");
+      if (phone.length !== 11 || phone[2] !== "9") {
+        setFormError("Informe um celular com DDD para receber os avisos pelo WhatsApp.");
+        return;
+      }
     }
     createOrder.mutate();
   }
@@ -244,6 +255,23 @@ function CheckoutForm() {
           </Select>
         </CardContent>
       </Card>
+
+      {deliveryQuote.data?.whatsappNotificationsAvailable && (
+        <Card>
+            <CardHeader><CardTitle>Acompanhar pelo WhatsApp</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100">
+                <input type="checkbox" className="mt-1 size-4 accent-emerald-600" checked={whatsappNotificationsAccepted} onChange={(event) => setWhatsappNotificationsAccepted(event.target.checked)} />
+                <span><strong className="block">Quero receber atualizações deste pedido</strong><span className="mt-1 block text-xs leading-5">A loja enviará avisos de andamento para o número abaixo. É opcional e não inclui ofertas.</span></span>
+              </label>
+              {whatsappNotificationsAccepted && (
+                <FormField label="Seu celular com WhatsApp e DDD">
+                  <MaskedInput mask="phone" type="tel" autoComplete="tel-national" placeholder="(62) 99999-9999" value={whatsappPhone} onChange={(event) => setWhatsappPhone(event.target.value)} />
+                </FormField>
+              )}
+            </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

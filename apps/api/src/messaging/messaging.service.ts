@@ -5,6 +5,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
   UnauthorizedException,
 } from "@nestjs/common";
 import {
@@ -32,6 +34,7 @@ import {
 import { UpdateWhatsAppAutomationDto } from "./dto/update-whatsapp-automation.dto";
 import { UpdateWhatsAppProfileDto } from "./dto/update-whatsapp-profile.dto";
 import { UpdateWhatsAppConversationDto } from "./dto/update-whatsapp-conversation.dto";
+import { UpdateOrderWhatsAppTemplateDto } from "./dto/update-order-whatsapp-template.dto";
 import { MessagingSecretsService } from "./messaging-secrets.service";
 import { MailService } from "../common/mail/mail.service";
 import { LocalStorageService } from "../common/storage/local-storage.service";
@@ -41,11 +44,15 @@ import { MESSAGING_PROVIDER, MessagingProvider } from "./providers/messaging-pro
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 import { PlatformWhatsAppService } from "./platform-whatsapp.service";
+import { ORDER_UPDATE_TEMPLATE } from "./order-update-template";
+import { runsBackgroundJobs } from "../common/config/app-role";
 
 
 @Injectable()
-export class MessagingService {
+export class MessagingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessagingService.name);
+  private templateTimer?: NodeJS.Timeout;
+  private checkingTemplates = false;
 
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
@@ -63,6 +70,47 @@ export class MessagingService {
 
   private db() {
     return this.prisma as any;
+  }
+
+  onModuleInit() {
+    if (!runsBackgroundJobs()) return;
+    this.templateTimer = setInterval(() => void this.refreshPendingOrderTemplates(), 10 * 60_000);
+    this.templateTimer.unref();
+  }
+
+  onModuleDestroy() {
+    if (this.templateTimer) clearInterval(this.templateTimer);
+  }
+
+  private async refreshPendingOrderTemplates() {
+    if (this.checkingTemplates || !this.gupshup.isEnabled()) return;
+    this.checkingTemplates = true;
+    try {
+      for (let offset = 0; ; offset += 100) {
+        const channels = await tenantContext.run({ companyId: null, bypass: true }, () =>
+          this.db().messagingChannel.findMany({
+            where: { type: MessagingChannelType.WHATSAPP, provider: WhatsAppProvider.GUPSHUP, gupshupAppId: { not: null } },
+            select: { companyId: true, config: true },
+            orderBy: { id: "asc" },
+            take: 100,
+            skip: offset,
+          }),
+        );
+        for (const channel of channels) {
+          if (!["PENDING", "ERROR"].includes(channelConfig(channel).orderUpdateTemplateState)) continue;
+          await tenantContext.runAsCompany(channel.companyId, () =>
+            this.syncOrderNotificationsTemplate(channel.companyId).catch((error) => {
+              this.logger.warn(`Não foi possível verificar a aprovação do modelo da empresa ${channel.companyId}: ${String(error)}`);
+            }),
+          );
+        }
+        if (channels.length < 100) break;
+      }
+    } catch (error) {
+      this.logger.warn(`Falha ao consultar modelos pendentes: ${String(error)}`);
+    } finally {
+      this.checkingTemplates = false;
+    }
   }
 
   async getWhatsappChannel(companyId: string) {
@@ -312,8 +360,11 @@ export class MessagingService {
     const current = await this.db().messagingChannel.findUnique({
       where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
     });
+    const changedApp = Boolean(current?.gupshupAppId && dto.appId && current.gupshupAppId !== dto.appId.trim())
+      || Boolean(current?.gupshupAppName && current.gupshupAppName !== appName);
     const config = {
       ...channelConfig(current),
+      ...(changedApp ? emptyOrderTemplateConfig() : {}),
       ...(number ? { number } : {}),
       ...(dto.signupLink ? { gupshupSignupLink: dto.signupLink.trim() } : {}),
       // Só grava se alguém informou: um vínculo histórico salvo antes do modo
@@ -341,6 +392,9 @@ export class MessagingService {
           where: { id: companyId, whatsapp: null },
           data: { whatsapp: number },
         });
+      }
+      if (number && channel.gupshupAppId) {
+        return this.provisionOrderTemplateWithoutBlocking(companyId, channel);
       }
       return this.channelSummary(channel);
     } catch (error) {
@@ -384,6 +438,7 @@ export class MessagingService {
         where: { id: companyId, whatsapp: null },
         data: { whatsapp: phone },
       });
+      return this.provisionOrderTemplateWithoutBlocking(companyId, updated);
     }
     return this.channelSummary(updated);
   }
@@ -505,6 +560,100 @@ export class MessagingService {
       },
     });
     return this.channelSummary(updated);
+  }
+
+  async updateOrderNotificationsTemplate(companyId: string, dto: UpdateOrderWhatsAppTemplateDto) {
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    if (!channel) throw new NotFoundException("Vincule primeiro o WhatsApp da empresa.");
+    const updated = await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: {
+        config: {
+          ...channelConfig(channel),
+          orderUpdateTemplateId: dto.templateId?.trim() || null,
+          orderUpdateTemplateName: dto.templateName?.trim() || null,
+          orderUpdateTemplateLanguage: dto.languageCode?.trim() || "pt_BR",
+          orderUpdateTemplateState: dto.templateId || dto.templateName ? "MANUAL" : null,
+          orderUpdateTemplateError: null,
+        },
+      },
+    });
+    return this.channelSummary(updated);
+  }
+
+  /** Cria (uma vez) ou consulta o modelo padrão no WABA da loja. */
+  async syncOrderNotificationsTemplate(companyId: string) {
+    if (!this.gupshup.isEnabled()) {
+      throw new BadRequestException("A integração do Gupshup não está habilitada.");
+    }
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP || !channel.gupshupAppId
+      || channel.status !== MessagingChannelStatus.ATIVO) {
+      throw new BadRequestException("Conecte primeiro o aplicativo e o número WhatsApp desta empresa.");
+    }
+    const config = channelConfig(channel);
+    // Uma configuração manual antiga pode ter conteúdo diferente. Não a
+    // substituímos sem o operador pedir explicitamente.
+    if (config.orderUpdateTemplateState === "MANUAL"
+      || (!config.orderUpdateTemplateState && (config.orderUpdateTemplateId || config.orderUpdateTemplateName))) {
+      return this.channelSummary(channel);
+    }
+    const appToken = await this.gupshupAppTokenFor(channel);
+    let templates = await this.gupshup.listTemplates({ appId: channel.gupshupAppId, appToken });
+    let template = templates.find((item) => item.name === ORDER_UPDATE_TEMPLATE.name
+      && item.languageCode.toLowerCase() === ORDER_UPDATE_TEMPLATE.languageCode.toLowerCase());
+    if (!template) {
+      try {
+        template = await this.gupshup.createUtilityTemplate({
+          appId: channel.gupshupAppId,
+          appToken,
+          name: ORDER_UPDATE_TEMPLATE.name,
+          languageCode: ORDER_UPDATE_TEMPLATE.languageCode,
+          content: ORDER_UPDATE_TEMPLATE.body,
+          example: ORDER_UPDATE_TEMPLATE.example,
+        });
+      } catch (error) {
+        // Outra réplica pode tê-lo criado entre a consulta e o POST.
+        templates = await this.gupshup.listTemplates({ appId: channel.gupshupAppId, appToken });
+        template = templates.find((item) => item.name === ORDER_UPDATE_TEMPLATE.name
+          && item.languageCode.toLowerCase() === ORDER_UPDATE_TEMPLATE.languageCode.toLowerCase());
+        if (!template) throw error;
+      }
+    }
+    const valid = template.category.toUpperCase() === "UTILITY"
+      && Boolean(template.content?.includes(ORDER_UPDATE_TEMPLATE.body));
+    const approved = valid && template.status.toUpperCase() === "APPROVED";
+    const state = !valid ? "INVALID" : approved ? "APPROVED" : template.status.toUpperCase() || "PENDING";
+    const updated = await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: { config: {
+        ...config,
+        orderUpdateTemplateId: approved ? template.id : null,
+        orderUpdateTemplateName: approved ? template.name : null,
+        orderUpdateTemplateLanguage: ORDER_UPDATE_TEMPLATE.languageCode,
+        orderUpdateTemplateState: state,
+        orderUpdateTemplateError: valid ? null : "O modelo existente tem conteúdo ou categoria diferente do padrão ChegowIA.",
+      } },
+    });
+    return this.channelSummary(updated);
+  }
+
+  private async provisionOrderTemplateWithoutBlocking(companyId: string, channel: any) {
+    try {
+      return await this.syncOrderNotificationsTemplate(companyId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message.slice(0, 300) : "Falha ao solicitar o modelo no Gupshup.";
+      this.logger.warn(`Modelo de pedido da empresa ${companyId} pendente: ${message}`);
+      const updated = await this.db().messagingChannel.update({
+        where: { id: channel.id },
+        data: { config: { ...channelConfig(channel), orderUpdateTemplateState: "ERROR", orderUpdateTemplateError: message } },
+      });
+      return this.channelSummary(updated);
+    }
   }
 
   webhookSetup() {
@@ -1095,6 +1244,24 @@ export class MessagingService {
         rawPayload,
       },
     });
+    if (existing.type === "order_update" || existing.type === "order_update_template") {
+      const notificationState = mappedStatus === WhatsAppMessageStatus.FALHOU
+        ? "FAILED"
+        : mappedStatus === WhatsAppMessageStatus.LIDA
+          ? "READ"
+          : mappedStatus === WhatsAppMessageStatus.ENTREGUE
+            ? "DELIVERED"
+            : null;
+      if (notificationState) {
+        await this.db().orderWhatsAppNotification.updateMany({
+          where: { companyId: existing.companyId, providerMessageId },
+          data: {
+            state: notificationState,
+            ...(notificationState === "FAILED" ? { lastError: error?.title ? String(error.title) : "Falha de entrega confirmada pela Meta." } : {}),
+          },
+        });
+      }
+    }
     if (mappedStatus === WhatsAppMessageStatus.FALHOU) {
       await this.db().messagingChannel.update({
         where: { id: channel.id },
@@ -1504,6 +1671,14 @@ export class MessagingService {
       number: config.number ?? null,
       automationEnabled: Boolean(channel.automationEnabled),
       welcomeMessage: channel.welcomeMessage ?? null,
+      orderNotifications: {
+        configured: Boolean(this.gupshup.mode() === "PARTNER" ? config.orderUpdateTemplateName : config.orderUpdateTemplateId),
+        templateId: config.orderUpdateTemplateId ?? null,
+        templateName: config.orderUpdateTemplateName ?? null,
+        languageCode: config.orderUpdateTemplateLanguage ?? "pt_BR",
+        state: config.orderUpdateTemplateState ?? null,
+        error: config.orderUpdateTemplateError ?? null,
+      },
       // O canal está de pé quando existe aplicativo vinculado e ele foi ativado.
       connected: Boolean(channel.gupshupAppId && channel.status === MessagingChannelStatus.ATIVO),
       gupshup: {
@@ -1531,6 +1706,7 @@ export class MessagingService {
       number: null,
       automationEnabled: true,
       welcomeMessage: null,
+      orderNotifications: { configured: false, templateId: null, templateName: null, languageCode: "pt_BR", state: null, error: null },
       connected: false,
       gupshup: { appId: null, appName: null, signupLink: null, accessRequestedAt: null, connectionMode: null },
       integration: {
@@ -1618,6 +1794,16 @@ function channelConfig(channel: any): Record<string, any> {
   return channel?.config && typeof channel.config === "object" && !Array.isArray(channel.config)
     ? channel.config
     : {};
+}
+
+function emptyOrderTemplateConfig() {
+  return {
+    orderUpdateTemplateId: null,
+    orderUpdateTemplateName: null,
+    orderUpdateTemplateLanguage: null,
+    orderUpdateTemplateState: null,
+    orderUpdateTemplateError: null,
+  };
 }
 
 function gupshupConnectionMode(channel: any): GupshupConnectionMode | null {

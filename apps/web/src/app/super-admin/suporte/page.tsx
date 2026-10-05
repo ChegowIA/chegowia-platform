@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER,
+  CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL,
   PlatformSupportConversationMode,
   PlatformSupportConversationStatus,
   PlatformSupportMessageRole,
@@ -191,6 +193,7 @@ export default function SuperAdminSupportPage() {
             <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-300">Central global · Superadmin</p>
             <h1 className="mt-2 text-3xl font-black tracking-tight sm:text-4xl">Suporte da ChegowIA</h1>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Converse em tempo real com qualquer usuário da plataforma. A pessoa escolhe IA ou humano; você pode assumir uma conversa quando necessário, sempre com aviso prévio no histórico.</p>
+            <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-300">O WhatsApp humano <a href={CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className="font-black text-emerald-300 underline underline-offset-2 hover:text-emerald-200">{CHEGOWIA_HUMAN_SUPPORT_WHATSAPP_NUMBER}</a> é um canal separado: suas mensagens não entram nesta fila de chats do sistema.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <MetricPill label="Aguardando humano" value={waitingForHuman} className="bg-amber-400/15 text-amber-100" />

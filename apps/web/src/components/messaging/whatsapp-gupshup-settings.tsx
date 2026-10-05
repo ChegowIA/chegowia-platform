@@ -137,6 +137,11 @@ export function WhatsAppGupshupSettings() {
                 reconexão em modo coexistência.
               </p>
             )}
+            <p className="pt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">
+              Avisos de andamento dos pedidos: {channel?.orderNotifications?.configured
+                ? "modelo transacional configurado; o cliente pode optar por recebê-los no checkout."
+                : "aguardando aprovação e configuração do modelo de mensagem pela ChegowIA. O atendimento normal continua funcionando."}
+            </p>
           </div>
         ) : (
           <>

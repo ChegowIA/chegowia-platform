@@ -33,6 +33,7 @@ const EMPTY_FORM: { appName: string; appId: string; signupLink: string; number: 
 export function CompanyGupshupLink({ companyId }: { companyId: string }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState(EMPTY_FORM);
+  const [template, setTemplate] = useState({ templateId: "", templateName: "", languageCode: "pt_BR" });
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -51,6 +52,11 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
       // não existia. Para vínculo já iniciado, o operador decide conscientemente.
       connectionMode: channel.gupshup?.connectionMode
         ?? (channel.gupshup?.appId ? "PLATFORM_ONLY" : "COEXISTENCE"),
+    });
+    setTemplate({
+      templateId: channel.orderNotifications?.templateId ?? "",
+      templateName: channel.orderNotifications?.templateName ?? "",
+      languageCode: channel.orderNotifications?.languageCode ?? "pt_BR",
     });
   }, [channel]);
 
@@ -71,6 +77,34 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
           ? "Aplicativo vinculado e canal ativo."
           : "Aplicativo vinculado. O canal ativa quando o número concluir o cadastro.",
       );
+      void queryClient.invalidateQueries({ queryKey: ["super-admin-company-channel", companyId] });
+    },
+    onError: (cause) => {
+      setFeedback(null);
+      setError(apiErrorMessage(cause));
+    },
+  });
+
+  const saveTemplate = useMutation({
+    mutationFn: async () => (await api.put<MessagingChannel>(`/messaging/companies/${companyId}/whatsapp/order-notifications`, template)).data,
+    onSuccess: () => {
+      setError(null);
+      setFeedback("Modelo de avisos de pedido salvo.");
+      void queryClient.invalidateQueries({ queryKey: ["super-admin-company-channel", companyId] });
+    },
+    onError: (cause) => {
+      setFeedback(null);
+      setError(apiErrorMessage(cause));
+    },
+  });
+
+  const syncTemplate = useMutation({
+    mutationFn: async () => (await api.post<MessagingChannel>(`/messaging/companies/${companyId}/whatsapp/order-notifications/sync`)).data,
+    onSuccess: (updated) => {
+      setError(null);
+      setFeedback(updated.orderNotifications?.configured
+        ? "Modelo de avisos aprovado e vinculado ao aplicativo."
+        : "Modelo solicitado para este aplicativo. Aguardando aprovação da Meta; o sistema verificará automaticamente.");
       void queryClient.invalidateQueries({ queryKey: ["super-admin-company-channel", companyId] });
     },
     onError: (cause) => {
@@ -154,6 +188,34 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
         </div>
 
         <GupshupCallbackUrls />
+
+        {channel?.gupshup?.appName && (
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900/60">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-bold text-slate-900 dark:text-slate-100">Avisos de andamento do pedido</p>
+              <Badge tone={channel.orderNotifications?.configured ? "success" : "warning"}>{channel.orderNotifications?.configured ? "Modelo configurado" : "Modelo pendente"}</Badge>
+            </div>
+            <p className="text-xs leading-5 text-slate-600 dark:text-slate-300">
+              O modelo padrão ChegowIA é enviado ao WABA desta loja e só libera os avisos depois da aprovação da Meta. Cada aplicativo precisa ter o próprio ID aprovado; não é possível usar o ID de outra empresa. Corpo: “Olá {"{{1}}"}! Seu pedido #{"{{2}}"} em {"{{3}}"} está {"{{4}}"}. Se precisar de ajuda, responda esta mensagem.”
+            </p>
+            {channel.orderNotifications?.state && (
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                Situação no Gupshup: {channel.orderNotifications.state === "APPROVED" ? "aprovado" : channel.orderNotifications.state === "PENDING" ? "aguardando aprovação" : channel.orderNotifications.state === "MANUAL" ? "configuração manual" : channel.orderNotifications.state}.
+              </p>
+            )}
+            {channel.orderNotifications?.error && <p className="text-xs text-red-700 dark:text-red-300">{channel.orderNotifications.error}</p>}
+            <Button type="button" isLoading={syncTemplate.isPending} disabled={!channel.connected || !channel.gupshup?.appId} onClick={() => syncTemplate.mutate()}>
+              Criar ou sincronizar modelo padrão
+            </Button>
+            <p className="text-xs text-slate-500 dark:text-slate-400">O vínculo manual abaixo fica para modelos já aprovados ou casos excepcionais.</p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <FormField label="ID no Gupshup self-serve"><Input value={template.templateId} onChange={(event) => setTemplate((current) => ({ ...current, templateId: event.target.value }))} /></FormField>
+              <FormField label="Nome no modo partner"><Input value={template.templateName} onChange={(event) => setTemplate((current) => ({ ...current, templateName: event.target.value }))} /></FormField>
+              <FormField label="Idioma"><Input value={template.languageCode} onChange={(event) => setTemplate((current) => ({ ...current, languageCode: event.target.value }))} /></FormField>
+            </div>
+            <Button type="button" variant="secondary" isLoading={saveTemplate.isPending} onClick={() => saveTemplate.mutate()}>Salvar modelo de avisos</Button>
+          </div>
+        )}
 
         {feedback && <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{feedback}</p>}
         {error && <p className="text-sm font-medium text-red-600 dark:text-red-400">{error}</p>}

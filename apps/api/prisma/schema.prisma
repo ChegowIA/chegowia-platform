@@ -605,6 +605,7 @@ model Company {
   products                  Product[]
   catalogImportSessions     CatalogImportSession[]
   orders                    Order[]
+  orderWhatsAppNotifications OrderWhatsAppNotification[]
   deliveries                Delivery[]
   payments                  Payment[]
   employeeProfiles          EmployeeProfile[]
@@ -1204,6 +1205,10 @@ model Order {
   customerId             String?
   customerName           String?
   customerPhone          String?     @db.VarChar(20)
+  // Pedido do site: autorização explícita para avisos transacionais neste número.
+  // Pedidos originados no WhatsApp podem receber resposta na janela de serviço,
+  // mas não usam modelo fora dela sem este consentimento.
+  whatsappNotificationConsentAt DateTime?
   source                 OrderSource @default(SITE)
   whatsappConversationId String?
   whatsappOrderDraftId   String?     @unique
@@ -1249,6 +1254,7 @@ model Order {
   delivery       Delivery?
   payment        Payment?
   fiscalDocuments FiscalDocument[]
+  whatsappNotifications OrderWhatsAppNotification[]
 
   @@unique([whatsappOrderDraftId, companyId])
   @@index([companyId, status])
@@ -1257,6 +1263,32 @@ model Order {
   @@index([whatsappConversationId, companyId])
   // Os relatórios filtram por faixa de createdAt dentro da empresa; sem este
   // índice a consulta varria todos os pedidos da empresa para depois descartar.
+  @@index([companyId, createdAt])
+}
+
+// Fila transacional de avisos; chave única impede um status de disparar duas
+// vezes quando o worker reinicia ou dois operadores tentam a mesma transição.
+model OrderWhatsAppNotification {
+  id                String      @id @default(cuid())
+  companyId         String
+  orderId           String
+  orderStatus       OrderStatus
+  phone             String      @db.VarChar(20)
+  state             String      @default("PENDING") @db.VarChar(20)
+  attempts          Int         @default(0)
+  nextAttemptAt     DateTime    @default(now())
+  lockedUntil       DateTime?
+  providerMessageId String?
+  lastError         String?     @db.Text
+  sentAt            DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, orderStatus])
+  @@index([state, nextAttemptAt])
   @@index([companyId, createdAt])
 }
 

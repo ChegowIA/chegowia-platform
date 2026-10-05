@@ -19,6 +19,7 @@ const TENANT_MODELS = new Set([
   "Product",
   "CatalogImportSession",
   "Order",
+  "OrderWhatsAppNotification",
   "Delivery",
   "Payment",
   "Promotion",

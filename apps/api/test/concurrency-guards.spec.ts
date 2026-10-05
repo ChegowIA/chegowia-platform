@@ -59,7 +59,7 @@ describe("guardas de concorrência", () => {
   });
 
   describe("transição de status do pedido", () => {
-    function prismaWithOrder(statusAtual: OrderStatus) {
+    function prismaWithOrder(statusAtual: OrderStatus, extras: Record<string, unknown> = {}) {
       let aplicado = false;
       const tx = {
         order: {
@@ -71,12 +71,13 @@ describe("guardas de concorrência", () => {
           findUnique: jest.fn().mockResolvedValue({ id: "pedido-1", companyId: "empresa-1", customerId: "cliente-1" }),
         },
         orderStatusHistory: { create: jest.fn().mockResolvedValue({}) },
+        orderWhatsAppNotification: { create: jest.fn().mockResolvedValue({}) },
         delivery: { update: jest.fn().mockResolvedValue({}) },
       };
       return {
         tx,
         prisma: {
-          order: { findUnique: jest.fn().mockResolvedValue({ id: "pedido-1", status: statusAtual, delivery: null, companyId: "empresa-1" }) },
+          order: { findUnique: jest.fn().mockResolvedValue({ id: "pedido-1", status: statusAtual, delivery: null, companyId: "empresa-1", ...extras }) },
           $transaction: jest.fn().mockImplementation((fn: any) => fn(tx)),
         },
       };
@@ -93,6 +94,31 @@ describe("guardas de concorrência", () => {
 
       expect((segundo as Error).message).toMatch(/mudou enquanto/i);
       expect(tx.orderStatusHistory.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("grava aviso na mesma transação da mudança de status quando o cliente autorizou", async () => {
+      const { tx, prisma } = prismaWithOrder(OrderStatus.RECEBIDO, {
+        customerPhone: "5562999999999", whatsappNotificationConsentAt: new Date(), source: "SITE",
+      });
+      const service = new OrdersService(prisma as never, realtime as never, {} as never, { emitForOrder: jest.fn() } as never);
+
+      await service.updateStatus("pedido-1", OrderStatus.CONFIRMADO, "user-1", Role.ADMIN);
+
+      expect(tx.orderWhatsAppNotification.create).toHaveBeenCalledWith({ data: {
+        companyId: "empresa-1", orderId: "pedido-1", orderStatus: OrderStatus.CONFIRMADO,
+        phone: "5562999999999",
+      } });
+    });
+
+    it("não agenda aviso para pedido do site sem consentimento", async () => {
+      const { tx, prisma } = prismaWithOrder(OrderStatus.RECEBIDO, {
+        customerPhone: "5562999999999", whatsappNotificationConsentAt: null, source: "SITE",
+      });
+      const service = new OrdersService(prisma as never, realtime as never, {} as never, { emitForOrder: jest.fn() } as never);
+
+      await service.updateStatus("pedido-1", OrderStatus.CONFIRMADO, "user-1", Role.ADMIN);
+
+      expect(tx.orderWhatsAppNotification.create).not.toHaveBeenCalled();
     });
   });
 
