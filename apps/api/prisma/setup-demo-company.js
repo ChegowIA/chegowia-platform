@@ -380,13 +380,13 @@ function demoCompanySettings() {
     whatsappNumber: "5562000000000",
     paymentMethodsEnabled: ["DINHEIRO", "CARTAO_ENTREGA", "PIX_MANUAL"],
     openingHours: {
-      segunda: "18:00-23:00",
-      terca: "18:00-23:00",
-      quarta: "18:00-23:00",
-      quinta: "18:00-23:00",
-      sexta: "18:00-00:00",
-      sabado: "18:00-00:00",
-      domingo: "18:00-23:00",
+      segunda: "00:00-00:00",
+      terca: "00:00-00:00",
+      quarta: "00:00-00:00",
+      quinta: "00:00-00:00",
+      sexta: "00:00-00:00",
+      sabado: "00:00-00:00",
+      domingo: "00:00-00:00",
     },
   };
 }
