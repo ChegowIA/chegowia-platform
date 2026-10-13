@@ -29,7 +29,7 @@ export function UserMessage({ content }: { content: string }) {
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="min-w-0 max-w-full text-sm leading-6 [overflow-wrap:anywhere]">
       <ReactMarkdown

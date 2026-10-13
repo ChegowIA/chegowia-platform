@@ -12,6 +12,7 @@ import {
   Role,
 } from "@chegowia/shared";
 import { FloatingAssistantChat } from "@/components/ai/floating-assistant-chat";
+import { MarkdownContent } from "@/components/ai/assistant-message";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
@@ -135,6 +136,7 @@ export function PlatformSupportBubble() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const isSessionLoading = useAuthStore((state) => state.isSessionLoading);
   const [draft, setDraft] = useState("");
+  const [helpOptionsOpen, setHelpOptionsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const isSuperAdmin = user?.role === Role.SUPER_ADMIN;
@@ -278,19 +280,33 @@ export function PlatformSupportBubble() {
               {visibleError && <p className="mx-3 mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-200">{visibleError}</p>}
 
               <div className="shrink-0 border-t border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
-                <HumanSupportWhatsAppLink className="mb-2" />
-                {conversation.mode === PlatformSupportConversationMode.IA && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="mb-2 w-full"
-                    isLoading={requestHuman.isPending}
-                    onClick={() => requestHuman.mutate(conversation.id)}
-                  >
-                    Falar com uma pessoa
-                  </Button>
-                )}
+                <button
+                  type="button"
+                  className="mb-2 flex min-h-10 w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 sm:hidden"
+                  aria-expanded={helpOptionsOpen}
+                  aria-controls="support-help-options"
+                  onClick={() => setHelpOptionsOpen((current) => !current)}
+                >
+                  Outras opções de atendimento
+                  <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" className={clsx("h-4 w-4 transition-transform", helpOptionsOpen && "rotate-180")}>
+                    <path d="m5 7 5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <div id="support-help-options" className={clsx("mb-2 space-y-2", helpOptionsOpen ? "block" : "hidden sm:block")}>
+                  <HumanSupportWhatsAppLink />
+                  {conversation.mode === PlatformSupportConversationMode.IA && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      isLoading={requestHuman.isPending}
+                      onClick={() => requestHuman.mutate(conversation.id)}
+                    >
+                      Falar com uma pessoa
+                    </Button>
+                  )}
+                </div>
                 <form onSubmit={handleSend} className="space-y-2">
                   <Textarea
                     rows={2}
@@ -299,6 +315,7 @@ export function PlatformSupportBubble() {
                     placeholder={conversation.mode === PlatformSupportConversationMode.HUMANO ? "Escreva para a equipe…" : "Digite sua dúvida para a IA…"}
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
+                    onFocus={() => setHelpOptionsOpen(false)}
                   />
                   <div className="flex items-center justify-between gap-2">
                     <button
@@ -472,7 +489,7 @@ function SupportMessageBubble({ message }: { message: SupportMessage }) {
   return (
     <article className={clsx("flex", fromUser ? "justify-end" : "justify-start")}>
       <div className={clsx(
-        "max-w-[88%] rounded-2xl px-3.5 py-3 text-sm leading-6 shadow-sm",
+        "min-w-0 max-w-[94%] rounded-2xl px-3.5 py-3 text-sm leading-6 shadow-sm sm:max-w-[88%]",
         fromUser
           ? "rounded-br-md bg-brand-600 text-white"
           : fromSystem
@@ -480,7 +497,9 @@ function SupportMessageBubble({ message }: { message: SupportMessage }) {
             : "rounded-bl-md border border-slate-200 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200",
       )}>
         <p className={clsx("mb-1 text-[10px] font-black uppercase tracking-wide", fromUser ? "text-brand-100" : "text-slate-400 dark:text-slate-500")}>{authorName}</p>
-        <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        {fromUser || fromSystem
+          ? <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
+          : <MarkdownContent content={message.content} />}
         <p className={clsx("mt-1 text-[10px]", fromUser ? "text-brand-100" : "text-slate-400 dark:text-slate-500")}>{formatTime(message.createdAt)}</p>
       </div>
     </article>

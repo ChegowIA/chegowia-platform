@@ -7,6 +7,8 @@ import gsap from "gsap";
 import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/brand/brand-logo";
 
+const FLOATING_CHAT_OPEN_EVENT = "chegowia:floating-chat-open";
+
 export function FloatingAssistantChat({
   title,
   subtitle,
@@ -32,15 +34,19 @@ export function FloatingAssistantChat({
   stacked?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const panelId = useId();
   const pathname = usePathname();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const triggerTextRef = useRef<HTMLSpanElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const hasMobileDock = Boolean(pathname?.startsWith("/painel") || pathname?.startsWith("/super-admin") || pathname?.startsWith("/revendedor"));
   const isSupportTrigger = triggerKind === "support";
   const hasCounterpartTrigger = useFloatingTriggerPresence(isSupportTrigger ? "assistant" : "support");
+  const counterpartOpen = useFloatingPanelOpenPresence(isSupportTrigger ? "assistant" : "support");
+  const mobileSharedMenu = isSupportTrigger && hasCounterpartTrigger;
   // Quando existem os dois canais, qualquer card abre acima da dupla de
   // ícones. Assim nenhum ícone invade o conteúdo do outro painel e ambos
   // continuam visíveis como âncoras da conversa.
@@ -49,11 +55,52 @@ export function FloatingAssistantChat({
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        setMenuOpen(false);
+      }
+    }
+    function onOtherChatOpen(event: Event) {
+      if ((event as CustomEvent<{ kind: string }>).detail?.kind !== triggerKind) {
+        setOpen(false);
+        setMenuOpen(false);
+      }
+    }
+    function onOpenAssistantFromMenu() {
+      if (triggerKind === "assistant") setOpen(true);
     }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+    window.addEventListener(FLOATING_CHAT_OPEN_EVENT, onOtherChatOpen);
+    window.addEventListener("chegowia:open-operational-assistant", onOpenAssistantFromMenu);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener(FLOATING_CHAT_OPEN_EVENT, onOtherChatOpen);
+      window.removeEventListener("chegowia:open-operational-assistant", onOpenAssistantFromMenu);
+    };
+  }, [triggerKind]);
+
+  useEffect(() => {
+    if (open) {
+      setMenuOpen(false);
+      window.dispatchEvent(new CustomEvent(FLOATING_CHAT_OPEN_EVENT, { detail: { kind: triggerKind } }));
+    }
+  }, [open, triggerKind]);
+
+  useEffect(() => {
+    if (!hasCounterpartTrigger) setMenuOpen(false);
+  }, [hasCounterpartTrigger]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onOutsidePointer(event: PointerEvent) {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onOutsidePointer);
+    return () => document.removeEventListener("pointerdown", onOutsidePointer);
+  }, [menuOpen]);
+
+  useEffect(() => { setMenuOpen(false); }, [pathname]);
 
   /**
    * O estado inicial é propositalmente só o selo circular. O GSAP controla
@@ -100,8 +147,8 @@ export function FloatingAssistantChat({
         ref={triggerRef}
         type="button"
         data-floating-trigger={triggerKind}
-        aria-label={open ? "Fechar assistente" : isSupportTrigger ? "Abrir suporte ChegowIA" : `Abrir assistente: ${triggerLabel}`}
-        aria-expanded={open}
+        aria-label={mobileSharedMenu ? "Abrir canais de ajuda" : isSupportTrigger ? "Abrir suporte ChegowIA" : `Abrir assistente: ${triggerLabel}`}
+        aria-expanded={open || menuOpen}
         aria-controls={panelId}
         // O atalho só abre o canal. O fechamento fica explícito no painel,
         // evitando que um segundo toque (comum no mobile) pareça ignorar a
@@ -113,13 +160,18 @@ export function FloatingAssistantChat({
         onClick={() => {
           setHovered(false);
           setFocused(false);
-          setOpen(true);
+          if (mobileSharedMenu && window.matchMedia("(max-width: 639px)").matches) {
+            setMenuOpen((current) => !current);
+          } else {
+            setOpen(true);
+          }
         }}
         className={clsx(
           // Fechado, o botão é apenas o disco de ícone. O capsule só aparece
           // quando há intenção clara (hover/foco), preservando espaço visual
           // e não disputando atenção com a operação do cliente.
           "group fixed z-[110] flex h-14 w-14 max-w-[calc(100vw-1.5rem)] cursor-pointer items-center overflow-hidden rounded-full shadow-[0_18px_50px_-12px_rgba(15,23,42,.35)] outline-none transition-[background-color,box-shadow,transform] duration-200 ease-out hover:-translate-y-1 active:translate-y-0 active:scale-95 focus-visible:ring-4 focus-visible:ring-brand-400/35",
+          (open || counterpartOpen || (!isSupportTrigger && hasCounterpartTrigger)) && "max-sm:hidden",
           position === "left" ? "left-3 md:left-5" : "right-3 md:right-5",
           expanded
             ? "bg-brand-600 text-white shadow-[0_18px_50px_-12px_rgba(234,88,12,.65)] dark:bg-brand-500"
@@ -127,9 +179,13 @@ export function FloatingAssistantChat({
               ? "bg-brand-50 text-brand-700 ring-1 ring-brand-200/90 dark:bg-brand-400/15 dark:text-brand-200 dark:ring-brand-300/25"
               : "bg-white text-slate-950 ring-1 ring-slate-200/90 dark:bg-slate-900 dark:text-white dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
           stacked
-            ? hasMobileDock
-              ? "bottom-[calc(9.65rem+env(safe-area-inset-bottom))] md:bottom-[5.5rem]"
-              : "bottom-[max(5rem,calc(4.25rem+env(safe-area-inset-bottom)))] md:bottom-[5.5rem]"
+            ? mobileSharedMenu
+              ? hasMobileDock
+                ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))] md:bottom-[5.5rem]"
+                : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-[5.5rem]"
+              : hasMobileDock
+                ? "bottom-[calc(9.65rem+env(safe-area-inset-bottom))] md:bottom-[5.5rem]"
+                : "bottom-[max(5rem,calc(4.25rem+env(safe-area-inset-bottom)))] md:bottom-[5.5rem]"
             : hasMobileDock
               ? "bottom-[calc(5.4rem+env(safe-area-inset-bottom))] md:bottom-5"
               : "bottom-[max(.75rem,env(safe-area-inset-bottom))] md:bottom-5",
@@ -149,6 +205,13 @@ export function FloatingAssistantChat({
             "absolute right-1.5 top-1.5 h-3 w-3 rounded-full border-2 bg-emerald-400 transition-colors",
             expanded ? "border-brand-600 dark:border-brand-500" : isSupportTrigger ? "border-brand-50 dark:border-slate-900" : "border-white dark:border-slate-900",
           )} />
+          {mobileSharedMenu && (
+            <span className="absolute bottom-0.5 right-0.5 grid h-4 w-4 place-items-center rounded-full bg-brand-600 text-white sm:hidden">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className={clsx("h-3 w-3 transition-transform", menuOpen && "rotate-180")} aria-hidden="true">
+                <path d="m3 6 5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          )}
         </span>
         <span ref={triggerTextRef} className="pointer-events-none min-w-0 flex-1 pr-4 text-left opacity-0 invisible" aria-hidden={!expanded}>
           <span className="block truncate text-[10px] font-bold uppercase tracking-[0.16em] text-brand-100">{triggerEyebrow}</span>
@@ -156,8 +219,30 @@ export function FloatingAssistantChat({
         </span>
       </button>
 
+      {mobileSharedMenu && menuOpen && !open && !counterpartOpen && (
+        <div
+          ref={menuRef}
+          role="group"
+          aria-label="Canais de ajuda"
+          className={clsx(
+            "fixed right-3 z-[111] w-[min(260px,calc(100vw-1.5rem))] space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:hidden",
+            hasMobileDock
+              ? "bottom-[calc(9.25rem+env(safe-area-inset-bottom))]"
+              : "bottom-[calc(4.75rem+env(safe-area-inset-bottom))]",
+          )}
+        >
+          <button type="button" className="min-h-11 w-full rounded-xl bg-brand-50 px-3 text-left text-sm font-bold text-brand-800 dark:bg-brand-950/40 dark:text-brand-200" onClick={() => { setMenuOpen(false); setOpen(true); }}>
+            Suporte ChegowIA <span className="block text-xs font-normal">IA ou equipe humana</span>
+          </button>
+          <button type="button" className="min-h-11 w-full rounded-xl bg-slate-100 px-3 text-left text-sm font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-100" onClick={() => { setMenuOpen(false); window.dispatchEvent(new Event("chegowia:open-operational-assistant")); }}>
+            Assistente desta página <span className="block text-xs font-normal">Ajuda com o contexto atual</span>
+          </button>
+        </div>
+      )}
+
       <div
         id={panelId}
+        data-floating-panel-open={open ? triggerKind : undefined}
         className={clsx(
           // A central precisa ficar acima do dock móvel (z-80) e de qualquer
           // shell do painel. Sem isso, o clique abria o chat por trás da
@@ -217,6 +302,20 @@ function useFloatingTriggerPresence(kind: "assistant" | "support") {
       attributeFilter: ["data-floating-trigger"],
     });
 
+    return () => observer.disconnect();
+  }, [kind]);
+
+  return present;
+}
+
+function useFloatingPanelOpenPresence(kind: "assistant" | "support") {
+  const [present, setPresent] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setPresent(Boolean(document.querySelector(`[data-floating-panel-open="${kind}"]`)));
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-floating-panel-open"] });
     return () => observer.disconnect();
   }, [kind]);
 
