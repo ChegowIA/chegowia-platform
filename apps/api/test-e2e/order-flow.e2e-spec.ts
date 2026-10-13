@@ -1,5 +1,6 @@
 import request from "supertest";
-import { OrderStatus } from "@prisma/client";
+import { DeliveryStatus, OrderStatus, Role } from "@prisma/client";
+import { PermissionKey } from "@chegowia/shared";
 import { Harness, createHarness } from "./harness";
 import { CompanyFixture, createCompany, createCustomer } from "./fixtures";
 
@@ -105,6 +106,49 @@ describe("pedido ponta a ponta (e2e)", () => {
       .send({ companySlug: loja.slug, addressId: cliente.addressId });
     expect(cotacao.status).toBe(201);
     expect(cotacao.body.distanceKm).toBe(2);
+  });
+
+  it("atualiza em uma requisição apenas as entregas ativas do motoboy autenticado", async () => {
+    const pedido = await criarPedido(1);
+    expect(pedido.status).toBe(201);
+    const delivery = await harness.prisma.delivery.findUnique({ where: { orderId: pedido.body.id } });
+    expect(delivery).toBeTruthy();
+    const motoboy = await harness.prisma.user.create({
+      data: {
+        name: "Motoboy fluxo",
+        email: "motoboy-fluxo@e2e.local",
+        passwordHash: "nao-usado-nos-testes",
+        role: Role.MOTOBOY,
+        companyId: loja.id,
+        isActive: true,
+        emailVerifiedAt: new Date(),
+        employeeProfile: { create: { companyId: loja.id, position: "Motoboy" } },
+      },
+      include: { employeeProfile: true },
+    });
+    const permission = await harness.prisma.permission.upsert({
+      where: { key: PermissionKey.ENTREGAS_EDITAR },
+      update: {},
+      create: { key: PermissionKey.ENTREGAS_EDITAR, description: "Editar entregas" },
+    });
+    await harness.prisma.rolePermission.create({
+      data: { employeeProfileId: motoboy.employeeProfile!.id, permissionId: permission.id },
+    });
+    await harness.prisma.delivery.update({
+      where: { id: delivery!.id },
+      data: { motoboyId: motoboy.id, status: DeliveryStatus.EM_ROTA },
+    });
+
+    const response = await request(harness.app.getHttpServer())
+      .patch("/api/deliveries/me/location")
+      .set("Authorization", `Bearer ${harness.tokenFor({ id: motoboy.id, email: motoboy.email, role: Role.MOTOBOY, companyId: loja.id })}`)
+      .send({ latitude: -19.9245, longitude: -43.9385 });
+    expect(response.status).toBe(200);
+    expect(response.body.updated).toBe(1);
+    const saved = await harness.prisma.delivery.findUnique({ where: { id: delivery!.id } });
+    expect(saved?.motoboyLatitude).toBeCloseTo(-19.9245, 5);
+    expect(saved?.motoboyLongitude).toBeCloseTo(-43.9385, 5);
+    expect(saved?.motoboyLocationUpdatedAt).toBeTruthy();
   });
 
   it("usa os dois pontos confirmados mesmo quando os CEPs são iguais", async () => {

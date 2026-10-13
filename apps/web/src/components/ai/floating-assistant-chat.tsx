@@ -178,6 +178,7 @@ export function FloatingAssistantChat({
             : isSupportTrigger
               ? "bg-brand-50 text-brand-700 ring-1 ring-brand-200/90 dark:bg-brand-400/15 dark:text-brand-200 dark:ring-brand-300/25"
               : "bg-white text-slate-950 ring-1 ring-slate-200/90 dark:bg-slate-900 dark:text-white dark:ring-white/15 dark:shadow-[0_18px_50px_-12px_rgba(0,0,0,.8)]",
+          mobileSharedMenu && "max-sm:bg-brand-600 max-sm:text-white max-sm:ring-2 max-sm:ring-white/20 dark:max-sm:bg-brand-500 dark:max-sm:text-white",
           stacked
             ? mobileSharedMenu
               ? hasMobileDock
@@ -194,24 +195,26 @@ export function FloatingAssistantChat({
         <span className="relative grid h-14 w-14 shrink-0 place-items-center">
           <span className={clsx(
             "absolute inset-1.5 rounded-full transition-colors duration-200",
+            mobileSharedMenu && "max-sm:hidden",
             // O logo da marca é alaranjado: no estado expandido ele precisa de
             // uma base branca real para nunca se perder dentro da cápsula.
             expanded ? "bg-white shadow-sm dark:bg-slate-50" : isSupportTrigger ? "bg-brand-100 dark:bg-slate-800" : "bg-white dark:bg-slate-50",
           )} />
-          <span className={clsx("relative grid h-10 w-10 place-items-center", isSupportTrigger && "text-brand-700 dark:text-brand-300")}>
+          <span className={clsx("relative grid h-10 w-10 place-items-center", isSupportTrigger && "text-brand-700 dark:text-brand-300", mobileSharedMenu && "max-sm:hidden")}>
             {isSupportTrigger ? <SupportIcon /> : <BrandLogo adaptive variant="mark" className="h-8 w-8" />}
           </span>
-          <span className={clsx(
-            "absolute right-1.5 top-1.5 h-3 w-3 rounded-full border-2 bg-emerald-400 transition-colors",
-            expanded ? "border-brand-600 dark:border-brand-500" : isSupportTrigger ? "border-brand-50 dark:border-slate-900" : "border-white dark:border-slate-900",
-          )} />
           {mobileSharedMenu && (
-            <span className="absolute bottom-0.5 right-0.5 grid h-4 w-4 place-items-center rounded-full bg-brand-600 text-white sm:hidden">
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className={clsx("h-3 w-3 transition-transform", menuOpen && "rotate-180")} aria-hidden="true">
-                <path d="m3 6 5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
+            <span className="relative hidden h-10 w-10 place-items-center max-sm:grid">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className={clsx("h-7 w-7 transition-transform", menuOpen && "rotate-180")} aria-hidden="true">
+                <path d="m5 9 7 7 7-7" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </span>
           )}
+          <span className={clsx(
+            "absolute right-1.5 top-1.5 h-3 w-3 rounded-full border-2 bg-emerald-400 transition-colors",
+            mobileSharedMenu && "max-sm:hidden",
+            expanded ? "border-brand-600 dark:border-brand-500" : isSupportTrigger ? "border-brand-50 dark:border-slate-900" : "border-white dark:border-slate-900",
+          )} />
         </span>
         <span ref={triggerTextRef} className="pointer-events-none min-w-0 flex-1 pr-4 text-left opacity-0 invisible" aria-hidden={!expanded}>
           <span className="block truncate text-[10px] font-bold uppercase tracking-[0.16em] text-brand-100">{triggerEyebrow}</span>

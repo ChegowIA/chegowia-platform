@@ -225,6 +225,32 @@ export class DeliveriesService {
     });
 
     this.realtime.emitToCompany(updated.order.companyId ?? delivery.companyId, "delivery.location_updated", updated);
+    if (updated.order.customerId) this.realtime.emitToUser(updated.order.customerId, "delivery.location_updated", updated);
     return updated;
+  }
+
+  /** Um único envio do aparelho atualiza todas as entregas ativas do motoboy. */
+  async updateMyActiveLocations(motoboyId: string, dto: { latitude: number; longitude: number }) {
+    const where = {
+      motoboyId,
+      status: { notIn: [DeliveryStatus.ENTREGUE, DeliveryStatus.PROBLEMA] },
+    };
+    const updatedAt = new Date();
+    const result = await this.db().delivery.updateMany({
+      where,
+      data: {
+        motoboyLatitude: dto.latitude,
+        motoboyLongitude: dto.longitude,
+        motoboyLocationUpdatedAt: updatedAt,
+      },
+    });
+    if (!result.count) return { updated: 0, updatedAt: null };
+
+    const deliveries = await this.db().delivery.findMany({ where, include: DELIVERY_INCLUDE });
+    for (const delivery of deliveries) {
+      this.realtime.emitToCompany(delivery.order.companyId ?? delivery.companyId, "delivery.location_updated", delivery);
+      if (delivery.order.customerId) this.realtime.emitToUser(delivery.order.customerId, "delivery.location_updated", delivery);
+    }
+    return { updated: result.count, updatedAt };
   }
 }

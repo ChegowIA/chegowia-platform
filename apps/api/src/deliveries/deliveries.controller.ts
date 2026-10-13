@@ -57,6 +57,16 @@ export class DeliveriesController {
 
   @Roles(Role.MOTOBOY)
   @RequirePermission(PermissionKey.ENTREGAS_EDITAR)
+  @Patch("me/location")
+  updateMyActiveLocations(
+    @Body() dto: UpdateDeliveryLocationDto,
+    @CurrentUser("sub") motoboyId: string,
+  ) {
+    return this.deliveriesService.updateMyActiveLocations(motoboyId, dto);
+  }
+
+  @Roles(Role.MOTOBOY)
+  @RequirePermission(PermissionKey.ENTREGAS_EDITAR)
   @Patch(":id/location")
   updateLocation(
     @Param("id") id: string,

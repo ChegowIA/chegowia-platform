@@ -147,39 +147,67 @@ export default function EntregasPage() {
         .map((delivery) => delivery.id),
     [deliveries],
   );
+  const hasActiveDeliveries = activeDeliveryIds.length > 0;
 
   useEffect(() => {
     if (!isMotoboy || !canEditDeliveries || !trackingEnabled) return;
     if (!navigator.geolocation) {
       setTrackingError("Este navegador não permite compartilhar localização.");
+      setTrackingEnabled(false);
       return;
     }
-    if (activeDeliveryIds.length === 0) return;
+    if (!hasActiveDeliveries) {
+      setTrackingEnabled(false);
+      return;
+    }
+
+    let stopped = false;
+    let sending = false;
+    let lastAttemptAt = 0;
+    let latestPosition: { latitude: number; longitude: number } | null = null;
+
+    async function sendLatestPosition() {
+      if (stopped || sending || !latestPosition || Date.now() - lastAttemptAt < 15_000) return;
+      sending = true;
+      lastAttemptAt = Date.now();
+      try {
+        const { data } = await api.patch<{ updated: number; updatedAt: string | null }>(
+          "/deliveries/me/location", latestPosition, { notify: false },
+        );
+        if (stopped) return;
+        if (!data.updated) {
+          setTrackingEnabled(false);
+          return;
+        }
+        setTrackingError(null);
+        setLastLocationSentAt(data.updatedAt);
+      } catch (err) {
+        if (!stopped) setTrackingError(apiErrorMessage(err, "Não foi possível enviar sua localização."));
+      } finally {
+        sending = false;
+      }
+    }
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        const payload = {
+        latestPosition = {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         };
-
-        activeDeliveryIds.forEach((deliveryId) => {
-          api
-            .patch(`/deliveries/${deliveryId}/location`, payload)
-            .then(() => {
-              setTrackingError(null);
-              setLastLocationSentAt(new Date().toISOString());
-              queryClient.invalidateQueries({ queryKey: ["deliveries"] });
-            })
-            .catch((err) => setTrackingError(apiErrorMessage(err, "Não foi possível enviar sua localização.")));
-        });
+        if (!lastAttemptAt) void sendLatestPosition();
       },
-      () => setTrackingError("Autorize a localização no navegador para compartilhar sua posição."),
+      () => { if (!stopped) setTrackingError("Autorize a localização no navegador para compartilhar sua posição."); },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 },
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [activeDeliveryIds, canEditDeliveries, isMotoboy, queryClient, trackingEnabled]);
+    const intervalId = window.setInterval(() => void sendLatestPosition(), 15_000);
+
+    return () => {
+      stopped = true;
+      navigator.geolocation.clearWatch(watchId);
+      window.clearInterval(intervalId);
+    };
+  }, [canEditDeliveries, hasActiveDeliveries, isMotoboy, trackingEnabled]);
 
   const columns: Column<Delivery>[] = [
     { header: "Cliente", render: (d) => d.order.customer?.name ?? d.order.customerName ?? "-" },
@@ -321,14 +349,16 @@ export default function EntregasPage() {
             <div>
               <p className="font-bold text-slate-900 dark:text-slate-100">Localização em tempo real</p>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                Compartilhe sua posição para o cliente acompanhar a entrega atribuída a você.
+                {trackingEnabled
+                  ? "Compartilhando sua posição a cada 15 segundos enquanto esta tela estiver aberta."
+                  : "Compartilhe sua posição para o cliente acompanhar a entrega atribuída a você."}
               </p>
               {lastLocationSentAt && <p className="mt-1 text-xs text-slate-400">Último envio: {new Date(lastLocationSentAt).toLocaleTimeString("pt-BR")}</p>}
             </div>
             <Button
               type="button"
               variant={trackingEnabled ? "outline" : "primary"}
-              disabled={activeDeliveryIds.length === 0}
+              disabled={!trackingEnabled && !hasActiveDeliveries}
               onClick={() => setTrackingEnabled((enabled) => !enabled)}
             >
               {trackingEnabled ? "Parar localização" : "Compartilhar localização"}
