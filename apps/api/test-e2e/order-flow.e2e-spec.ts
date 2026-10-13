@@ -87,6 +87,26 @@ describe("pedido ponta a ponta (e2e)", () => {
     expect(resposta.body.message).toContain("A loja precisa confirmar");
   });
 
+  it("libera a cotação após a loja salvar o novo endereço e o ponto de saída pelo painel", async () => {
+    const alterada = await comoLoja(request(harness.app.getHttpServer()).patch("/api/companies/me"))
+      .send({
+        addressLine: "Rua Nova, 120",
+        city: "Belo Horizonte",
+        state: "MG",
+        zipCode: "30130000",
+        latitude: -19.9244,
+        longitude: -43.9384,
+      });
+    expect(alterada.status).toBe(200);
+    expect(Number(alterada.body.latitude)).toBeCloseTo(-19.9244, 5);
+    expect(alterada.body.locationConfirmedAt).toBeTruthy();
+
+    const cotacao = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders/quote"))
+      .send({ companySlug: loja.slug, addressId: cliente.addressId });
+    expect(cotacao.status).toBe(201);
+    expect(cotacao.body.distanceKm).toBe(2);
+  });
+
   it("usa os dois pontos confirmados mesmo quando os CEPs são iguais", async () => {
     const resposta = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders/quote"))
       .send({ companySlug: loja.slug, addressId: cliente.addressId });

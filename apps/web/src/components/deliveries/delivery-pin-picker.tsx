@@ -155,9 +155,9 @@ export function DeliveryPinPicker({ lookup, point, confirmed, confirming = false
       {point && <p className="text-xs text-slate-600 dark:text-slate-300">Ponto selecionado: {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</p>}
       {error && <p className="text-xs text-red-700 dark:text-red-300">{error}</p>}
       <Button type="button" size="sm" isLoading={confirming} disabled={!point || confirmed} onClick={onConfirm}>
-        {confirmed ? "Ponto confirmado" : "Confirmar este ponto"}
+        {confirmed ? (context === "store" ? "Ponto salvo" : "Ponto confirmado") : (context === "store" ? "Confirmar e salvar este ponto" : "Confirmar este ponto")}
       </Button>
-      {confirmed && <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">{context === "store" ? "O frete será calculado a partir deste ponto depois de salvar os dados gerais." : "O motoboy receberá este ponto para navegar até você."}</p>}
+      {confirmed && <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">{context === "store" ? "Ponto salvo na loja. A rota e a taxa de entrega começam aqui." : "O motoboy receberá este ponto para navegar até você."}</p>}
     </div>
   );
 }

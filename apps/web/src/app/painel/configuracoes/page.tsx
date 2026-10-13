@@ -156,18 +156,24 @@ export default function ConfiguracoesPage() {
   }
 
   const saveGeneral = useMutation({
-    mutationFn: async () => {
-      if (!companyPin || !pinConfirmed) throw new Error("Confirme no mapa o ponto de saída da loja.");
-      const { data } = await api.patch("/companies/me", {
-        ...companyPin,
+    mutationFn: async ({ point, confirmingPin = false }: { point: DeliveryPin; confirmingPin?: boolean }) => {
+      if (!confirmingPin && !pinConfirmed) throw new Error("Confirme no mapa o ponto de saída da loja.");
+      if (!generalForm.addressLine.trim() || !generalForm.city.trim() || !generalForm.state || generalForm.zipCode.replace(/\D/g, "").length !== 8) {
+        throw new Error("Preencha endereço, cidade, estado e CEP antes de salvar o ponto da loja.");
+      }
+      const addressAndPoint = {
+        ...point,
+        addressLine: generalForm.addressLine,
+        city: generalForm.city,
+        state: generalForm.state,
+        zipCode: generalForm.zipCode,
+      };
+      const { data } = await api.patch<Company>("/companies/me", confirmingPin ? addressAndPoint : {
+        ...addressAndPoint,
         name: generalForm.name,
         cnpj: generalForm.cnpj || undefined,
         phone: generalForm.phone || undefined,
         whatsapp: generalForm.whatsapp || undefined,
-        addressLine: generalForm.addressLine || undefined,
-        city: generalForm.city || undefined,
-        state: generalForm.state || undefined,
-        zipCode: generalForm.zipCode,
         deliveryFeeBase: generalForm.deliveryFeeBase ? Number(generalForm.deliveryFeeBase) : undefined,
         deliveryFeePerKm: generalForm.deliveryFeePerKm ? Number(generalForm.deliveryFeePerKm) : undefined,
         deliveryRadiusKm: generalForm.deliveryRadiusKm ? Number(generalForm.deliveryRadiusKm) : undefined,
@@ -176,18 +182,24 @@ export default function ConfiguracoesPage() {
           : undefined,
         logoUrl: generalForm.logoUrl || undefined,
       });
-      if (!storeImageFile) return data;
+      if (confirmingPin || !storeImageFile) return data;
 
       const formData = new FormData();
       formData.append("file", storeImageFile);
       const uploaded = await api.post<Company>("/companies/me/logo", formData);
       return uploaded.data;
     },
-    onSuccess: (saved: Company) => {
+    onSuccess: (saved: Company, { confirmingPin }) => {
       setError(null);
-      setSuccess("Dados gerais atualizados.");
-      setStoreImageFile(null);
-      setGeneralForm((form) => ({ ...form, logoUrl: saved.logoUrl ?? form.logoUrl }));
+      setSuccess(confirmingPin ? "Ponto de saída salvo. A loja já pode calcular o frete a partir dele." : "Dados gerais atualizados.");
+      if (!confirmingPin) {
+        setStoreImageFile(null);
+        setGeneralForm((form) => ({ ...form, logoUrl: saved.logoUrl ?? form.logoUrl }));
+      }
+      setCompanyPin(saved.latitude != null && saved.longitude != null
+        ? { latitude: Number(saved.latitude), longitude: Number(saved.longitude) }
+        : null);
+      setPinConfirmed(Boolean(saved.locationConfirmedAt));
       queryClient.setQueryData<Company>(["company-me"], saved);
     },
     onError: (err) => setError(apiErrorMessage(err)),
@@ -347,9 +359,17 @@ export default function ConfiguracoesPage() {
               lookup={{ addressLine: generalForm.addressLine, city: generalForm.city, state: generalForm.state, zipCode: generalForm.zipCode }}
               point={companyPin}
               confirmed={pinConfirmed}
-              onPointChange={(next) => { setCompanyPin(next); setPinConfirmed(false); }}
-              onConfirm={() => setPinConfirmed(true)}
+              confirming={saveGeneral.isPending}
+              onPointChange={(next) => {
+                if (saveGeneral.isPending) return;
+                setCompanyPin(next);
+                setPinConfirmed(false);
+              }}
+              onConfirm={() => {
+                if (companyPin) saveGeneral.mutate({ point: companyPin, confirmingPin: true });
+              }}
             />
+            {error && <p className="mt-2 text-sm text-red-700 dark:text-red-300">{error}</p>}
             <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">A rota e a taxa de entrega começam neste ponto. Pedidos pelo site exigem esta confirmação para evitar fretes calculados pelo centro do CEP.</p>
           </div>
           <div className="sm:col-span-2 grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-[144px_1fr] dark:border-slate-700 dark:bg-slate-900/40">
@@ -386,7 +406,9 @@ export default function ConfiguracoesPage() {
             className="w-full sm:w-auto"
             disabled={!pinConfirmed || !generalForm.addressLine.trim() || !generalForm.city.trim() || !generalForm.state || generalForm.zipCode.replace(/\D/g, "").length !== 8}
             isLoading={saveGeneral.isPending}
-            onClick={() => saveGeneral.mutate()}
+            onClick={() => {
+              if (companyPin) saveGeneral.mutate({ point: companyPin });
+            }}
           >
             Salvar dados gerais
           </Button>
