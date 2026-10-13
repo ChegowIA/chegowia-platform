@@ -327,6 +327,8 @@ describe("checkout automatizado pelo WhatsApp", () => {
         source: OrderSource.WHATSAPP,
         whatsappConversationId: conversation.id,
         whatsappOrderDraftId: "rascunho-alfa",
+        deliveryLatitude: null,
+        deliveryLongitude: null,
       }),
     }));
     expect(realtime.emitToCompany).toHaveBeenCalledWith(companyId, "order.created", expect.anything());

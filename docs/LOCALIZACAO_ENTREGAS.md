@@ -25,7 +25,8 @@ somente sugestões: não são salvas como ponto confirmado sem ação da pessoa.
 O catálogo usa o centro aproximado do CEP apenas para encontrar candidatas.
 A confirmação de alcance e cobrança acontece na cotação da rota. Pedidos pelo
 WhatsApp têm um fluxo próprio de endereço; ainda podem sinalizar estimativa
-por CEP quando o endereço não for encontrado.
+por CEP quando o endereço não for encontrado. Enquanto esse canal não confirmar
+um pino, o link de navegação usa o endereço escrito, nunca o centro do CEP.
 
 ## Provedores e operação
 

@@ -388,8 +388,11 @@ export class OrdersService {
               deliveryCity: checkout.address.city,
               deliveryState: checkout.address.state,
               deliveryReference: checkout.address.reference ?? null,
-              deliveryLatitude: checkout.address.latitude,
-              deliveryLongitude: checkout.address.longitude,
+              // O endereço do WhatsApp ainda pode ter sido estimado pelo centro
+              // do CEP. Sem confirmação explícita do pino, o motoboy deve
+              // navegar pelo endereço escrito, não por uma coordenada incerta.
+              deliveryLatitude: null,
+              deliveryLongitude: null,
               subtotal: checkout.subtotal,
               deliveryFee: checkout.deliveryFee,
               deliveryDistanceKm: checkout.distanceKm,
