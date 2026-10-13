@@ -133,7 +133,10 @@ function CheckoutForm() {
   const confirmAddressPin = useMutation({
     mutationFn: async () => {
       if (!addressId || !addressPin) throw new Error("Selecione um ponto no mapa.");
-      const { data } = await api.patch<Address>(`/addresses/${addressId}`, addressPin);
+      const { data } = await api.patch<Address>(`/addresses/${addressId}`, {
+        latitude: addressPin.latitude,
+        longitude: addressPin.longitude,
+      });
       return data;
     },
     onSuccess: (updated) => {
@@ -431,7 +434,8 @@ function NewAddressForm({ onCreated, onCancel }: { onCreated: (addr: Address) =>
       if (!pin || !pinConfirmed) throw new Error("Confirme o ponto de entrega no mapa.");
       const { data } = await api.post<Address>("/addresses", {
         ...form,
-        ...pin,
+        latitude: pin.latitude,
+        longitude: pin.longitude,
         label: form.label || undefined,
         complement: form.complement || undefined,
         zipCode: form.zipCode || undefined,

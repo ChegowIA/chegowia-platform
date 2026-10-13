@@ -97,7 +97,8 @@ export default function AddressesPage() {
       if (!pin || !pinConfirmed) throw new Error("Confirme o ponto no mapa antes de salvar.");
       const payload = {
         ...form,
-        ...pin,
+        latitude: pin.latitude,
+        longitude: pin.longitude,
         label: form.label || undefined,
         complement: form.complement || undefined,
         zipCode: form.zipCode,

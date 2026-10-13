@@ -109,7 +109,9 @@ export function DeliveryPinPicker({ lookup, point, confirmed, confirming = false
     setLoading(true);
     try {
       const { data } = await api.post<DeliveryPin>("/addresses/location-preview", lookup, { notify: false });
-      onPointChange(data);
+      // A prévia também traz metadados (source/approximate). O estado do
+      // marcador e os PATCH/POST de confirmação aceitam apenas coordenadas.
+      onPointChange({ latitude: data.latitude, longitude: data.longitude });
     } catch (requestError) {
       setError(apiErrorMessage(requestError));
     } finally {

@@ -162,7 +162,8 @@ export default function ConfiguracoesPage() {
         throw new Error("Preencha endereço, cidade, estado e CEP antes de salvar o ponto da loja.");
       }
       const addressAndPoint = {
-        ...point,
+        latitude: point.latitude,
+        longitude: point.longitude,
         addressLine: generalForm.addressLine,
         city: generalForm.city,
         state: generalForm.state,
