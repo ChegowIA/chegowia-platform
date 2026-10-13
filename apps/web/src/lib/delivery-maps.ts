@@ -5,6 +5,8 @@ interface DeliveryAddress {
   deliveryNeighborhood: string;
   deliveryCity: string;
   deliveryState: string;
+  deliveryLatitude?: number | null;
+  deliveryLongitude?: number | null;
 }
 
 export interface LatLng {
@@ -23,10 +25,19 @@ export function deliveryAddressLabel(order: DeliveryAddress): string {
     .join(" - ");
 }
 
-export function googleMapsRouteUrl(destination: string, origin?: LatLng): string {
+export function deliveryDestination(order: DeliveryAddress): string | LatLng {
+  const latitude = Number(order.deliveryLatitude);
+  const longitude = Number(order.deliveryLongitude);
+  return order.deliveryLatitude != null && order.deliveryLongitude != null
+    && Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? { latitude, longitude }
+    : deliveryAddressLabel(order);
+}
+
+export function googleMapsRouteUrl(destination: string | LatLng, origin?: LatLng): string {
   const params = new URLSearchParams({
     api: "1",
-    destination,
+    destination: typeof destination === "string" ? destination : `${destination.latitude},${destination.longitude}`,
     travelmode: "driving",
   });
 

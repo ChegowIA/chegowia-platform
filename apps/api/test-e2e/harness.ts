@@ -124,8 +124,16 @@ export async function createHarness(): Promise<Harness> {
     app,
     prisma,
     tokenFor(user) {
+      const startedAt = Date.now();
       return jwt.sign(
-        { sub: user.id, email: user.email, role: user.role, companyId: user.companyId },
+        {
+          sub: user.id,
+          email: user.email,
+          role: user.role,
+          companyId: user.companyId,
+          mfaSessionStartedAt: startedAt,
+          mfaSessionExpiresAt: startedAt + 24 * 60 * 60 * 1000,
+        },
         {
           secret: process.env.JWT_ACCESS_SECRET,
           expiresIn: "15m",

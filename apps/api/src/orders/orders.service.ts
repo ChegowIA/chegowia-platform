@@ -195,6 +195,7 @@ export class OrdersService {
 
     const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });
     if (!address) throw new NotFoundException("Endereço não encontrado.");
+    this.assertConfirmedSiteLocations(company, address);
     this.assertCompanyCanReceiveOrder(company, dto.paymentMethod);
     const deliveryQuote = await this.calculateDeliveryQuote(company, address);
     const wantsWhatsApp = dto.whatsappNotificationsAccepted === true;
@@ -230,6 +231,8 @@ export class OrdersService {
           deliveryCity: address.city,
           deliveryState: address.state,
           deliveryReference: address.reference,
+          deliveryLatitude: address.latitude,
+          deliveryLongitude: address.longitude,
           subtotal,
           deliveryFee,
           deliveryDistanceKm: deliveryQuote.distanceKm,
@@ -282,6 +285,7 @@ export class OrdersService {
     }
     const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });
     if (!address) throw new NotFoundException("Endereço não encontrado.");
+    this.assertConfirmedSiteLocations(company, address);
     return {
       ...await this.calculateDeliveryQuote(company, address),
       whatsappNotificationsAvailable: await this.orderUpdateTemplateAvailable(company.id),
@@ -384,6 +388,8 @@ export class OrdersService {
               deliveryCity: checkout.address.city,
               deliveryState: checkout.address.state,
               deliveryReference: checkout.address.reference ?? null,
+              deliveryLatitude: checkout.address.latitude,
+              deliveryLongitude: checkout.address.longitude,
               subtotal: checkout.subtotal,
               deliveryFee: checkout.deliveryFee,
               deliveryDistanceKm: checkout.distanceKm,
@@ -1048,6 +1054,18 @@ export class OrdersService {
     }
     if (!hasPostalCode(address.zipCode)) {
       throw new BadRequestException("Informe um CEP válido de 8 dígitos no seu endereço para calcular a entrega.");
+    }
+  }
+
+  private assertConfirmedSiteLocations(company: any, address: any) {
+    // Uma loja antiga pode ter coordenada já localizada pelo endereço completo.
+    // Preservamos a operação nesse caso; se o endereço da loja mudar, a edição
+    // limpa esse ponto e passa a exigir confirmação manual antes da próxima venda.
+    if (!this.readCoordinates(company)) {
+      throw new BadRequestException("A loja precisa confirmar no mapa o ponto de saída da entrega nas Configurações antes de aceitar pedidos pelo site.");
+    }
+    if (!address.locationConfirmedAt || !this.readCoordinates(address)) {
+      throw new BadRequestException("Confirme no mapa o ponto exato do seu endereço de entrega antes de calcular o frete.");
     }
   }
 

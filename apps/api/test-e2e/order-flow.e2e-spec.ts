@@ -61,6 +61,60 @@ describe("pedido ponta a ponta (e2e)", () => {
     expect(salvo?.companyId).toBe(loja.id);
     expect(salvo?.items).toHaveLength(1);
     expect(Number(salvo?.items[0].unitPrice)).toBe(40);
+    expect(Number(salvo?.deliveryLatitude)).toBeCloseTo(-19.9245, 5);
+    expect(Number(salvo?.deliveryLongitude)).toBeCloseTo(-43.9385, 5);
+  });
+
+  it("não substitui um ponto sem confirmação pelo centro do CEP", async () => {
+    await harness.prisma.address.update({
+      where: { id: cliente.addressId },
+      data: { locationConfirmedAt: null },
+    });
+    const resposta = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders/quote"))
+      .send({ companySlug: loja.slug, addressId: cliente.addressId });
+    expect(resposta.status).toBe(400);
+    expect(resposta.body.message).toContain("Confirme no mapa");
+  });
+
+  it("não aceita frete por centro de CEP quando a loja perdeu o ponto de saída", async () => {
+    await harness.prisma.company.update({
+      where: { id: loja.id },
+      data: { latitude: null, longitude: null, locationConfirmedAt: null },
+    });
+    const resposta = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders/quote"))
+      .send({ companySlug: loja.slug, addressId: cliente.addressId });
+    expect(resposta.status).toBe(400);
+    expect(resposta.body.message).toContain("A loja precisa confirmar");
+  });
+
+  it("usa os dois pontos confirmados mesmo quando os CEPs são iguais", async () => {
+    const resposta = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders/quote"))
+      .send({ companySlug: loja.slug, addressId: cliente.addressId });
+    expect(resposta.status).toBe(201);
+    expect(resposta.body.distanceKm).toBe(2);
+    expect(resposta.body.estimatedByPostalCode).toBeUndefined();
+  });
+
+  it("limpa a confirmação ao mudar a rua e aceita novo ponto escolhido no mapa", async () => {
+    const alterado = await comoCliente(request(harness.app.getHttpServer()).patch(`/api/addresses/${cliente.addressId}`))
+      .send({ street: "Rua Nova" });
+    expect(alterado.status).toBe(200);
+    expect(alterado.body.locationConfirmedAt).toBeNull();
+
+    const previa = await comoCliente(request(harness.app.getHttpServer()).post("/api/addresses/location-preview"))
+      .send({ addressLine: "Rua Nova, 100", streetName: "Rua Nova", city: "Belo Horizonte", state: "MG", zipCode: "30130000" });
+    expect(previa.status).toBe(201);
+    expect(previa.body.latitude).toBeCloseTo(-19.9227, 5);
+
+    const confirmado = await comoCliente(request(harness.app.getHttpServer()).patch(`/api/addresses/${cliente.addressId}`))
+      .send({ latitude: -19.9245, longitude: -43.9385 });
+    expect(confirmado.status).toBe(200);
+    expect(confirmado.body.locationConfirmedAt).toBeTruthy();
+
+    const cotacao = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders/quote"))
+      .send({ companySlug: loja.slug, addressId: cliente.addressId });
+    expect(cotacao.status).toBe(201);
+    expect(cotacao.body.distanceKm).toBe(2);
   });
 
   it("ignora preço enviado pelo cliente — o DTO não aceita o campo", async () => {

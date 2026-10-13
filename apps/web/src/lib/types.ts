@@ -42,6 +42,9 @@ export interface Company {
   city?: string | null;
   state?: string | null;
   zipCode?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  locationConfirmedAt?: string | null;
   deliveryFeeBase: number;
   deliveryFeePerKm: number;
   deliveryRadiusKm: number;
@@ -218,6 +221,9 @@ export interface Address {
   state: string;
   zipCode?: string | null;
   reference?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  locationConfirmedAt?: string | null;
   isDefault: boolean;
 }
 
@@ -252,6 +258,8 @@ export interface Order {
   deliveryNeighborhood: string;
   deliveryCity: string;
   deliveryState: string;
+  deliveryLatitude?: number | null;
+  deliveryLongitude?: number | null;
   createdAt: string;
   updatedAt: string;
   items: OrderItem[];
@@ -322,6 +330,8 @@ export interface Delivery {
     deliveryNeighborhood: string;
     deliveryCity: string;
     deliveryState: string;
+    deliveryLatitude?: number | null;
+    deliveryLongitude?: number | null;
     deliveryReference?: string | null;
     customerName?: string | null;
     customerPhone?: string | null;

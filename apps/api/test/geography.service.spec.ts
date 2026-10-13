@@ -140,4 +140,30 @@ describe("GeographyService", () => {
       city: "Aparecida de Goiânia", state: "GO",
     })).rejects.toThrow("O CEP não corresponde à cidade e ao estado informados.");
   });
+
+  it("não cobra uma rota que foi encaixada numa rua distante do marcador", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        code: "Ok",
+        routes: [{ distance: 1200, duration: 350 }],
+        waypoints: [{ distance: 8 }, { distance: 900 }],
+      }),
+    }) as never;
+    await expect(new GeographyService().calculateDrivingRoute(
+      { latitude: -16.82, longitude: -49.26 },
+      { latitude: -16.825, longitude: -49.27 },
+    )).rejects.toThrow("longe demais de uma rua acessível");
+  });
+
+  it("recusa zero quilômetro entre dois pontos de entrega distintos", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: "Ok", routes: [{ distance: 0, duration: 0 }], waypoints: [{ distance: 5 }, { distance: 5 }] }),
+    }) as never;
+    await expect(new GeographyService().calculateDrivingRoute(
+      { latitude: -16.820, longitude: -49.260 },
+      { latitude: -16.825, longitude: -49.265 },
+    )).rejects.toThrow("distância incompatível");
+  });
 });

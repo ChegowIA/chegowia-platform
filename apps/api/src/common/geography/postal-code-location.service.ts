@@ -24,7 +24,8 @@ export function normalizePostalCode(value: unknown): string | null {
  *
  * A busca pública não pode pedir uma rota OSRM para cada loja a cada visita.
  * Por isso ela compara centros de CEP (rápido e sem dados de rua); no checkout
- * priorizamos o endereço completo e sinalizamos se a rota usar o centro do CEP.
+ * o ponto confirmado é obrigatório no checkout do site. O canal WhatsApp
+ * ainda pode sinalizar estimativa por CEP quando não há endereço indexado.
  */
 @Injectable()
 export class PostalCodeLocationService {

@@ -1,5 +1,5 @@
 import { Transform } from "class-transformer";
-import { IsNumber, IsOptional, IsString, Matches, Min, MinLength } from "class-validator";
+import { IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength } from "class-validator";
 import { IsCnpj } from "../../common/validators/brazil-document.validator";
 
 const onlyDigits = ({ value }: { value: unknown }) => String(value ?? "").replace(/\D/g, "");
@@ -71,4 +71,16 @@ export class CreateCompanyDto {
   @IsOptional()
   @IsString()
   logoUrl?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitude?: number;
 }

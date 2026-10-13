@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
-import { deliveryAddressLabel, googleMapsRouteUrl, LatLng } from "@/lib/delivery-maps";
+import { deliveryDestination, googleMapsRouteUrl, LatLng } from "@/lib/delivery-maps";
 import { Delivery, Order } from "@/lib/types";
 import { storedOptionSelectionsLabel } from "@/lib/product-options";
 import { formatCurrency, formatDateTime } from "@/lib/format";
@@ -154,7 +154,7 @@ export default function OrderTrackingPage() {
 	                      className="w-full"
 	                      onClick={() =>
 	                        window.open(
-	                          googleMapsRouteUrl(deliveryAddressLabel(order), deliveryPosition(order) ?? undefined),
+	                          googleMapsRouteUrl(deliveryDestination(order), deliveryPosition(order) ?? undefined),
 	                          "_blank",
 	                        )
 	                      }

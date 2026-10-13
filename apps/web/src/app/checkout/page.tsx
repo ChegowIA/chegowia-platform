@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { FormField, Input, Select, Textarea } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
+import { DeliveryPin, DeliveryPinPicker } from "@/components/deliveries/delivery-pin-picker";
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   [PaymentMethod.DINHEIRO]: "Dinheiro",
@@ -105,6 +106,7 @@ function CheckoutForm() {
   const [whatsappPhone, setWhatsappPhone] = useState("");
   const [showAddressForm, setShowAddressForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [addressPin, setAddressPin] = useState<DeliveryPin | null>(null);
 
   const { data: addresses, isLoading: loadingAddresses } = useQuery({
     queryKey: ["my-addresses"],
@@ -121,9 +123,29 @@ function CheckoutForm() {
     }
   }, [addresses, addressId]);
 
+  const selectedAddress = addresses?.find((address) => address.id === addressId);
+  useEffect(() => {
+    setAddressPin(selectedAddress?.locationConfirmedAt && selectedAddress.latitude != null && selectedAddress.longitude != null
+      ? { latitude: Number(selectedAddress.latitude), longitude: Number(selectedAddress.longitude) }
+      : null);
+  }, [addressId, selectedAddress?.latitude, selectedAddress?.longitude, selectedAddress?.locationConfirmedAt]);
+
+  const confirmAddressPin = useMutation({
+    mutationFn: async () => {
+      if (!addressId || !addressPin) throw new Error("Selecione um ponto no mapa.");
+      const { data } = await api.patch<Address>(`/addresses/${addressId}`, addressPin);
+      return data;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<Address[]>(["my-addresses"], (old) => old?.map((address) => address.id === updated.id ? updated : address));
+      void queryClient.invalidateQueries({ queryKey: ["delivery-quote", companySlug, addressId] });
+    },
+  });
+
   const deliveryQuote = useQuery({
-    queryKey: ["delivery-quote", companySlug, addressId],
-    enabled: Boolean(companySlug && addressId),
+    queryKey: ["delivery-quote", companySlug, addressId, selectedAddress?.locationConfirmedAt,
+      selectedAddress?.latitude, selectedAddress?.longitude],
+    enabled: Boolean(companySlug && addressId && selectedAddress?.locationConfirmedAt),
     retry: false,
     staleTime: 5 * 60 * 1_000,
     queryFn: async () => {
@@ -216,10 +238,32 @@ function CheckoutForm() {
                 <span className="block text-slate-500 dark:text-slate-400">
                   {addr.neighborhood}, {addr.city} - {addr.state}
                   {addr.complement ? ` · ${addr.complement}` : ""}
+                  {addr.reference ? ` · Referência: ${addr.reference}` : ""}
                 </span>
               </span>
             </label>
           ))}
+          {selectedAddress && !selectedAddress.locationConfirmedAt && !showAddressForm && (
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Antes de calcular o frete, confirme no mapa a entrada deste endereço.</p>
+              <DeliveryPinPicker
+                lookup={{
+                  addressLine: `${selectedAddress.street}, ${selectedAddress.number}`,
+                  streetName: selectedAddress.street,
+                  neighborhood: selectedAddress.neighborhood,
+                  city: selectedAddress.city,
+                  state: selectedAddress.state,
+                  zipCode: selectedAddress.zipCode ?? "",
+                }}
+                point={addressPin}
+                confirmed={false}
+                confirming={confirmAddressPin.isPending}
+                onPointChange={setAddressPin}
+                onConfirm={() => confirmAddressPin.mutate()}
+              />
+              {confirmAddressPin.isError && <p className="text-sm text-red-700 dark:text-red-300">{apiErrorMessage(confirmAddressPin.error)}</p>}
+            </div>
+          )}
           {!loadingAddresses && addresses?.length === 0 && !showAddressForm && (
             <p className="text-sm text-slate-500 dark:text-slate-400">Você ainda não tem endereços cadastrados.</p>
           )}
@@ -301,7 +345,7 @@ function CheckoutForm() {
             <span>{formatCurrency(subtotal)}</span>
           </div>
           <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
-            <span>{deliveryQuote.data?.estimatedByPostalCode ? "Rota estimada pelo CEP" : "Rota de entrega"}</span>
+            <span>Rota até o ponto confirmado</span>
             <span>
               {deliveryQuote.isLoading
                 ? "calculando..."
@@ -310,12 +354,6 @@ function CheckoutForm() {
                   : "aguardando endereço"}
             </span>
           </div>
-          {deliveryQuote.data?.estimatedByPostalCode && (
-            <p className="text-xs leading-5 text-amber-800 dark:text-amber-300">
-              O mapa não encontrou o ponto exato. Distância e taxa foram estimadas pela região do CEP;
-              confira rua, número e referência para facilitar a entrega.
-            </p>
-          )}
           <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
             <span>Taxa de entrega</span>
             <span>
@@ -343,7 +381,7 @@ function CheckoutForm() {
         className="w-full"
         size="lg"
         isLoading={createOrder.isPending}
-        disabled={deliveryQuote.isLoading || deliveryQuote.isError}
+        disabled={!deliveryQuote.data || deliveryQuote.isFetching || deliveryQuote.isError}
         onClick={handleConfirm}
       >
         Confirmar pedido
@@ -379,11 +417,21 @@ const EMPTY_ADDRESS_FORM: AddressFormState = {
 function NewAddressForm({ onCreated, onCancel }: { onCreated: (addr: Address) => void; onCancel: () => void }) {
   const [form, setForm] = useState<AddressFormState>(EMPTY_ADDRESS_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [pin, setPin] = useState<DeliveryPin | null>(null);
+  const [pinConfirmed, setPinConfirmed] = useState(false);
+
+  function changeAddress(field: keyof AddressFormState, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setPin(null);
+    setPinConfirmed(false);
+  }
 
   const createAddress = useMutation({
     mutationFn: async () => {
+      if (!pin || !pinConfirmed) throw new Error("Confirme o ponto de entrega no mapa.");
       const { data } = await api.post<Address>("/addresses", {
         ...form,
+        ...pin,
         label: form.label || undefined,
         complement: form.complement || undefined,
         zipCode: form.zipCode || undefined,
@@ -402,30 +450,40 @@ function NewAddressForm({ onCreated, onCancel }: { onCreated: (addr: Address) =>
           <Input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
         </FormField>
         <FormField label="Rua">
-          <Input required value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
+          <Input required value={form.street} onChange={(e) => changeAddress("street", e.target.value)} />
         </FormField>
         <FormField label="Número">
-          <Input required value={form.number} onChange={(e) => setForm({ ...form, number: e.target.value })} />
+          <Input required value={form.number} onChange={(e) => changeAddress("number", e.target.value)} />
         </FormField>
         <FormField label="Complemento">
           <Input value={form.complement} onChange={(e) => setForm({ ...form, complement: e.target.value })} />
         </FormField>
+        <FormField label="Referência para o entregador">
+          <Input placeholder="Ex.: portão azul, bloco 2" value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
+        </FormField>
         <FormField label="Bairro">
-          <Input required value={form.neighborhood} onChange={(e) => setForm({ ...form, neighborhood: e.target.value })} />
+          <Input required value={form.neighborhood} onChange={(e) => changeAddress("neighborhood", e.target.value)} />
         </FormField>
         <FormField label="Cidade">
-          <Input required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+          <Input required value={form.city} onChange={(e) => changeAddress("city", e.target.value)} />
         </FormField>
         <FormField label="Estado (UF)">
-          <BrazilStateSelect required value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+          <BrazilStateSelect required value={form.state} onChange={(e) => changeAddress("state", e.target.value)} />
         </FormField>
         <FormField label="CEP">
-          <MaskedInput mask="cep" placeholder="00000-000" value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
+          <MaskedInput mask="cep" placeholder="00000-000" value={form.zipCode} onChange={(e) => changeAddress("zipCode", e.target.value)} />
         </FormField>
       </div>
+      <DeliveryPinPicker
+        lookup={{ addressLine: `${form.street}, ${form.number}`, streetName: form.street, neighborhood: form.neighborhood, city: form.city, state: form.state, zipCode: form.zipCode }}
+        point={pin}
+        confirmed={pinConfirmed}
+        onPointChange={(next) => { setPin(next); setPinConfirmed(false); }}
+        onConfirm={() => setPinConfirmed(true)}
+      />
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       <div className="flex gap-2">
-        <Button type="button" size="sm" isLoading={createAddress.isPending} onClick={() => createAddress.mutate()}>
+        <Button type="button" size="sm" disabled={!pinConfirmed || !form.street || !form.city || form.zipCode.replace(/\D/g, "").length !== 8} isLoading={createAddress.isPending} onClick={() => createAddress.mutate()}>
           Salvar endereço
         </Button>
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>

@@ -1,6 +1,6 @@
 import { PartialType } from "@nestjs/swagger";
 import { Transform } from "class-transformer";
-import { IsBoolean, IsOptional, IsString, Matches, MinLength } from "class-validator";
+import { IsBoolean, IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength } from "class-validator";
 
 const onlyDigits = ({ value }: { value: unknown }) => String(value ?? "").replace(/\D/g, "");
 
@@ -41,6 +41,45 @@ export class CreateAddressDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  longitude?: number;
 }
 
 export class UpdateAddressDto extends PartialType(CreateAddressDto) {}
+
+export class PreviewAddressLocationDto {
+  @IsString()
+  @MinLength(2)
+  addressLine: string;
+
+  @IsOptional()
+  @IsString()
+  streetName?: string;
+
+  @IsOptional()
+  @IsString()
+  neighborhood?: string;
+
+  @IsString()
+  @MinLength(2)
+  city: string;
+
+  @IsString()
+  @Matches(/^[A-Za-z]{2}$/)
+  state: string;
+
+  @Transform(onlyDigits)
+  @IsString()
+  @Matches(/^\d{8}$/)
+  zipCode: string;
+}

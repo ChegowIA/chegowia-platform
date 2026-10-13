@@ -49,6 +49,7 @@ interface BrasilApiCepV2Result {
 interface OsrmRouteResponse {
   code?: string;
   routes?: Array<{ distance?: number; duration?: number }>;
+  waypoints?: Array<{ distance?: number }>;
 }
 
 /**
@@ -99,8 +100,8 @@ export class GeographyService {
 
   /**
    * Localiza o centro aproximado de um CEP. Esta coordenada serve para a
-   * triagem leve do catálogo e, quando o endereço exato não é indexado, como
-   * ponto aproximado para calcular a rota no checkout.
+   * triagem leve do catálogo e sugestão inicial do mapa. O checkout do site
+   * exige um ponto confirmado; o centro do CEP não define o frete final.
    */
   async geocodePostalCode(zipCode: string, hint: PostalCodeHint = {}): Promise<GeographicPoint> {
     const normalizedZipCode = String(zipCode ?? "").replace(/\D/g, "");
@@ -187,6 +188,15 @@ export class GeographyService {
     if (response.code !== "Ok" || !Number.isFinite(distanceMeters) || !Number.isFinite(durationSeconds)) {
       throw new ServiceUnavailableException("Não foi possível calcular a rota de entrega agora. Tente novamente.");
     }
+    if (response.waypoints?.some((waypoint) => Number.isFinite(Number(waypoint.distance)) && Number(waypoint.distance) > 500)) {
+      throw new BadRequestException("O ponto no mapa está longe demais de uma rua acessível. Mova o marcador para a entrada pela rua e tente novamente.");
+    }
+    // Dois pontos distintos não podem gerar frete de 0 km só porque o motor
+    // encaixou ambos no mesmo segmento ou retornou uma rota degenerada.
+    const straightLineMeters = this.straightLineMeters(origin, destination);
+    if (distanceMeters < 50 && straightLineMeters > 150) {
+      throw new ServiceUnavailableException("A rota retornou distância incompatível com os pontos no mapa. Ajuste os marcadores ou tente novamente.");
+    }
     return {
       distanceKm: this.round(distanceMeters / 1_000, 2),
       durationMinutes: Math.max(1, Math.ceil(durationSeconds / 60)),
@@ -247,5 +257,15 @@ export class GeographyService {
   private round(value: number, decimals: number) {
     const factor = 10 ** decimals;
     return Math.round((value + Number.EPSILON) * factor) / factor;
+  }
+
+  private straightLineMeters(first: GeographicPoint, second: GeographicPoint) {
+    const toRadians = (degrees: number) => degrees * Math.PI / 180;
+    const latitudeDelta = toRadians(second.latitude - first.latitude);
+    const longitudeDelta = toRadians(second.longitude - first.longitude);
+    const a = Math.sin(latitudeDelta / 2) ** 2
+      + Math.cos(toRadians(first.latitude)) * Math.cos(toRadians(second.latitude))
+      * Math.sin(longitudeDelta / 2) ** 2;
+    return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 }

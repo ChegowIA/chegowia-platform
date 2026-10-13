@@ -486,7 +486,7 @@ model RefreshToken {
   // "COMPANY" ou "RESELLER". A largura acompanha a coluna criada em
   // 20260814003000: sem ela declarada, o Prisma acha que o campo tem 191
   // caracteres e a próxima migration gerada alargaria a coluna sem motivo.
-  assumedAccessKind String? @db.VarChar(20)
+  assumedAccessKind String?   @db.VarChar(20)
   assumedUserId     String?
   assumedResellerId String?
 
@@ -571,10 +571,10 @@ model IdentityDocument {
 // ---------------------------------------------------------------------------
 
 model Company {
-  id                     String   @id @default(cuid())
+  id                     String    @id @default(cuid())
   name                   String
-  slug                   String   @unique
-  cnpj                   String?  @unique
+  slug                   String    @unique
+  cnpj                   String?   @unique
   phone                  String?
   whatsapp               String?
   addressLine            String?
@@ -582,53 +582,54 @@ model Company {
   state                  String?
   // CEP operacional do ponto que prepara/expede os pedidos. É obrigatório
   // nos novos cadastros e permite a triagem geográfica antes da rota exata.
-  zipCode                String?  @db.VarChar(8)
-  latitude               Decimal? @db.Decimal(10, 7)
-  longitude              Decimal? @db.Decimal(10, 7)
-  deliveryFeeBase        Decimal  @default(0) @db.Decimal(10, 2)
-  deliveryFeePerKm       Decimal  @default(1.50) @db.Decimal(10, 2)
-  deliveryRadiusKm       Decimal  @default(10) @db.Decimal(6, 2)
-  avgDeliveryTimeMinutes Int      @default(40)
+  zipCode                String?   @db.VarChar(8)
+  latitude               Decimal?  @db.Decimal(10, 7)
+  longitude              Decimal?  @db.Decimal(10, 7)
+  locationConfirmedAt    DateTime?
+  deliveryFeeBase        Decimal   @default(0) @db.Decimal(10, 2)
+  deliveryFeePerKm       Decimal   @default(1.50) @db.Decimal(10, 2)
+  deliveryRadiusKm       Decimal   @default(10) @db.Decimal(6, 2)
+  avgDeliveryTimeMinutes Int       @default(40)
   logoUrl                String?
-  isActive               Boolean  @default(true)
+  isActive               Boolean   @default(true)
   // Empresas criadas durante a homologação ficam fora da vitrine pública até
   // o modo temporário ser desligado. Não substitui isActive: a operação segue
   // funcionando normalmente para o administrador da própria empresa.
-  isTestOnly             Boolean  @default(false)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  isTestOnly             Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  settings                  CompanySettings?
-  users                     User[]
-  deliveryAreas             DeliveryArea[]
-  categories                Category[]
-  products                  Product[]
-  catalogImportSessions     CatalogImportSession[]
-  orders                    Order[]
+  settings                   CompanySettings?
+  users                      User[]
+  deliveryAreas              DeliveryArea[]
+  categories                 Category[]
+  products                   Product[]
+  catalogImportSessions      CatalogImportSession[]
+  orders                     Order[]
   orderWhatsAppNotifications OrderWhatsAppNotification[]
-  deliveries                Delivery[]
-  payments                  Payment[]
-  employeeProfiles          EmployeeProfile[]
-  customerProfiles          CustomerProfile[]
-  promotions                Promotion[]
-  messagingChannels         MessagingChannel[]
-  whatsappConversations     WhatsAppConversation[]
-  whatsappMessages          WhatsAppMessage[]
-  whatsappOrderDrafts       WhatsAppOrderDraft[]
-  usageLedgers              UsageLedger[]
-  aiConversations           AIConversation[]
-  aiActionLogs              AIActionLog[]
-  restaurantTables          RestaurantTable[]
-  tableSessions             TableSession[]
-  diningOrders              DiningOrder[]
-  subscription              ClientSubscription?
-  clientApplication         ClientApplication?
-  fiscalProfile             CompanyFiscalProfile?
-  fiscalCertificates        FiscalCertificate[]
-  fiscalDocuments           FiscalDocument[]
-  cashRegisters             CashRegister[]
-  cashSessions              CashSession[]
-  superAdminCompanyAccesses SuperAdminCompanyAccess[]
+  deliveries                 Delivery[]
+  payments                   Payment[]
+  employeeProfiles           EmployeeProfile[]
+  customerProfiles           CustomerProfile[]
+  promotions                 Promotion[]
+  messagingChannels          MessagingChannel[]
+  whatsappConversations      WhatsAppConversation[]
+  whatsappMessages           WhatsAppMessage[]
+  whatsappOrderDrafts        WhatsAppOrderDraft[]
+  usageLedgers               UsageLedger[]
+  aiConversations            AIConversation[]
+  aiActionLogs               AIActionLog[]
+  restaurantTables           RestaurantTable[]
+  tableSessions              TableSession[]
+  diningOrders               DiningOrder[]
+  subscription               ClientSubscription?
+  clientApplication          ClientApplication?
+  fiscalProfile              CompanyFiscalProfile?
+  fiscalCertificates         FiscalCertificate[]
+  fiscalDocuments            FiscalDocument[]
+  cashRegisters              CashRegister[]
+  cashSessions               CashSession[]
+  superAdminCompanyAccesses  SuperAdminCompanyAccess[]
 
   @@index([city, state])
   @@index([zipCode])
@@ -689,21 +690,21 @@ model CompanyFiscalProfile {
   // todos compartilham a mesma tributação; obrigar o preenchimento produto a
   // produto garantiria cadastro incompleto ou copiado errado. O produto só
   // guarda o que difere daqui.
-  defaultNcm        String?   @db.VarChar(8)
-  defaultCest       String?   @db.VarChar(7)
-  defaultCfop       String    @default("5102") @db.VarChar(4)
-  defaultTaxOrigin  TaxOrigin @default(NACIONAL)
+  defaultNcm               String?   @db.VarChar(8)
+  defaultCest              String?   @db.VarChar(7)
+  defaultCfop              String    @default("5102") @db.VarChar(4)
+  defaultTaxOrigin         TaxOrigin @default(NACIONAL)
   // CSOSN no Simples, CST nos demais — validado contra o regime da empresa.
-  defaultIcmsCode   String?   @db.VarChar(3)
-  defaultIcmsRate   Decimal?  @db.Decimal(5, 2)
+  defaultIcmsCode          String?   @db.VarChar(3)
+  defaultIcmsRate          Decimal?  @db.Decimal(5, 2)
   // Percentual de redução da base de cálculo. Só o CST 20 usa, e para ele é
   // obrigatório no XML: sem o pRedBC a nota é recusada pelo schema.
-  defaultIcmsReductionRate Decimal? @db.Decimal(5, 2)
-  defaultPisCode    String?   @db.VarChar(2)
-  defaultPisRate    Decimal?  @db.Decimal(5, 2)
-  defaultCofinsCode String?   @db.VarChar(2)
-  defaultCofinsRate Decimal?  @db.Decimal(5, 2)
-  defaultUnit       String    @default("UN") @db.VarChar(6)
+  defaultIcmsReductionRate Decimal?  @db.Decimal(5, 2)
+  defaultPisCode           String?   @db.VarChar(2)
+  defaultPisRate           Decimal?  @db.Decimal(5, 2)
+  defaultCofinsCode        String?   @db.VarChar(2)
+  defaultCofinsRate        Decimal?  @db.Decimal(5, 2)
+  defaultUnit              String    @default("UN") @db.VarChar(6)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -977,25 +978,26 @@ model CustomerProfile {
 }
 
 model Address {
-  id           String   @id @default(cuid())
-  userId       String
-  label        String?
-  street       String
-  number       String
-  complement   String?
-  neighborhood String
-  city         String
-  state        String
+  id                  String    @id @default(cuid())
+  userId              String
+  label               String?
+  street              String
+  number              String
+  complement          String?
+  neighborhood        String
+  city                String
+  state               String
   // Mantido nullable e na largura legada no banco para não quebrar endereços
   // históricos. A API exige CEP válido em toda criação/edição e no checkout,
   // normalizando-o para oito dígitos antes de persistir alterações novas.
-  zipCode      String?
-  reference    String?
-  latitude     Decimal? @db.Decimal(10, 7)
-  longitude    Decimal? @db.Decimal(10, 7)
-  isDefault    Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @default(now()) @updatedAt
+  zipCode             String?
+  reference           String?
+  latitude            Decimal?  @db.Decimal(10, 7)
+  longitude           Decimal?  @db.Decimal(10, 7)
+  locationConfirmedAt DateTime?
+  isDefault           Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @default(now()) @updatedAt
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   orders Order[]
@@ -1005,8 +1007,8 @@ model Address {
 }
 
 // Centro aproximado de cada CEP já consultado. O catálogo usa esta referência
-// leve para decidir o que faz sentido mostrar; o checkout continua usando a
-// rota real até o endereço completo, que é a decisão definitiva de entrega.
+// leve para decidir o que faz sentido mostrar; o checkout do site usa a rota
+// até o ponto confirmado no mapa, que é a decisão definitiva de entrega.
 model PostalCodeLocation {
   zipCode   String   @id @db.VarChar(8)
   latitude  Decimal  @db.Decimal(10, 7)
@@ -1060,40 +1062,40 @@ model Category {
 }
 
 model Product {
-  id          String  @id @default(cuid())
+  id          String   @id @default(cuid())
   companyId   String
   categoryId  String
   name        String
-  description String? @db.Text
-  price       Decimal @db.Decimal(10, 2)
+  description String?  @db.Text
+  price       Decimal  @db.Decimal(10, 2)
   // Custo de compra/produção. É opcional para não transformar lucro em uma
   // estimativa quando a empresa ainda não cadastrou o custo do item.
   costPrice   Decimal? @db.Decimal(10, 2)
   imageUrl    String?
-  isActive    Boolean @default(true)
-  isFeatured  Boolean @default(false)
+  isActive    Boolean  @default(true)
+  isFeatured  Boolean  @default(false)
 
   // Tributação do item. Tudo opcional: nulo significa "usa o padrão da
   // empresa" (CompanyFiscalProfile.default*). O NCM é o que mais varia num
   // cardápio — refeição pronta, bebida e cerveja têm códigos diferentes.
-  ncm        String?    @db.VarChar(8)
-  cest       String?    @db.VarChar(7)
-  cfop       String?    @db.VarChar(4)
-  taxOrigin  TaxOrigin?
-  icmsCode   String?    @db.VarChar(3)
-  icmsRate   Decimal?   @db.Decimal(5, 2)
-  icmsReductionRate Decimal? @db.Decimal(5, 2)
-  pisCode    String?    @db.VarChar(2)
-  pisRate    Decimal?   @db.Decimal(5, 2)
-  cofinsCode String?    @db.VarChar(2)
-  cofinsRate Decimal?   @db.Decimal(5, 2)
-  unit       String?    @db.VarChar(6)
+  ncm               String?    @db.VarChar(8)
+  cest              String?    @db.VarChar(7)
+  cfop              String?    @db.VarChar(4)
+  taxOrigin         TaxOrigin?
+  icmsCode          String?    @db.VarChar(3)
+  icmsRate          Decimal?   @db.Decimal(5, 2)
+  icmsReductionRate Decimal?   @db.Decimal(5, 2)
+  pisCode           String?    @db.VarChar(2)
+  pisRate           Decimal?   @db.Decimal(5, 2)
+  cofinsCode        String?    @db.VarChar(2)
+  cofinsRate        Decimal?   @db.Decimal(5, 2)
+  unit              String?    @db.VarChar(6)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company          Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category         Category           @relation(fields: [categoryId], references: [id])
+  company          Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category         Category             @relation(fields: [categoryId], references: [id])
   variations       ProductVariation[]
   addons           ProductAddon[]
   optionGroups     ProductOptionGroup[]
@@ -1133,18 +1135,18 @@ model ProductAddon {
 // queira oferecer. `minSelections`/`maxSelections` deixam a quantidade livre:
 // uma pizzaria pode permitir 2, 3 ou mais sabores sem alterar código.
 model ProductOptionGroup {
-  id              String                     @id @default(cuid())
-  productId       String
-  name            String
-  description     String?                    @db.Text
-  selectionType   ProductOptionSelectionType @default(SINGLE)
-  minSelections   Int                        @default(0)
-  maxSelections   Int                        @default(1)
-  pricingRule     ProductOptionPricingRule   @default(SUM)
-  position        Int                        @default(0)
-  isActive        Boolean                    @default(true)
-  createdAt       DateTime                   @default(now())
-  updatedAt       DateTime                   @updatedAt
+  id            String                     @id @default(cuid())
+  productId     String
+  name          String
+  description   String?                    @db.Text
+  selectionType ProductOptionSelectionType @default(SINGLE)
+  minSelections Int                        @default(0)
+  maxSelections Int                        @default(1)
+  pricingRule   ProductOptionPricingRule   @default(SUM)
+  position      Int                        @default(0)
+  isActive      Boolean                    @default(true)
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
 
   product Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   options ProductOption[]
@@ -1153,14 +1155,14 @@ model ProductOptionGroup {
 }
 
 model ProductOption {
-  id                   String             @id @default(cuid())
+  id                   String   @id @default(cuid())
   productOptionGroupId String
   name                 String
-  priceDelta           Decimal            @default(0) @db.Decimal(10, 2)
-  position             Int                @default(0)
-  isActive             Boolean            @default(true)
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  priceDelta           Decimal  @default(0) @db.Decimal(10, 2)
+  position             Int      @default(0)
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   group ProductOptionGroup @relation(fields: [productOptionGroupId], references: [id], onDelete: Cascade)
 
@@ -1197,21 +1199,21 @@ model CatalogImportSession {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id                     String      @id @default(cuid())
-  companyId              String
+  id                            String      @id @default(cuid())
+  companyId                     String
   // Pedidos pelo site sempre têm conta. Pedidos do WhatsApp não exigem login,
   // então guardam nome/telefone no próprio documento sem criar credenciais
   // artificiais para o consumidor.
-  customerId             String?
-  customerName           String?
-  customerPhone          String?     @db.VarChar(20)
+  customerId                    String?
+  customerName                  String?
+  customerPhone                 String?     @db.VarChar(20)
   // Pedido do site: autorização explícita para avisos transacionais neste número.
   // Pedidos originados no WhatsApp podem receber resposta na janela de serviço,
   // mas não usam modelo fora dela sem este consentimento.
   whatsappNotificationConsentAt DateTime?
-  source                 OrderSource @default(SITE)
-  whatsappConversationId String?
-  whatsappOrderDraftId   String?     @unique
+  source                        OrderSource @default(SITE)
+  whatsappConversationId        String?
+  whatsappOrderDraftId          String?     @unique
 
   addressId            String?
   deliveryStreet       String
@@ -1221,6 +1223,8 @@ model Order {
   deliveryCity         String
   deliveryState        String
   deliveryReference    String?
+  deliveryLatitude     Decimal? @db.Decimal(10, 7)
+  deliveryLongitude    Decimal? @db.Decimal(10, 7)
 
   subtotal                     Decimal  @db.Decimal(10, 2)
   deliveryFee                  Decimal  @db.Decimal(10, 2)
@@ -1249,11 +1253,11 @@ model Order {
   whatsappConversation WhatsAppConversation? @relation("WhatsAppConversationOrders", fields: [whatsappConversationId, companyId], references: [id, companyId], onDelete: Restrict)
   whatsappOrderDraft   WhatsAppOrderDraft?   @relation("WhatsAppOrderDraftOrder", fields: [whatsappOrderDraftId, companyId], references: [id, companyId], onDelete: Restrict)
 
-  items          OrderItem[]
-  statusHistory  OrderStatusHistory[]
-  delivery       Delivery?
-  payment        Payment?
-  fiscalDocuments FiscalDocument[]
+  items                 OrderItem[]
+  statusHistory         OrderStatusHistory[]
+  delivery              Delivery?
+  payment               Payment?
+  fiscalDocuments       FiscalDocument[]
   whatsappNotifications OrderWhatsAppNotification[]
 
   @@unique([whatsappOrderDraftId, companyId])
@@ -1385,16 +1389,16 @@ model TableSession {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
-  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   // A empresa faz parte da FK: uma sessão nunca pode ser ligada a uma mesa de
   // outra empresa, mesmo em uma escrita acidental fora do service.
-  table          RestaurantTable @relation(fields: [tableId, companyId], references: [id, companyId], onDelete: Restrict)
+  table           RestaurantTable  @relation(fields: [tableId, companyId], references: [id, companyId], onDelete: Restrict)
   // Mantém a regra histórica da auditoria: não remove um usuário que abriu
   // uma comanda sem antes tratar o vínculo explicitamente.
-  openedBy       User?           @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id], onDelete: Restrict)
-  attendant      User?           @relation("TableSessionAttendant", fields: [attendantUserId], references: [id])
-  closedBy       User?           @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
-  orders         DiningOrder[]
+  openedBy        User?            @relation("TableSessionOpenedBy", fields: [openedByUserId], references: [id], onDelete: Restrict)
+  attendant       User?            @relation("TableSessionAttendant", fields: [attendantUserId], references: [id])
+  closedBy        User?            @relation("TableSessionClosedBy", fields: [closedByUserId], references: [id])
+  orders          DiningOrder[]
   fiscalDocuments FiscalDocument[] @relation("FiscalDocumentTableSession")
 
   @@unique([id, companyId])
@@ -2359,7 +2363,7 @@ model PlatformOutreachTarget {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  campaign     PlatformOutreachCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign     PlatformOutreachCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   conversation PlatformWhatsAppConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   // O mesmo número não recebe duas vezes o mesmo disparo, nem quando a lista

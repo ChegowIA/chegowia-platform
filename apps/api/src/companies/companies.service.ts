@@ -19,6 +19,7 @@ import { filtroPublicoDeEmpresa } from "../common/public-visibility/subscription
 import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-data.service";
 import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 import { normalizePostalCode, PostalCodeLocationService } from "../common/geography/postal-code-location.service";
+import { confirmedLocationPatch } from "../common/geography/confirmed-location";
 
 @Injectable()
 export class CompaniesService {
@@ -79,6 +80,7 @@ export class CompaniesService {
             city: dto.city,
             state: dto.state,
             zipCode,
+            ...confirmedLocationPatch(dto, false),
             deliveryFeeBase: dto.deliveryFeeBase ?? 0,
             deliveryFeePerKm: dto.deliveryFeePerKm ?? 1.5,
             deliveryRadiusKm: dto.deliveryRadiusKm ?? 10,
@@ -175,7 +177,7 @@ export class CompaniesService {
             zipCode,
             cnpj,
             slug: dto.slug ? slugify(dto.slug) : undefined,
-            ...(locationChanged ? { latitude: null, longitude: null } : {}),
+            ...confirmedLocationPatch(dto, locationChanged),
           },
           // A tela de Configurações mantém esta resposta no cache. Devolver
           // também as configurações evita que salvar endereço/taxas apague do

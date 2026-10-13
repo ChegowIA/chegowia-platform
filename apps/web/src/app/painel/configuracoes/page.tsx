@@ -12,6 +12,7 @@ import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { ProductImage } from "@/components/catalog/product-image";
 import { WhatsAppGupshupSettings } from "@/components/messaging/whatsapp-gupshup-settings";
 import { ChangePasswordCard } from "@/components/auth/change-password-card";
+import { DeliveryPin, DeliveryPinPicker } from "@/components/deliveries/delivery-pin-picker";
 
 const WEEKDAYS = [
   { key: "segunda", label: "Segunda" },
@@ -57,6 +58,8 @@ export default function ConfiguracoesPage() {
   const hydratedCompanyId = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [companyPin, setCompanyPin] = useState<DeliveryPin | null>(null);
+  const [pinConfirmed, setPinConfirmed] = useState(false);
 
   const { data: company, isLoading } = useQuery({
     queryKey: ["company-me"],
@@ -121,6 +124,10 @@ export default function ConfiguracoesPage() {
       avgDeliveryTimeMinutes: String(company.avgDeliveryTimeMinutes ?? ""),
       logoUrl: company.logoUrl ?? "",
     });
+    setCompanyPin(company.latitude != null && company.longitude != null
+      ? { latitude: Number(company.latitude), longitude: Number(company.longitude) }
+      : null);
+    setPinConfirmed(Boolean(company.locationConfirmedAt));
     setOpeningHours(openingHoursDraft(company.settings?.openingHours));
     setPaymentMethods(company.settings?.paymentMethodsEnabled ?? []);
     setAiEnabled(company.settings?.aiEnabled ?? true);
@@ -128,6 +135,12 @@ export default function ConfiguracoesPage() {
     setSettingsWhatsapp(company.settings?.whatsappNumber ?? "");
     hydratedCompanyId.current = company.id;
   }, [company]);
+
+  function changeCompanyAddress(field: "addressLine" | "city" | "state" | "zipCode", value: string) {
+    setGeneralForm((current) => ({ ...current, [field]: value }));
+    setCompanyPin(null);
+    setPinConfirmed(false);
+  }
 
   function updateCachedSettings(patch: Partial<CompanySettings>) {
     queryClient.setQueryData<Company>(["company-me"], (current) => {
@@ -144,7 +157,9 @@ export default function ConfiguracoesPage() {
 
   const saveGeneral = useMutation({
     mutationFn: async () => {
+      if (!companyPin || !pinConfirmed) throw new Error("Confirme no mapa o ponto de saída da loja.");
       const { data } = await api.patch("/companies/me", {
+        ...companyPin,
         name: generalForm.name,
         cnpj: generalForm.cnpj || undefined,
         phone: generalForm.phone || undefined,
@@ -246,6 +261,12 @@ export default function ConfiguracoesPage() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Configurações</h1>
 
+      {company && !company.locationConfirmedAt && (
+        <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          Confirme a entrada da loja no mapa para que o frete de novos pedidos pelo site não seja calculado pelo centro do CEP. <a className="font-bold underline" href="#ponto-saida-entrega">Ir ao mapa</a>
+        </p>
+      )}
+
       {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
       {success && (
         <p className="rounded-lg bg-emerald-50 px-4 py-2 text-sm text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">{success}</p>
@@ -275,17 +296,17 @@ export default function ConfiguracoesPage() {
             <Input
               required
               value={generalForm.addressLine}
-              onChange={(e) => setGeneralForm((f) => ({ ...f, addressLine: e.target.value }))}
+              onChange={(e) => changeCompanyAddress("addressLine", e.target.value)}
             />
           </FormField>
           <FormField label="Cidade">
-            <Input required value={generalForm.city} onChange={(e) => setGeneralForm((f) => ({ ...f, city: e.target.value }))} />
+            <Input required value={generalForm.city} onChange={(e) => changeCompanyAddress("city", e.target.value)} />
           </FormField>
           <FormField label="Estado">
-            <BrazilStateSelect required value={generalForm.state} onChange={(e) => setGeneralForm((f) => ({ ...f, state: e.target.value }))} />
+            <BrazilStateSelect required value={generalForm.state} onChange={(e) => changeCompanyAddress("state", e.target.value)} />
           </FormField>
           <FormField label="CEP operacional">
-            <MaskedInput mask="cep" required value={generalForm.zipCode} onChange={(e) => setGeneralForm((f) => ({ ...f, zipCode: e.target.value }))} />
+            <MaskedInput mask="cep" required value={generalForm.zipCode} onChange={(e) => changeCompanyAddress("zipCode", e.target.value)} />
           </FormField>
           <FormField label="Taxa de entrega base">
             <Input
@@ -320,6 +341,17 @@ export default function ConfiguracoesPage() {
               onChange={(e) => setGeneralForm((f) => ({ ...f, avgDeliveryTimeMinutes: e.target.value }))}
             />
           </FormField>
+          <div id="ponto-saida-entrega" className="sm:col-span-2 scroll-mt-24">
+            <DeliveryPinPicker
+              context="store"
+              lookup={{ addressLine: generalForm.addressLine, city: generalForm.city, state: generalForm.state, zipCode: generalForm.zipCode }}
+              point={companyPin}
+              confirmed={pinConfirmed}
+              onPointChange={(next) => { setCompanyPin(next); setPinConfirmed(false); }}
+              onConfirm={() => setPinConfirmed(true)}
+            />
+            <p className="mt-2 text-xs text-slate-600 dark:text-slate-300">A rota e a taxa de entrega começam neste ponto. Pedidos pelo site exigem esta confirmação para evitar fretes calculados pelo centro do CEP.</p>
+          </div>
           <div className="sm:col-span-2 grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:grid-cols-[144px_1fr] dark:border-slate-700 dark:bg-slate-900/40">
             <ProductImage src={storeImagePreviewUrl} alt={generalForm.name || "Imagem da loja"} className="h-36 w-full rounded-xl" />
             <div className="space-y-3">
@@ -352,7 +384,7 @@ export default function ConfiguracoesPage() {
         <CardActions>
           <Button
             className="w-full sm:w-auto"
-            disabled={!generalForm.addressLine.trim() || !generalForm.city.trim() || !generalForm.state || generalForm.zipCode.replace(/\D/g, "").length !== 8}
+            disabled={!pinConfirmed || !generalForm.addressLine.trim() || !generalForm.city.trim() || !generalForm.state || generalForm.zipCode.replace(/\D/g, "").length !== 8}
             isLoading={saveGeneral.isPending}
             onClick={() => saveGeneral.mutate()}
           >

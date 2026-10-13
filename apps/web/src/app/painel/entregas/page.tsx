@@ -10,7 +10,7 @@ import {
   Role,
 } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
-import { deliveryAddressLabel, googleMapsRouteUrl, LatLng } from "@/lib/delivery-maps";
+import { deliveryDestination, googleMapsRouteUrl, LatLng } from "@/lib/delivery-maps";
 import { Delivery, Employee } from "@/lib/types";
 import { connectSocket } from "@/lib/socket-client";
 import { useAuthStore } from "@/lib/auth-store";
@@ -192,6 +192,8 @@ export default function EntregasPage() {
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {d.order.deliveryNeighborhood} - {d.order.deliveryCity}/{d.order.deliveryState}
             </p>
+            {d.order.deliveryComplement && <p className="text-xs text-slate-600 dark:text-slate-300">Complemento: {d.order.deliveryComplement}</p>}
+            {d.order.deliveryReference && <p className="text-xs text-slate-600 dark:text-slate-300">Referência: {d.order.deliveryReference}</p>}
           </div>
         ) : (
           d.order.deliveryNeighborhood
@@ -258,7 +260,7 @@ export default function EntregasPage() {
       header: isMotoboy ? "Rota e ações" : "Rota",
       render: (d) => {
         const next = MOTOBOY_NEXT_STATUS[d.status];
-        const destination = deliveryAddressLabel(d.order);
+        const destination = deliveryDestination(d.order);
         const currentPosition = deliveryPosition(d);
 
         return (
@@ -352,7 +354,7 @@ export default function EntregasPage() {
         <div className="space-y-3 sm:hidden">
           {(deliveries ?? []).map((delivery) => {
             const next = MOTOBOY_NEXT_STATUS[delivery.status];
-            const destination = deliveryAddressLabel(delivery.order);
+            const destination = deliveryDestination(delivery.order);
             const currentPosition = deliveryPosition(delivery);
 
             return (
@@ -367,6 +369,8 @@ export default function EntregasPage() {
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         {delivery.order.deliveryNeighborhood} - {delivery.order.deliveryCity}/{delivery.order.deliveryState}
                       </p>
+                      {delivery.order.deliveryComplement && <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Complemento: {delivery.order.deliveryComplement}</p>}
+                      {delivery.order.deliveryReference && <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Referência: {delivery.order.deliveryReference}</p>}
                     </div>
                     <Badge tone={STATUS_TONE[delivery.status] ?? "neutral"}>{delivery.status.replaceAll("_", " ")}</Badge>
                   </div>

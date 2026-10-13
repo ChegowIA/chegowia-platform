@@ -28,10 +28,12 @@ export async function createCompany(
       addressLine: "Av. Afonso Pena, 1000",
       city: "Belo Horizonte",
       state: "MG",
+      zipCode: "30130000",
       // Coordenadas fixas em loja e endereço: sem elas o serviço geocodifica
       // por rede, e um teste que depende de API externa é um teste instável.
       latitude: -19.9227,
       longitude: -43.9451,
+      locationConfirmedAt: new Date(),
       deliveryFeeBase: 5,
       // Zero por km deixa a taxa determinística mesmo que a rota varie.
       deliveryFeePerKm: 0,
@@ -97,8 +99,10 @@ export async function createCustomer(prisma: PrismaClient, seed: string) {
       neighborhood: "Centro",
       city: "Belo Horizonte",
       state: "MG",
+      zipCode: "30130000",
       latitude: -19.9245,
       longitude: -43.9385,
+      locationConfirmedAt: new Date(),
       isDefault: true,
     },
   });

@@ -501,17 +501,22 @@ Fluxo: `AGUARDANDO_RETIRADA → RETIRADO → EM_ROTA → ENTREGUE`, com desvio p
 
 ### 8.4 Rotas, mapa e distância (OSRM)
 
-O cálculo usa geocodificação do endereço e rota de carro por OSRM
-(`ROUTING_BASE_URL`, padrão: servidor público do projeto).
+O catálogo pode usar o centro aproximado do CEP para triagem. No checkout do
+site, cliente confirma o destino no mapa e a loja precisa ter coordenadas de
+origem. A taxa usa a rota de carro por OSRM (`ROUTING_BASE_URL`); o CEP não
+substitui o ponto de entrega.
 
 | # | Passo | Esperado |
 |---|---|---|
-| 8.4.1 | Criar pedido com endereço e CEP válidos | Distância e tempo estimado preenchidos |
-| 8.4.2 | Conferir a taxa | Corresponde à área de entrega cadastrada |
+| 8.4.1 | Confirmar pontos de loja e cliente, criar pedido com CEP válido | Distância e tempo da rota preenchidos |
+| 8.4.2 | Conferir a taxa | Taxa base + km da rota × taxa por km configurada |
 | 8.4.3 | Endereço fora do raio configurado | Recusado no checkout |
-| 8.4.4 | Derrubar o OSRM (apontar `ROUTING_BASE_URL` para porta morta) | **A venda não pode travar**: o pedido é criado, com estimativa ausente ou de fallback |
-| 8.4.5 | Endereço que não geocodifica | Erro tratado, mensagem útil ao cliente |
+| 8.4.4 | Derrubar o OSRM (apontar `ROUTING_BASE_URL` para porta morta) | Checkout recusa a cotação com erro claro; não cobra frete arbitrário |
+| 8.4.5 | Endereço que não geocodifica | Busca oferece o centro do CEP apenas como ponto inicial; cliente move o pino e confirma |
 | 8.4.6 | Dois pedidos seguidos para o mesmo endereço | A fila de geocodificação não estoura limite do provedor |
+| 8.4.7 | Loja e cliente com o mesmo CEP, mas pinos distintos | Rota não zera a distância só por coincidência de CEP |
+| 8.4.8 | Editar rua/CEP após confirmar o pino | Confirmação é removida e uma nova cotação só sai após confirmar novamente |
+| 8.4.9 | Motoboy abre a rota de pedido novo | Navegação recebe as coordenadas salvas no pedido, não um endereço ambíguo |
 
 ### 8.5 Relatório de motoboy
 

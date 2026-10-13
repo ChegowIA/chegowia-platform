@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { FormField, Input } from "@/components/ui/input";
 import { BrazilStateSelect, MaskedInput } from "@/components/ui/brazil-fields";
 import { Modal } from "@/components/ui/modal";
+import { DeliveryPin, DeliveryPinPicker } from "@/components/deliveries/delivery-pin-picker";
 
 interface AddressFormState {
   label: string;
@@ -43,6 +44,8 @@ export default function AddressesPage() {
   const [editing, setEditing] = useState<Address | null>(null);
   const [form, setForm] = useState<AddressFormState>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [pin, setPin] = useState<DeliveryPin | null>(null);
+  const [pinConfirmed, setPinConfirmed] = useState(false);
 
   const { data: addresses, isLoading } = useQuery({
     queryKey: ["my-addresses"],
@@ -55,6 +58,8 @@ export default function AddressesPage() {
   function openCreate() {
     setEditing(null);
     setForm(EMPTY_FORM);
+    setPin(null);
+    setPinConfirmed(false);
     setError(null);
     setModalOpen(true);
   }
@@ -73,14 +78,26 @@ export default function AddressesPage() {
       reference: addr.reference ?? "",
       isDefault: addr.isDefault,
     });
+    setPin(addr.latitude != null && addr.longitude != null
+      ? { latitude: Number(addr.latitude), longitude: Number(addr.longitude) }
+      : null);
+    setPinConfirmed(Boolean(addr.locationConfirmedAt));
     setError(null);
     setModalOpen(true);
   }
 
+  function changeAddress(field: keyof AddressFormState, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setPin(null);
+    setPinConfirmed(false);
+  }
+
   const saveAddress = useMutation({
     mutationFn: async () => {
+      if (!pin || !pinConfirmed) throw new Error("Confirme o ponto no mapa antes de salvar.");
       const payload = {
         ...form,
+        ...pin,
         label: form.label || undefined,
         complement: form.complement || undefined,
         zipCode: form.zipCode,
@@ -141,6 +158,7 @@ export default function AddressesPage() {
                     {addr.label ? `${addr.label} — ` : ""}
                     {addr.street}, {addr.number}
                     {addr.isDefault && <span className="ml-2 text-xs font-normal text-brand-600">(padrão)</span>}
+                    {!addr.locationConfirmedAt && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">Confirmar no mapa</span>}
                   </p>
                   <p className="text-sm text-slate-500 dark:text-slate-400">
                     {addr.neighborhood}, {addr.city} - {addr.state}
@@ -185,7 +203,7 @@ export default function AddressesPage() {
             <Button variant="outline" className="w-full sm:w-auto" onClick={() => setModalOpen(false)}>
               Cancelar
             </Button>
-            <Button className="w-full sm:w-auto" disabled={form.zipCode.replace(/\D/g, "").length !== 8} isLoading={saveAddress.isPending} onClick={() => saveAddress.mutate()}>
+            <Button className="w-full sm:w-auto" disabled={!pinConfirmed || form.zipCode.replace(/\D/g, "").length !== 8} isLoading={saveAddress.isPending} onClick={() => saveAddress.mutate()}>
               Salvar endereço
             </Button>
           </div>
@@ -197,27 +215,34 @@ export default function AddressesPage() {
               <Input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
             </FormField>
             <FormField label="Rua">
-              <Input required value={form.street} onChange={(e) => setForm({ ...form, street: e.target.value })} />
+              <Input required value={form.street} onChange={(e) => changeAddress("street", e.target.value)} />
             </FormField>
             <FormField label="Número">
-              <Input required value={form.number} onChange={(e) => setForm({ ...form, number: e.target.value })} />
+              <Input required value={form.number} onChange={(e) => changeAddress("number", e.target.value)} />
             </FormField>
             <FormField label="Complemento">
               <Input value={form.complement} onChange={(e) => setForm({ ...form, complement: e.target.value })} />
             </FormField>
             <FormField label="Bairro">
-              <Input required value={form.neighborhood} onChange={(e) => setForm({ ...form, neighborhood: e.target.value })} />
+              <Input required value={form.neighborhood} onChange={(e) => changeAddress("neighborhood", e.target.value)} />
             </FormField>
             <FormField label="Cidade">
-              <Input required value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+              <Input required value={form.city} onChange={(e) => changeAddress("city", e.target.value)} />
             </FormField>
             <FormField label="Estado (UF)">
-              <BrazilStateSelect required value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+              <BrazilStateSelect required value={form.state} onChange={(e) => changeAddress("state", e.target.value)} />
             </FormField>
             <FormField label="CEP">
-              <MaskedInput mask="cep" placeholder="00000-000" required value={form.zipCode} onChange={(e) => setForm({ ...form, zipCode: e.target.value })} />
+              <MaskedInput mask="cep" placeholder="00000-000" required value={form.zipCode} onChange={(e) => changeAddress("zipCode", e.target.value)} />
             </FormField>
           </div>
+          <DeliveryPinPicker
+            lookup={{ addressLine: `${form.street}, ${form.number}`, streetName: form.street, neighborhood: form.neighborhood, city: form.city, state: form.state, zipCode: form.zipCode }}
+            point={pin}
+            confirmed={pinConfirmed}
+            onPointChange={(next) => { setPin(next); setPinConfirmed(false); }}
+            onConfirm={() => setPinConfirmed(true)}
+          />
           <FormField label="Referência">
             <Input value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
           </FormField>

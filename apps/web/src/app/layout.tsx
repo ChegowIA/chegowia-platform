@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "leaflet/dist/leaflet.css";
 import { QueryProvider } from "@/lib/query-provider";
 import { SessionBootstrap } from "@/components/auth/session-bootstrap";
 import { ThemeProvider } from "@/components/theme/theme-provider";
