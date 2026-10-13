@@ -108,6 +108,48 @@ describe("Regras críticas de domínio", () => {
     )).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it("cota entrega para qualquer loja usando os CEPs quando os dois endereços não são indexados", async () => {
+    const geography = {
+      geocode: jest.fn().mockRejectedValue(new BadRequestException("Endereço não localizado")),
+      calculateDrivingRoute: jest.fn().mockResolvedValue({ distanceKm: 2.4, durationMinutes: 9 }),
+    };
+    const postalCodeLocations = {
+      resolve: jest.fn().mockImplementation(async (zipCode: string) => zipCode === "74968190"
+        ? { latitude: -16.8201544, longitude: -49.2645848 }
+        : { latitude: -16.825, longitude: -49.267 }),
+    };
+    const orders = new OrdersService(
+      {} as never,
+      {} as never,
+      geography as never,
+      {} as never,
+      undefined,
+      postalCodeLocations as never,
+    );
+    const quote = await (orders as any).calculateDeliveryQuote(
+      {
+        addressLine: "Rua da Loja, 10", city: "Aparecida de Goiânia", state: "GO",
+        zipCode: "74968000", deliveryRadiusKm: 10, deliveryFeeBase: 6.9, deliveryFeePerKm: 1.5,
+      },
+      {
+        street: "Rua Guarapari", number: "0", neighborhood: "Jardim Ipiranga",
+        city: "Aparecida de Goiânia", state: "GO", zipCode: "74968190",
+      },
+    );
+
+    expect(quote).toEqual({
+      distanceKm: 2.4,
+      durationMinutes: 9,
+      deliveryFee: 10.5,
+      estimatedByPostalCode: true,
+    });
+    expect(postalCodeLocations.resolve).toHaveBeenCalledTimes(2);
+    expect(geography.calculateDrivingRoute).toHaveBeenCalledWith(
+      { latitude: -16.825, longitude: -49.267, estimatedByPostalCode: true },
+      { latitude: -16.8201544, longitude: -49.2645848, estimatedByPostalCode: true },
+    );
+  });
+
   it("aceita uma pizza com quantidade dinâmica de sabores e cobra somente o maior adicional", () => {
     const orders = new OrdersService({} as never, {} as never, {} as never, {} as never);
     const pizza = {

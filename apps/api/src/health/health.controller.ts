@@ -25,7 +25,9 @@ export class HealthController {
   @Get("live")
   @SkipThrottle()
   live() {
-    return { status: "ok", role: appRole() };
+    return { status: "ok", role: appRole(), ...(process.env.RENDER_GIT_COMMIT
+      ? { revision: process.env.RENDER_GIT_COMMIT.slice(0, 12) }
+      : {}) };
   }
 
   @Public()
@@ -34,7 +36,9 @@ export class HealthController {
   async ready() {
     try {
       await (this.prisma as any).$queryRaw`SELECT 1`;
-      return { status: "ready", role: appRole() };
+      return { status: "ready", role: appRole(), ...(process.env.RENDER_GIT_COMMIT
+        ? { revision: process.env.RENDER_GIT_COMMIT.slice(0, 12) }
+        : {}) };
     } catch {
       throw new ServiceUnavailableException("Serviço temporariamente indisponível.");
     }

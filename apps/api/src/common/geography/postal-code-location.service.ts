@@ -24,7 +24,7 @@ export function normalizePostalCode(value: unknown): string | null {
  *
  * A busca pública não pode pedir uma rota OSRM para cada loja a cada visita.
  * Por isso ela compara centros de CEP (rápido e sem dados de rua); no checkout
- * a rota com endereço completo ainda é obrigatória e é a fonte de verdade.
+ * priorizamos o endereço completo e sinalizamos se a rota usar o centro do CEP.
  */
 @Injectable()
 export class PostalCodeLocationService {
@@ -68,7 +68,7 @@ export class PostalCodeLocationService {
   /**
    * Aquecimento não bloqueante após salvar um endereço. Se o geocodificador
    * estiver indisponível, o fluxo de cadastro continua e a próxima consulta
-   * tenta de novo; a rota completa no checkout segue protegendo a entrega.
+   * tenta de novo; o checkout ainda verifica a rota e o raio de entrega.
    */
   warm(zipCode: unknown, hint: PostalCodeHint = {}) {
     const normalizedZipCode = normalizePostalCode(zipCode);

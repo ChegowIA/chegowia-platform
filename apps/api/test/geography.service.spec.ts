@@ -89,4 +89,55 @@ describe("GeographyService", () => {
     })).rejects.toThrow("Não foi possível localizar esse endereço.");
     expect(global.fetch).toHaveBeenCalledTimes(3);
   });
+
+  it("usa coordenadas do CEP de um segundo provedor quando o endereço não é indexado", async () => {
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          logradouro: "Rua Guarapari",
+          bairro: "Jardim Ipiranga",
+          localidade: "Aparecida de Goiânia",
+          uf: "GO",
+        }),
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({ ok: true, json: async () => [] })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          cep: "74968190",
+          city: "Aparecida de Goiânia",
+          state: "GO",
+          location: { coordinates: { latitude: "-16.8201544", longitude: "-49.2645848" } },
+        }),
+      });
+    global.fetch = fetchMock as never;
+    process.env.GEOCODING_MIN_INTERVAL_MS = "0";
+
+    await expect(new GeographyService().geocodePostalCode("74968-190", {
+      city: "Aparecida de Goiania", state: "GO",
+    })).resolves.toEqual({ latitude: -16.8201544, longitude: -49.2645848 });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(new URL(fetchMock.mock.calls[3][0].toString()).pathname).toBe("/api/cep/v2/74968190");
+  });
+
+  it("não aceita coordenadas de outro município para o CEP informado", async () => {
+    const fetchMock = jest.fn()
+      .mockRejectedValueOnce(new Error("ViaCEP indisponível"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          cep: "74968190",
+          city: "Outra Cidade",
+          state: "GO",
+          location: { coordinates: { latitude: "-16.8201544", longitude: "-49.2645848" } },
+        }),
+      });
+    global.fetch = fetchMock as never;
+
+    await expect(new GeographyService().geocodePostalCode("74968190", {
+      city: "Aparecida de Goiânia", state: "GO",
+    })).rejects.toThrow("O CEP não corresponde à cidade e ao estado informados.");
+  });
 });

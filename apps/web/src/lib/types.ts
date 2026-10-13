@@ -276,6 +276,7 @@ export interface DeliveryQuote {
   distanceKm: number;
   durationMinutes: number;
   deliveryFee: number;
+  estimatedByPostalCode?: boolean;
   whatsappNotificationsAvailable?: boolean;
 }
 

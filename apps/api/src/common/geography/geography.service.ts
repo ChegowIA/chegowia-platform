@@ -37,6 +37,15 @@ interface ViaCepResult {
   uf?: string;
 }
 
+interface BrasilApiCepV2Result {
+  cep?: string;
+  city?: string;
+  state?: string;
+  location?: {
+    coordinates?: { latitude?: string | number; longitude?: string | number };
+  };
+}
+
 interface OsrmRouteResponse {
   code?: string;
   routes?: Array<{ distance?: number; duration?: number }>;
@@ -90,8 +99,8 @@ export class GeographyService {
 
   /**
    * Localiza o centro aproximado de um CEP. Esta coordenada serve para a
-   * triagem leve do catálogo; a rota de entrega continua sendo calculada com
-   * rua e número no checkout.
+   * triagem leve do catálogo e, quando o endereço exato não é indexado, como
+   * ponto aproximado para calcular a rota no checkout.
    */
   async geocodePostalCode(zipCode: string, hint: PostalCodeHint = {}): Promise<GeographicPoint> {
     const normalizedZipCode = String(zipCode ?? "").replace(/\D/g, "");
@@ -102,23 +111,66 @@ export class GeographyService {
     // O Nominatim não indexa CEPs brasileiros de forma consistente. Primeiro
     // traduzimos o CEP para logradouro/localidade via ViaCEP e só então usamos
     // o geocodificador configurado para obter a coordenada aproximada.
-    const postalAddress = await this.lookupPostalCode(normalizedZipCode);
+    let postalAddress: ViaCepResult;
+    try {
+      postalAddress = await this.lookupPostalCode(normalizedZipCode);
+    } catch {
+      // O segundo provedor pode continuar disponível mesmo quando o ViaCEP
+      // estiver fora do ar. Nunca aproximamos com cidade/estado inventados.
+      return this.lookupBrasilApiCoordinates(normalizedZipCode, hint);
+    }
     if (postalAddress.erro === true || postalAddress.erro === "true") {
       throw new BadRequestException("Não foi possível localizar esse CEP.");
     }
     const city = postalAddress.localidade?.trim() || hint.city?.trim();
     const state = postalAddress.uf?.trim() || hint.state?.trim();
-    if (!city || !state) {
-      throw new BadRequestException("Não foi possível identificar cidade e estado desse CEP.");
+    if (city && state) {
+      try {
+        return await this.geocode({
+          addressLine: postalAddress.logradouro?.trim() || postalAddress.bairro?.trim() || `CEP ${normalizedZipCode}`,
+          streetName: postalAddress.logradouro?.trim(),
+          neighborhood: postalAddress.bairro?.trim(),
+          city,
+          state,
+          zipCode: normalizedZipCode,
+        });
+      } catch {
+        // Endereços brasileiros nem sempre são indexados pelo Nominatim.
+        // BrasilAPI V2 fornece um ponto de CEP independente da consulta acima.
+      }
     }
+    return this.lookupBrasilApiCoordinates(normalizedZipCode, { city, state });
+  }
 
-    return this.geocode({
-      addressLine: postalAddress.logradouro?.trim() || postalAddress.bairro?.trim() || `CEP ${normalizedZipCode}`,
-      neighborhood: postalAddress.bairro?.trim(),
-      city,
-      state,
-      zipCode: normalizedZipCode,
-    });
+  private async lookupBrasilApiCoordinates(zipCode: string, hint: PostalCodeHint): Promise<GeographicPoint> {
+    const baseUrl = (process.env.BRASILAPI_CEP_BASE_URL ?? "https://brasilapi.com.br/api/cep/v2").replace(/\/+$/, "");
+    const url = new URL(`${baseUrl}/${zipCode}`);
+    let response: BrasilApiCepV2Result;
+    try {
+      response = await this.requestJson<BrasilApiCepV2Result>(url, {
+        Accept: "application/json",
+        "User-Agent": process.env.GEOCODING_USER_AGENT ?? "ChegowIA/1.0 (local development)",
+      });
+    } catch {
+      throw new ServiceUnavailableException("Não foi possível obter a localização desse CEP agora. Tente novamente.");
+    }
+    const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+    if ((response.cep && response.cep.replace(/\D/g, "") !== zipCode)
+      || (hint.city && response.city && normalize(hint.city) !== normalize(response.city))
+      || (hint.state && response.state && normalize(hint.state) !== normalize(response.state))) {
+      throw new BadRequestException("O CEP não corresponde à cidade e ao estado informados.");
+    }
+    const rawLatitude = response.location?.coordinates?.latitude;
+    const rawLongitude = response.location?.coordinates?.longitude;
+    const latitude = Number(rawLatitude);
+    const longitude = Number(rawLongitude);
+    if (rawLatitude === undefined || rawLatitude === null || rawLatitude === ""
+      || rawLongitude === undefined || rawLongitude === null || rawLongitude === ""
+      || !Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+      throw new BadRequestException("Esse CEP não possui coordenadas disponíveis. Confira o CEP informado.");
+    }
+    return { latitude, longitude };
   }
 
   async calculateDrivingRoute(origin: GeographicPoint, destination: GeographicPoint): Promise<DrivingRoute> {

@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { DeliveryStatus, MessagingChannelStatus, MessagingChannelType, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role, WhatsAppOrderDraftStatus } from "@prisma/client";
@@ -16,6 +17,7 @@ import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { tenantContext } from "../common/tenant/tenant-context";
 import { PaginationQueryDto, paginate } from "../common/dto/pagination-query.dto";
 import { GeographicPoint, GeographyService } from "../common/geography/geography.service";
+import { PostalCodeLocationService } from "../common/geography/postal-code-location.service";
 import { isStoreOpen } from "../common/utils/store-hours";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { NfceService } from "../fiscal/nfce/nfce.service";
@@ -44,8 +46,11 @@ export interface DeliveryQuote {
   distanceKm: number;
   durationMinutes: number;
   deliveryFee: number;
+  estimatedByPostalCode?: boolean;
   whatsappNotificationsAvailable?: boolean;
 }
+
+type ResolvedDeliveryPoint = GeographicPoint & { estimatedByPostalCode?: boolean };
 
 /**
  * Entrada sem preço para um pedido montado fora do checkout autenticado.
@@ -155,6 +160,7 @@ export class OrdersService {
     private readonly geography: GeographyService,
     private readonly nfce: NfceService,
     private readonly legacyTestData?: LegacyTestDataService,
+    private readonly postalCodeLocations?: PostalCodeLocationService,
   ) {}
 
   private db() {
@@ -712,6 +718,9 @@ export class OrdersService {
       distanceKm: route.distanceKm,
       durationMinutes: route.durationMinutes,
       deliveryFee: fee,
+      ...(origin.estimatedByPostalCode || destination.estimatedByPostalCode
+        ? { estimatedByPostalCode: true }
+        : {}),
     };
   }
 
@@ -754,25 +763,32 @@ export class OrdersService {
       deliveryFee: this.roundCurrency(
         Number(company.deliveryFeeBase) + route.distanceKm * Number(company.deliveryFeePerKm),
       ),
+      ...(origin.estimatedByPostalCode || destination.estimatedByPostalCode
+        ? { estimatedByPostalCode: true }
+        : {}),
       latitude: destination.latitude,
       longitude: destination.longitude,
     };
   }
 
-  private async resolveTransientAddressCoordinates(address: WhatsAppDeliveryAddress): Promise<GeographicPoint> {
+  private async resolveTransientAddressCoordinates(address: WhatsAppDeliveryAddress): Promise<ResolvedDeliveryPoint> {
     const current = this.readCoordinates(address);
     if (current) return current;
     const addressLine = [address.street, address.number]
       .filter((part) => typeof part === "string" && part.trim())
       .join(", ");
-    return this.geography.geocode({
-      addressLine,
-      streetName: address.street,
-      neighborhood: address.neighborhood,
-      city: address.city,
-      state: address.state,
-      zipCode: address.zipCode,
-    });
+    try {
+      return await this.geography.geocode({
+        addressLine,
+        streetName: address.street,
+        neighborhood: address.neighborhood,
+        city: address.city,
+        state: address.state,
+        zipCode: address.zipCode,
+      });
+    } catch (error) {
+      return this.resolvePostalFallback(address.zipCode, address.city, address.state, "cliente", error);
+    }
   }
 
   private async resolveTrustedOrderItems(inputItems: TrustedOrderItemInput[]) {
@@ -946,18 +962,24 @@ export class OrdersService {
     });
   }
 
-  private async resolveCompanyCoordinates(company: any): Promise<GeographicPoint> {
+  private async resolveCompanyCoordinates(company: any): Promise<ResolvedDeliveryPoint> {
     const current = this.readCoordinates(company);
     if (current) return current;
     if (!company.addressLine?.trim() || !company.city?.trim() || !company.state?.trim() || !hasPostalCode(company.zipCode)) {
       throw new BadRequestException("A loja precisa cadastrar um endereço completo para calcular a rota de entrega.");
     }
-    const coordinates = await this.geography.geocode({
-      addressLine: company.addressLine,
-      city: company.city,
-      state: company.state,
-      zipCode: company.zipCode,
-    });
+    let coordinates: GeographicPoint;
+    try {
+      coordinates = await this.geography.geocode({
+        addressLine: company.addressLine,
+        streetName: company.addressLine.includes(",") ? company.addressLine.split(",")[0]?.trim() : null,
+        city: company.city,
+        state: company.state,
+        zipCode: company.zipCode,
+      });
+    } catch (error) {
+      return this.resolvePostalFallback(company.zipCode, company.city, company.state, "loja", error);
+    }
     await this.db().company.update({
       where: { id: company.id },
       data: coordinates,
@@ -965,25 +987,59 @@ export class OrdersService {
     return coordinates;
   }
 
-  private async resolveAddressCoordinates(address: any): Promise<GeographicPoint> {
+  private async resolveAddressCoordinates(address: any): Promise<ResolvedDeliveryPoint> {
     const current = this.readCoordinates(address);
     if (current) return current;
     const addressLine = [address.street, address.number]
       .filter((part) => typeof part === "string" && part.trim())
       .join(", ");
-    const coordinates = await this.geography.geocode({
-      addressLine,
-      streetName: address.street,
-      neighborhood: address.neighborhood,
-      city: address.city,
-      state: address.state,
-      zipCode: address.zipCode,
-    });
+    let coordinates: GeographicPoint;
+    try {
+      coordinates = await this.geography.geocode({
+        addressLine,
+        streetName: address.street,
+        neighborhood: address.neighborhood,
+        city: address.city,
+        state: address.state,
+        zipCode: address.zipCode,
+      });
+    } catch (error) {
+      return this.resolvePostalFallback(address.zipCode, address.city, address.state, "cliente", error);
+    }
     await this.db().address.update({
       where: { id: address.id },
       data: coordinates,
     });
     return coordinates;
+  }
+
+  private async resolvePostalFallback(
+    zipCode: string | null | undefined,
+    city: string,
+    state: string,
+    target: "loja" | "cliente",
+    originalError: unknown,
+  ): Promise<ResolvedDeliveryPoint> {
+    if (!(originalError instanceof BadRequestException) && !(originalError instanceof ServiceUnavailableException)) {
+      throw originalError;
+    }
+    try {
+      const coordinates = this.postalCodeLocations
+        ? await this.postalCodeLocations.resolve(zipCode, { city, state })
+        : await this.geography.geocodePostalCode(String(zipCode ?? ""), { city, state });
+      this.logger.warn(`Localização aproximada por CEP usada para ${target}; endereço exato não encontrado.`);
+      return { ...coordinates, estimatedByPostalCode: true };
+    } catch (error) {
+      this.logger.warn(`Falha ao localizar ${target} por CEP após falha no endereço exato.`);
+      if (error instanceof BadRequestException) {
+        throw new BadRequestException(
+          `Não foi possível localizar o CEP ${target === "loja" ? "da loja" : "do endereço de entrega"}: ${error.message}`,
+        );
+      }
+      throw new ServiceUnavailableException(
+        `Não foi possível calcular a entrega agora porque a localização ${target === "loja" ? "da loja" : "do cliente"} está indisponível. Tente novamente.`,
+      );
+    }
   }
 
   private assertOperationalPostalCodes(company: { zipCode?: unknown }, address: { zipCode?: unknown }) {

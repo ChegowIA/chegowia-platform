@@ -301,7 +301,7 @@ function CheckoutForm() {
             <span>{formatCurrency(subtotal)}</span>
           </div>
           <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
-            <span>Rota de entrega</span>
+            <span>{deliveryQuote.data?.estimatedByPostalCode ? "Rota estimada pelo CEP" : "Rota de entrega"}</span>
             <span>
               {deliveryQuote.isLoading
                 ? "calculando..."
@@ -310,6 +310,12 @@ function CheckoutForm() {
                   : "aguardando endereço"}
             </span>
           </div>
+          {deliveryQuote.data?.estimatedByPostalCode && (
+            <p className="text-xs leading-5 text-amber-800 dark:text-amber-300">
+              O mapa não encontrou o ponto exato. Distância e taxa foram estimadas pela região do CEP;
+              confira rua, número e referência para facilitar a entrega.
+            </p>
+          )}
           <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
             <span>Taxa de entrega</span>
             <span>
@@ -322,7 +328,14 @@ function CheckoutForm() {
       </Card>
 
       {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
-      {deliveryQuote.isError && <p className="text-sm text-red-600 dark:text-red-400">{apiErrorMessage(deliveryQuote.error)}</p>}
+      {deliveryQuote.isError && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
+          <p className="text-sm text-red-800 dark:text-red-300">{apiErrorMessage(deliveryQuote.error)}</p>
+          <Button type="button" variant="outline" size="sm" isLoading={deliveryQuote.isFetching} onClick={() => void deliveryQuote.refetch()}>
+            Tentar calcular novamente
+          </Button>
+        </div>
+      )}
       {createOrder.isError && <p className="text-sm text-red-600 dark:text-red-400">{apiErrorMessage(createOrder.error)}</p>}
 
       <Button
