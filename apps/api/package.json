@@ -15,6 +15,7 @@
     "prisma:seed": "prisma db seed",
     "create:super-admin": "node prisma/create-super-admin.js",
     "demo:setup": "node prisma/setup-demo-company.js",
+    "demo:catalog": "node prisma/add-demo-products.js",
     "demo:remove": "node prisma/remove-demo-company.js",
     "reset:data": "node prisma/reset-data.js",
     "test": "jest --runInBand",

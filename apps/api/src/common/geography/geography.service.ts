@@ -7,6 +7,7 @@ export interface GeographicPoint {
 
 export interface GeographicAddress {
   addressLine: string;
+  streetName?: string | null;
   neighborhood?: string | null;
   city: string;
   state: string;
@@ -51,29 +52,40 @@ export class GeographyService {
   private lastGeocodingRequestAt = 0;
 
   async geocode(address: GeographicAddress): Promise<GeographicPoint> {
-    return this.enqueueGeocoding(async () => {
-      const endpoint = process.env.GEOCODING_BASE_URL ?? "https://nominatim.openstreetmap.org/search";
-      const url = new URL(endpoint);
-      url.searchParams.set("q", this.formatAddress(address));
-      url.searchParams.set("format", "jsonv2");
-      url.searchParams.set("limit", "1");
-      url.searchParams.set("countrycodes", "br");
-      url.searchParams.set("accept-language", "pt-BR");
+    const queries = [this.formatAddress(address)];
+    if (address.streetName?.trim()) {
+      const streetAddress = { ...address, addressLine: address.streetName.trim() };
+      queries.push(this.formatAddress(streetAddress));
+      queries.push(this.formatAddress({ ...streetAddress, zipCode: null }));
+    }
+    for (const query of new Set(queries)) {
+      const point = await this.enqueueGeocoding(async () => {
+        const endpoint = process.env.GEOCODING_BASE_URL ?? "https://nominatim.openstreetmap.org/search";
+        const url = new URL(endpoint);
+        url.searchParams.set("q", query);
+        url.searchParams.set("format", "jsonv2");
+        url.searchParams.set("limit", "1");
+        url.searchParams.set("countrycodes", "br");
+        url.searchParams.set("accept-language", "pt-BR");
 
-      const results = await this.requestJson<NominatimResult[]>(url, {
-        Accept: "application/json",
-        "User-Agent": process.env.GEOCODING_USER_AGENT ?? "ChegowIA/1.0 (local development)",
+        const results = await this.requestJson<NominatimResult[]>(url, {
+          Accept: "application/json",
+          "User-Agent": process.env.GEOCODING_USER_AGENT ?? "ChegowIA/1.0 (local development)",
+        });
+        const result = results[0];
+        const latitude = Number(result?.lat);
+        const longitude = Number(result?.lon);
+        return typeof result?.lat === "string" && typeof result?.lon === "string"
+          && Number.isFinite(latitude) && Number.isFinite(longitude)
+          && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
+          ? { latitude, longitude }
+          : null;
       });
-      const result = results[0];
-      const latitude = Number(result?.lat);
-      const longitude = Number(result?.lon);
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-        throw new BadRequestException(
-          "Não foi possível localizar esse endereço. Revise rua, número, cidade e estado.",
-        );
-      }
-      return { latitude, longitude };
-    });
+      if (point) return point;
+    }
+    throw new BadRequestException(
+      "Não foi possível localizar esse endereço. Revise rua, número, cidade e estado.",
+    );
   }
 
   /**

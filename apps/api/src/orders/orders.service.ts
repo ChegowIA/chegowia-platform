@@ -762,11 +762,12 @@ export class OrdersService {
   private async resolveTransientAddressCoordinates(address: WhatsAppDeliveryAddress): Promise<GeographicPoint> {
     const current = this.readCoordinates(address);
     if (current) return current;
-    const addressLine = [address.street, address.number, address.complement]
+    const addressLine = [address.street, address.number]
       .filter((part) => typeof part === "string" && part.trim())
       .join(", ");
     return this.geography.geocode({
       addressLine,
+      streetName: address.street,
       neighborhood: address.neighborhood,
       city: address.city,
       state: address.state,
@@ -967,11 +968,12 @@ export class OrdersService {
   private async resolveAddressCoordinates(address: any): Promise<GeographicPoint> {
     const current = this.readCoordinates(address);
     if (current) return current;
-    const addressLine = [address.street, address.number, address.complement]
+    const addressLine = [address.street, address.number]
       .filter((part) => typeof part === "string" && part.trim())
       .join(", ");
     const coordinates = await this.geography.geocode({
       addressLine,
+      streetName: address.street,
       neighborhood: address.neighborhood,
       city: address.city,
       state: address.state,

@@ -25,6 +25,7 @@ require("dotenv").config({ quiet: true });
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcrypt");
 const { randomBytes } = require("node:crypto");
+const { upsertDemoProducts } = require("./demo-catalog");
 
 const prisma = new PrismaClient();
 
@@ -267,6 +268,7 @@ async function main() {
       imageUrl: DEMO_ASSETS.soda,
       isFeatured: false,
     });
+    await upsertDemoProducts(tx, company.id);
 
     const sizeGroup = await syncOptionGroup(tx, pizza.id, {
       name: "Tamanho",

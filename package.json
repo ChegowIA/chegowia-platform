@@ -20,6 +20,7 @@
     "prisma:migrate": "npm run prisma:migrate --workspace apps/api",
     "prisma:seed": "npm run prisma:seed --workspace apps/api",
     "demo:setup": "npm run demo:setup --workspace apps/api --",
+    "demo:catalog": "npm run demo:catalog --workspace apps/api --",
     "demo:remove": "npm run demo:remove --workspace apps/api --",
     "test:e2e": "npm run test:e2e --workspace apps/api",
     "check:dark": "node scripts/check-dark-mode.mjs",
