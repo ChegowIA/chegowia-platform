@@ -57,6 +57,23 @@ export class MailService {
     });
   }
 
+  async sendUnitAdminInvite(email: string, name: string, companyName: string, token: string) {
+    const url = `${this.appUrl()}/redefinir-senha?token=${encodeURIComponent(token)}`;
+    await this.send({
+      to: email,
+      subject: `Convite para administrar ${companyName} no ChegowIA`,
+      text: `Olá, ${name}. Você foi convidado para administrar ${companyName} no ChegowIA. Defina sua senha em ${url}. O link expira em 24 horas. Depois, entre com seu e-mail, senha e código de segurança enviado por e-mail.`,
+      html: this.template(
+        "Convite para administrar uma unidade",
+        `Olá, ${escapeHtml(name)}. Você foi convidado para administrar <strong>${escapeHtml(companyName)}</strong>. Defina sua senha para ativar o acesso.`,
+        "Definir senha",
+        url,
+        "O link expira em 24 horas. Você também precisará do código de segurança enviado por e-mail ao entrar.",
+      ),
+      developmentUrl: url,
+    });
+  }
+
   async sendMfaCode(email: string, name: string, code: string) {
     await this.send({
       to: email,

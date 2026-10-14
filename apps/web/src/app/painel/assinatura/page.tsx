@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SubscriptionStatus } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
@@ -140,9 +140,15 @@ export default function SubscriptionPage() {
   const { data: formasPagamento } = useQuery({
     queryKey: ["company-payment-options"],
     queryFn: async () => (await api.get("/billing/company/payment-options")).data as {
+      currentBillingType?: "PIX" | "BOLETO" | "CREDIT_CARD" | "UNDEFINED" | null;
       options: Array<{ billingType: "PIX" | "BOLETO" | "CREDIT_CARD"; label: string; value: number; note: string }>;
     },
   });
+  useEffect(() => {
+    if (["PIX", "BOLETO", "CREDIT_CARD"].includes(formasPagamento?.currentBillingType ?? "")) {
+      setFormaPagamento(formasPagamento!.currentBillingType as "PIX" | "BOLETO" | "CREDIT_CARD");
+    }
+  }, [formasPagamento?.currentBillingType]);
   // A troca vale a cada mês: atualiza a fatura em aberto e as próximas.
   const trocarForma = useMutation({
     mutationFn: async (billingType: "PIX" | "BOLETO" | "CREDIT_CARD") =>
@@ -152,7 +158,12 @@ export default function SubscriptionPage() {
     onSuccess: (resultado) => {
       queryClient.invalidateQueries({ queryKey: ["company-payment-options"] });
       queryClient.invalidateQueries({ queryKey: ["company-billing-status"] });
-      if (resultado.invoiceUrl) abrirFatura(resultado.invoiceUrl);
+      if (data?.payableInvoice?.url && resultado.invoiceUrl) abrirFatura(resultado.invoiceUrl);
+    },
+    onError: () => {
+      if (["PIX", "BOLETO", "CREDIT_CARD"].includes(formasPagamento?.currentBillingType ?? "")) {
+        setFormaPagamento(formasPagamento!.currentBillingType as "PIX" | "BOLETO" | "CREDIT_CARD");
+      }
     },
   });
   const activate = useMutation({
@@ -308,19 +319,27 @@ export default function SubscriptionPage() {
 
           {trialExpired ? <div className="mt-6 rounded-2xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-900/60 dark:bg-brand-950/25">
             <p className="text-sm font-black text-brand-950 dark:text-brand-100">Sua empresa está pausada até a ativação.</p>
-            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura de ativação começa uma nova assinatura de {formatCurrency(Number(data?.plan?.monthlyPrice ?? 159.9))}/mês, já somada a todo o consumo de IA e WhatsApp que você usou, inclusive o do teste. Se você não assinar, nada disso é cobrado.</p>
-            {formasPagamento?.options?.length ? <div className="mt-4 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" onClick={() => setFormaPagamento(opcao.billingType)} className={`rounded-2xl border p-3 text-left transition ${formaPagamento === opcao.billingType ? "border-brand-500 bg-white shadow-sm dark:border-brand-400 dark:bg-slate-900" : "border-brand-200 bg-white/60 hover:border-brand-300 dark:border-brand-900/60 dark:bg-slate-900/40"}`}><span className="block text-sm font-black text-brand-950 dark:text-brand-100">{opcao.label}</span><span className="mt-0.5 block text-lg font-black text-brand-900 dark:text-brand-200">{formatCurrency(opcao.value)}</span><span className="mt-0.5 block text-[11px] leading-4 text-brand-800/80 dark:text-brand-200/70">{opcao.note}</span></button>)}</div> : null}
+            <p className="mt-1 text-xs leading-5 text-brand-800 dark:text-brand-200">{formasPagamento?.options?.length ? <>Escolha como pagar a mensalidade. <strong>Pix ou boleto dão 10% de desconto todo mês</strong>; o consumo de IA e WhatsApp, inclusive do teste, é somado sem desconto à primeira fatura.</> : <>A fatura de ativação inclui a mensalidade e o consumo de IA e WhatsApp usado no teste.</>} Se você não assinar, nada disso é cobrado.</p>
+            {formasPagamento?.options?.length ? <div className="mt-4 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" onClick={() => setFormaPagamento(opcao.billingType)} className={`rounded-2xl border p-3 text-left transition ${formaPagamento === opcao.billingType ? "border-brand-500 bg-white shadow-sm dark:border-brand-400 dark:bg-slate-900" : "border-brand-200 bg-white/60 hover:border-brand-300 dark:border-brand-900/60 dark:bg-slate-900/40"}`}><span className="block text-sm font-black text-brand-950 dark:text-brand-100">{opcao.label} {opcao.billingType !== "CREDIT_CARD" ? <span className="ml-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] text-white">−10%</span> : null}</span><span className="mt-0.5 block text-lg font-black text-brand-900 dark:text-brand-200">{formatCurrency(opcao.value)}</span><span className="mt-0.5 block text-[11px] leading-4 text-brand-800/80 dark:text-brand-200/70">{opcao.note}</span></button>)}</div> : null}
             <Button className="mt-4 w-full sm:w-auto" isLoading={activate.isPending} onClick={() => activate.mutate()}>Gerar fatura e liberar tudo</Button>
             {faturaAberta && <p className="mt-3 text-xs leading-5 text-brand-800 dark:text-brand-200">A fatura abriu em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui para abrir</a>. O acesso é liberado automaticamente após o pagamento.</p>}
             {activate.error && <p className="mt-3 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(activate.error)}</p>}
           </div> : canPayAsaas ? <>
             <Button className="mt-6" onClick={() => data?.payableInvoice?.url && abrirFatura(data.payableInvoice.url)}>Pagar fatura pendente</Button>
-            {formasPagamento?.options?.length ? <div className="mt-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Forma de pagamento desta fatura</p><div className="mt-2 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" disabled={trocarForma.isPending} onClick={() => { setFormaPagamento(opcao.billingType); trocarForma.mutate(opcao.billingType); }} className={`rounded-2xl border p-3 text-left transition disabled:opacity-60 ${formaPagamento === opcao.billingType ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-950/30" : "border-slate-200 bg-white hover:border-brand-300 dark:border-slate-800 dark:bg-slate-900"}`}><span className="block text-sm font-black text-slate-900 dark:text-white">{opcao.label}</span><span className="mt-0.5 block text-lg font-black text-brand-700 dark:text-brand-300">{formatCurrency(opcao.value)}</span><span className="mt-0.5 block text-[11px] leading-4 text-slate-500 dark:text-slate-400">{opcao.note}</span></button>)}</div><p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Pode trocar quando quiser: a fatura em aberto é atualizada na hora e as próximas seguem a nova escolha.</p>{trocarForma.error && <p className="mt-2 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(trocarForma.error)}</p>}</div> : null}
+            {formasPagamento?.options?.length ? <div className="mt-4"><p className="text-xs font-black uppercase tracking-wide text-slate-500 dark:text-slate-400">Forma de pagamento desta fatura</p><p className="mt-1 text-sm font-bold text-emerald-700 dark:text-emerald-300">Economize 10% na mensalidade com Pix ou boleto.</p><div className="mt-2 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" disabled={trocarForma.isPending} onClick={() => { setFormaPagamento(opcao.billingType); trocarForma.mutate(opcao.billingType); }} className={`rounded-2xl border p-3 text-left transition disabled:opacity-60 ${formaPagamento === opcao.billingType ? "border-brand-500 bg-brand-50 dark:border-brand-400 dark:bg-brand-950/30" : "border-slate-200 bg-white hover:border-brand-300 dark:border-slate-800 dark:bg-slate-900"}`}><span className="block text-sm font-black text-slate-900 dark:text-white">{opcao.label} {opcao.billingType !== "CREDIT_CARD" ? <span className="ml-1 rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] text-white">−10%</span> : null}</span><span className="mt-0.5 block text-lg font-black text-brand-700 dark:text-brand-300">{formatCurrency(opcao.value)}</span><span className="mt-0.5 block text-[11px] leading-4 text-slate-500 dark:text-slate-400">{opcao.note}</span></button>)}</div><p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Pode trocar quando quiser: a fatura em aberto é atualizada na hora e as próximas seguem a nova escolha. O desconto não se aplica ao consumo de IA e WhatsApp.</p>{trocarForma.error && <p className="mt-2 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(trocarForma.error)}</p>}</div> : null}
             {faturaAberta && <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">Abrimos a fatura em outra aba. Se não apareceu, <a className="font-black underline" href={faturaAberta} target="_blank" rel="noopener noreferrer">clique aqui</a>.</p>}
           </> : canOpenStripePortal ? <>
             <Button className="mt-6" isLoading={portal.isPending} onClick={() => portal.mutate()}>Abrir portal seguro do Stripe</Button>
             {portal.error && <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">{apiErrorMessage(portal.error)}</p>}
           </> : null}
+          {viaAsaas && !trialExpired && !canPayAsaas && formasPagamento?.options?.length ? (
+            <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+              <p className="text-sm font-black text-emerald-900 dark:text-emerald-200">Economize 10% na mensalidade com Pix ou boleto</p>
+              <p className="mt-1 text-xs leading-5 text-emerald-800 dark:text-emerald-300">Escolha o meio das próximas cobranças. Se houver fatura pendente, ela também será atualizada sem descontar o consumo de IA e WhatsApp.</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">{formasPagamento.options.map((opcao) => <button key={opcao.billingType} type="button" disabled={trocarForma.isPending} onClick={() => { setFormaPagamento(opcao.billingType); trocarForma.mutate(opcao.billingType); }} className={`rounded-xl border p-3 text-left transition disabled:opacity-60 ${formaPagamento === opcao.billingType ? "border-emerald-500 bg-white dark:border-emerald-400 dark:bg-slate-900" : "border-emerald-200 bg-white/70 hover:border-emerald-400 dark:border-emerald-900 dark:bg-slate-900/60"}`}><span className="block text-sm font-black text-slate-900 dark:text-white">{opcao.label} {opcao.billingType !== "CREDIT_CARD" ? "· −10%" : ""}</span><span className="mt-1 block text-lg font-black text-emerald-800 dark:text-emerald-200">{formatCurrency(opcao.value)}</span><span className="mt-1 block text-xs text-slate-600 dark:text-slate-400">{opcao.note}</span></button>)}</div>
+              {trocarForma.error && <p className="mt-2 text-sm font-semibold text-rose-600 dark:text-rose-400">{apiErrorMessage(trocarForma.error)}</p>}
+            </div>
+          ) : null}
         </>}
       </section>
 

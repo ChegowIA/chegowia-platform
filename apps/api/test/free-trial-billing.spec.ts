@@ -6,7 +6,7 @@ describe("teste gratuito de empresas", () => {
     const now = new Date("2026-08-06T12:00:00.000Z");
     jest.useFakeTimers().setSystemTime(now);
     const transaction = {
-      company: { create: jest.fn().mockResolvedValue({ id: "empresa-1" }) },
+      company: { create: jest.fn().mockResolvedValue({ id: "empresa-1" }), update: jest.fn().mockResolvedValue({}) },
       identityDocument: { create: jest.fn().mockResolvedValue({}) },
       user: { create: jest.fn().mockResolvedValue({ id: "admin-1" }) },
       clientSubscription: { create: jest.fn().mockResolvedValue({}) },
@@ -38,7 +38,7 @@ describe("teste gratuito de empresas", () => {
       clientApplication: { findUnique: jest.fn().mockResolvedValue(application) },
       clientSubscription: { findUnique: jest.fn().mockResolvedValue(null) },
       user: { findUnique: jest.fn().mockResolvedValue(null) },
-      company: { findUnique: jest.fn().mockResolvedValue(null) },
+      company: { findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn((work: (tx: typeof transaction) => unknown) => work(transaction)),
     };
     const auth = { sendVerificationForUser: jest.fn().mockResolvedValue(undefined) };
@@ -58,6 +58,9 @@ describe("teste gratuito de empresas", () => {
         monthlyPriceSnapshot: 159.9,
       }),
     }));
+    expect(transaction.company.update).toHaveBeenCalledWith({
+      where: { id: "empresa-1" }, data: { ownerUserId: "admin-1" },
+    });
     expect(auth.sendVerificationForUser).toHaveBeenCalledWith("admin-1");
     jest.useRealTimers();
   });

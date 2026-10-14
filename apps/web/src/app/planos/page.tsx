@@ -41,6 +41,7 @@ type SoftwarePlan = {
   name: string;
   description?: string | null;
   monthlyPrice: number | string;
+  pixBoletoDiscountRate?: number;
   features: string[];
 };
 
@@ -200,6 +201,7 @@ export default function PlansPage() {
                 <h2 className="mt-5 text-2xl font-black text-slate-950 dark:text-slate-100">{plan.name}</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{plan.description}</p>
                 <p className="mt-6 text-4xl font-black text-slate-950 dark:text-slate-100">{formatCurrency(Number(plan.monthlyPrice))}<span className="text-sm font-bold text-slate-400">/mês</span></p>
+                {plan.pixBoletoDiscountRate ? <p className="mt-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">No Pix ou boleto: {formatCurrency(Math.round(Number(plan.monthlyPrice) * (1 - plan.pixBoletoDiscountRate) * 100) / 100)}/mês — 10% de desconto na mensalidade.</p> : null}
                 <p className="mt-2 text-[11px] font-medium leading-5 text-slate-500 dark:text-slate-400">Durante o teste você não paga nada. IA e WhatsApp são medidos normalmente e entram na primeira fatura só se você decidir continuar.</p>
 
                 <button
@@ -214,7 +216,7 @@ export default function PlansPage() {
                   {plan.features.map((feature) => <p key={feature} className="text-sm font-semibold text-slate-700 dark:text-slate-300">✓ {feature}</p>)}
                 </div>
                 <Button className="w-full" size="lg" onClick={() => startContract(plan)}>Começar teste grátis de 7 dias</Button>
-                <p className="mt-3 text-center text-xs text-slate-400">Sem cartão agora · código de parceiro dá 15% de desconto por 3 meses após a ativação</p>
+                <p className="mt-3 text-center text-xs text-slate-500 dark:text-slate-400">Sem cartão agora · {plan.pixBoletoDiscountRate ? "Pix ou boleto: 10% na mensalidade, inclusive após o desconto de 15% por indicação nos 3 primeiros meses. " : "Código de parceiro: 15% por 3 meses. "}Consumo de IA/WhatsApp sem desconto.</p>
               </div>
             </article>
           ))}
@@ -305,7 +307,7 @@ function ContractSummary({ plan, open, onToggle, pricing, loading }: {
         <div>
           <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-700 dark:text-brand-300">Começo sem pagamento</p>
           <p className="mt-1 text-sm font-bold text-slate-800 dark:text-slate-200"><span className="text-lg font-black">7 dias grátis</span> para testar a operação completa</p>
-          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Depois, você decide ativar por {formatCurrency(Number(plan.monthlyPrice))}/mês + uso novo de IA e WhatsApp.</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">Depois, você decide ativar por {formatCurrency(Number(plan.monthlyPrice))}/mês{plan.pixBoletoDiscountRate ? ` ou ${formatCurrency(Math.round(Number(plan.monthlyPrice) * (1 - plan.pixBoletoDiscountRate) * 100) / 100)}/mês no Pix ou boleto` : ""}, mais uso de IA e WhatsApp sem desconto.</p>
         </div>
         <button type="button" onClick={onToggle} aria-expanded={open} className="shrink-0 rounded-xl border border-brand-200 bg-white px-3 py-2 text-xs font-black text-brand-800 transition hover:border-brand-400 hover:bg-brand-50 dark:border-brand-800 dark:bg-slate-900 dark:text-brand-200 dark:hover:bg-brand-950/50">
           {open ? "Ocultar detalhes" : "Ver detalhes"}
@@ -340,6 +342,7 @@ function PricingBreakdown({ plan, pricing, loading, compact = false }: {
       <div className="rounded-2xl bg-slate-950 p-4 text-white shadow-lg">
         <p className="text-[10px] font-black uppercase tracking-[.16em] text-brand-300">Depois do teste</p>
         <p className="mt-2 text-base font-black leading-6">{formatCurrency(basePrice)} mensal + IA utilizada + mensagens WhatsApp cobradas</p>
+        {plan?.pixBoletoDiscountRate ? <p className="mt-2 text-sm font-bold text-emerald-300">Pix ou boleto: {formatCurrency(Math.round(basePrice * (1 - plan.pixBoletoDiscountRate) * 100) / 100)} de mensalidade (10% de desconto recorrente).</p> : null}
         <p className="mt-2 text-xs leading-5 text-slate-300">Se não houver consumo adicional no período, a fatura fica em {formatCurrency(basePrice)}.</p>
       </div>
 

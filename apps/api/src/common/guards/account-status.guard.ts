@@ -125,7 +125,11 @@ export class AccountStatusGuard implements CanActivate {
         auditedSupportAccess = true;
       }
     } else if (user.role !== identity.role || user.companyId !== identity.companyId) {
-      throw new UnauthorizedException("Sua sessão não é mais válida.");
+      const ownedUnit = user.role === Role.ADMIN && identity.role === Role.ADMIN && identity.companyId
+        ? await (this.prisma as any).company.findFirst({
+          where: { id: identity.companyId, ownerUserId: user.id }, select: { id: true },
+        }) : null;
+      if (!ownedUnit) throw new UnauthorizedException("Sua sessão não é mais válida.");
     }
     if (!user.emailVerifiedAt) throw new ForbiddenException("Confirme seu e-mail para continuar.");
 

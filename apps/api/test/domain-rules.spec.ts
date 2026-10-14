@@ -24,6 +24,9 @@ describe("Regras críticas de domínio", () => {
     expect(isValidBrazilDocument("11.222.333/0001-81")).toBe(true);
     expect(isValidBrazilDocument("111.111.111-11")).toBe(false);
     expect(isValidBrazilDocument("11.222.333/0001-82")).toBe(false);
+    // Primeira inscrição alfanumérica divulgada pela Receita Federal em 2026.
+    expect(isValidBrazilDocument("00.000.000/E08G-12")).toBe(true);
+    expect(isValidBrazilDocument("00.000.000/E08G-13")).toBe(false);
   });
 
   it("mantém a entrega no fluxo sequencial", () => {

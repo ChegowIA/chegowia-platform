@@ -340,6 +340,7 @@ export class AiService {
       where: {
         slug: companySlug,
         isActive: true,
+        isPublished: true,
         ...visibility,
       },
     });

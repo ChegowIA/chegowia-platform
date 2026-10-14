@@ -179,6 +179,7 @@ export class OrdersService {
       where: {
         slug: dto.companySlug,
         isActive: true,
+        isPublished: true,
         ...visibility,
       },
       include: {
@@ -290,6 +291,7 @@ export class OrdersService {
       where: {
         slug: dto.companySlug,
         isActive: true,
+        isPublished: true,
         ...visibility,
       },
       include: { subscription: { select: { currentPeriodEnd: true, trialEndsAt: true } } },
@@ -314,7 +316,7 @@ export class OrdersService {
       ? await this.legacyTestData.publicCompanyVisibilityWhereForUserId(customerId)
       : { isTestOnly: false };
     const company = await this.db().company.findFirst({
-      where: { slug: companySlug, isActive: true, ...visibility },
+      where: { slug: companySlug, isActive: true, isPublished: true, ...visibility },
       select: { id: true },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");
@@ -772,7 +774,7 @@ export class OrdersService {
 
   private async getActiveCompanyForWhatsApp(companyId: string) {
     const company = await this.db().company.findFirst({
-      where: { id: companyId, isActive: true },
+      where: { id: companyId, isActive: true, isPublished: true },
       include: {
         settings: true,
         subscription: { select: { currentPeriodEnd: true, trialEndsAt: true } },

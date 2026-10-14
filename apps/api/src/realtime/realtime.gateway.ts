@@ -245,7 +245,16 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     if (!user?.isActive || !user.emailVerifiedAt) return null;
 
     if (!payload.assumed) {
-      if (user.role !== payload.role || user.companyId !== payload.companyId) return null;
+      if (user.role !== payload.role) return null;
+      if (user.companyId !== payload.companyId) {
+        if (user.role !== Role.ADMIN || !payload.companyId) return null;
+        const owned = await db.company.findFirst({
+          where: { id: payload.companyId, ownerUserId: user.id },
+          select: { isActive: true, subscription: { select: { status: true, trialEndsAt: true } } },
+        });
+        if (!owned?.isActive) return null;
+        return { company: owned, resellerSupport: false };
+      }
       if (payload.role === Role.REVENDEDOR && !user.resellerProfile?.isActive) return null;
       if (COMPANY_ROLES.has(payload.role) && !user.company?.isActive) return null;
       return { company: user.company ?? null, resellerSupport: false };

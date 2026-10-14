@@ -1,7 +1,7 @@
 import { registerDecorator, ValidationArguments, ValidationOptions } from "class-validator";
 
 export function normalizeBrazilDocument(value: string): string {
-  return String(value ?? "").replace(/\D/g, "");
+  return String(value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 function hasRepeatedDigits(value: string): boolean {
@@ -9,7 +9,7 @@ function hasRepeatedDigits(value: string): boolean {
 }
 
 function validCpf(value: string): boolean {
-  if (value.length !== 11 || hasRepeatedDigits(value)) return false;
+  if (!/^\d{11}$/.test(value) || hasRepeatedDigits(value)) return false;
   for (let position = 9; position <= 10; position += 1) {
     let sum = 0;
     for (let index = 0; index < position; index += 1) {
@@ -22,12 +22,12 @@ function validCpf(value: string): boolean {
 }
 
 function validCnpj(value: string): boolean {
-  if (value.length !== 14 || hasRepeatedDigits(value)) return false;
+  if (!/^[A-Z0-9]{12}\d{2}$/.test(value) || hasRepeatedDigits(value)) return false;
   const calculate = (length: number) => {
     const weights = length === 12
       ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
       : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-    const sum = value.slice(0, length).split("").reduce((total, digit, index) => total + Number(digit) * weights[index], 0);
+    const sum = value.slice(0, length).split("").reduce((total, char, index) => total + (char.charCodeAt(0) - 48) * weights[index], 0);
     const remainder = sum % 11;
     return remainder < 2 ? 0 : 11 - remainder;
   };

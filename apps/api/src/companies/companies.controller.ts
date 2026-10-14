@@ -13,6 +13,9 @@ import { CreateCompanyDto } from "./dto/create-company.dto";
 import { UpdateCompanyDto } from "./dto/update-company.dto";
 import { CreateCompanyAdminDto } from "./dto/create-company-admin.dto";
 import { UpdateCompanySettingsDto } from "./dto/update-company-settings.dto";
+import { CreateUnitDto } from "./dto/create-unit.dto";
+import { Throttle } from "@nestjs/throttler";
+import { AllowInactiveSubscription } from "../common/decorators/allow-inactive-subscription.decorator";
 
 @ApiTags("companies")
 @Controller("companies")
@@ -42,6 +45,29 @@ export class CompaniesController {
   }
 
   // ---- Auto-atendimento do ADMIN da própria empresa ----
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Post("my-units")
+  @Throttle({ default: { limit: 3, ttl: 24 * 60 * 60_000 } })
+  createUnit(@CurrentUser() identity: JwtPayload, @Body() dto: CreateUnitDto) {
+    return this.companiesService.createUnit(identity, dto);
+  }
+
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Post("my-units/:id/admin-invite")
+  @Throttle({ default: { limit: 3, ttl: 60 * 60_000 } })
+  resendUnitAdminInvitation(@CurrentUser() identity: JwtPayload, @Param("id") id: string) {
+    return this.companiesService.resendUnitAdminInvitation(identity, id);
+  }
+
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Patch("my-units/:id/publication")
+  setUnitPublished(@CurrentUser() identity: JwtPayload, @Param("id") id: string, @Body("published") published: boolean) {
+    return this.companiesService.setUnitPublished(identity, id, published);
+  }
+
   @Roles(Role.ADMIN)
   @Get("me")
   getMyCompany(@CurrentUser("companyId") companyId: string) {

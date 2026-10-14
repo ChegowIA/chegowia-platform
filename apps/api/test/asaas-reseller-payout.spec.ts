@@ -349,6 +349,8 @@ describe("desconto do código de indicação", () => {
   function servico(overrides: any = {}) {
     const asaas = {
       isConfigured: () => true,
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_1", value: 135.92, billingType: "PIX" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([]),
       updateSubscription: jest.fn().mockResolvedValue({ id: "sub_1" }),
     };
     const prisma = {
@@ -397,7 +399,7 @@ describe("desconto do código de indicação", () => {
     })).toBe(159.9);
   });
 
-  it("a varredura devolve o preço cheio no Asaas e marca o ajuste", async () => {
+  it("ao vencer a indicação, preserva o desconto de Pix e marca o ajuste", async () => {
     const { service, asaas, prisma } = servico({
       vencidas: [{
         id: "assin-1",
@@ -409,7 +411,7 @@ describe("desconto do código de indicação", () => {
 
     await service.syncExpiredReferralDiscounts();
 
-    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 159.9 });
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 143.91, billingType: "PIX" });
     expect(prisma.clientSubscription.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: "assin-1" },
       data: expect.objectContaining({ discountRemovedAt: expect.any(Date) }),
@@ -442,6 +444,22 @@ describe("desconto do código de indicação", () => {
     )).toBe(159.9);
   });
 
+  it("com Pix e consumo na mesma fatura, comissiona só a mensalidade descontada", async () => {
+    const usageLedger = { aggregate: jest.fn().mockResolvedValue({ _sum: { billableAmount: 20 } }) };
+    const service = buildBillingService({ prisma: { usageLedger } }) as any;
+    service.onModuleDestroy();
+
+    const gross = await service.asaasCommissionableMonthlyAmount(
+      { plan: plano, monthlyPriceSnapshot: 159.9 },
+      { id: "pay_1", value: 163.91 },
+    );
+
+    expect(gross).toBe(143.91);
+    expect(usageLedger.aggregate).toHaveBeenCalledWith({
+      where: { asaasPaymentId: "pay_1" }, _sum: { billableAmount: true },
+    });
+  });
+
   it("no cartão a taxa é acrescida por dentro, para o líquido bater com o plano", () => {
     const { service } = servico();
     const assinatura = { plan: plano, monthlyPriceSnapshot: 159.9, resellerId: null };
@@ -456,13 +474,21 @@ describe("desconto do código de indicação", () => {
     expect(Math.round((valor - taxaCobradaPeloAsaas) * 100) / 100).toBe(159.9);
   });
 
-  it("pix e boleto não carregam taxa", () => {
+  it("pix e boleto recebem 10% de desconto recorrente na mensalidade", () => {
     const { service } = servico();
     const assinatura = { plan: plano, monthlyPriceSnapshot: 159.9, resellerId: null };
 
-    expect(service.chargeValueForBillingType(assinatura, "PIX")).toBe(159.9);
-    expect(service.chargeValueForBillingType(assinatura, "BOLETO")).toBe(159.9);
+    expect(service.chargeValueForBillingType(assinatura, "PIX")).toBe(143.91);
+    expect(service.chargeValueForBillingType(assinatura, "BOLETO")).toBe(143.91);
     expect(service.chargeValueForBillingType(assinatura, undefined)).toBe(159.9);
+  });
+
+  it("combina indicação e Pix em sequência, sem reduzir o consumo variável", () => {
+    const { service } = servico();
+    const assinatura = { plan: plano, monthlyPriceSnapshot: 159.9, resellerId: "rev-1", discountEndsAt: null };
+
+    expect(service.chargeValueForBillingType(assinatura, "PIX")).toBe(122.33);
+    expect(service.chargeValueForBillingType(assinatura, "BOLETO")).toBe(122.33);
   });
 
   it("com desconto de indicação, a taxa do cartão incide sobre o valor já descontado", () => {
@@ -480,8 +506,11 @@ describe("desconto do código de indicação", () => {
   it("trocar a forma atualiza a assinatura e a fatura em aberto", async () => {
     const asaas = {
       isConfigured: () => true,
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_1", value: 143.91, billingType: "PIX" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", value: 153.91, status: "PENDING", billingType: "PIX", invoiceUrl: "https://asaas/fatura" },
+      ]),
       updateSubscription: jest.fn().mockResolvedValue({}),
-      findPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", invoiceUrl: "https://asaas/fatura" }),
       updatePayment: jest.fn().mockResolvedValue({ id: "pay_1", invoiceUrl: "https://asaas/fatura-nova" }),
     };
     const prisma = {
@@ -500,15 +529,18 @@ describe("desconto do código de indicação", () => {
 
     // A assinatura dita as próximas cobranças; a fatura em aberto é a de agora.
     expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 165.33, billingType: "CREDIT_CARD" });
-    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", { value: 165.33, billingType: "CREDIT_CARD" });
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", { value: 175.33, billingType: "CREDIT_CARD" });
     expect(resultado.invoiceUrl).toBe("https://asaas/fatura-nova");
   });
 
   it("fatura já paga não é reaberta pela troca de forma", async () => {
     const asaas = {
       isConfigured: () => true,
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_1", value: 165.33, billingType: "CREDIT_CARD" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", value: 165.33, status: "RECEIVED", billingType: "CREDIT_CARD" },
+      ]),
       updateSubscription: jest.fn().mockResolvedValue({}),
-      findPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "RECEIVED" }),
       updatePayment: jest.fn(),
     };
     const prisma = {
@@ -527,7 +559,48 @@ describe("desconto do código de indicação", () => {
 
     // Mexer no valor de uma cobrança quitada seria reescrever o passado.
     expect(asaas.updatePayment).not.toHaveBeenCalled();
-    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 159.9, billingType: "PIX" });
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 143.91, billingType: "PIX" });
+  });
+
+  it("se atualizar a assinatura falhar, restaura a fatura sem perder o consumo", async () => {
+    const asaas = {
+      isConfigured: () => true,
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_1", value: 159.9, billingType: "UNDEFINED" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", value: 169.9, status: "OVERDUE", billingType: "UNDEFINED" },
+      ]),
+      updatePayment: jest.fn().mockResolvedValue({ id: "pay_1" }),
+      updateSubscription: jest.fn().mockRejectedValue(new Error("Asaas indisponível")),
+    };
+    const prisma = { clientSubscription: { findUnique: jest.fn().mockResolvedValue({
+      id: "assin-1", plan: plano, monthlyPriceSnapshot: 159.9, asaasSubscriptionId: "sub_1",
+    }) } };
+    const service = buildBillingService({ prisma, asaas }) as any;
+    service.onModuleDestroy();
+
+    await expect(service.changeCompanyBillingType("empresa-1", "PIX")).rejects.toThrow("Asaas indisponível");
+    expect(asaas.updatePayment).toHaveBeenNthCalledWith(1, "pay_1", { value: 153.91, billingType: "PIX" });
+    expect(asaas.updatePayment).toHaveBeenNthCalledWith(2, "pay_1", { value: 169.9, billingType: "UNDEFINED" });
+  });
+
+  it("aplica o desconto automaticamente a uma assinatura Pix já existente", async () => {
+    const asaas = {
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_1", value: 159.9, billingType: "PIX" }),
+      listSubscriptionPayments: jest.fn().mockResolvedValue([
+        { id: "pay_1", value: 169.9, status: "PENDING", billingType: "PIX" },
+      ]),
+      updatePayment: jest.fn().mockResolvedValue({}),
+      updateSubscription: jest.fn().mockResolvedValue({}),
+    };
+    const prisma = { clientSubscription: { findMany: jest.fn().mockResolvedValue([{
+      id: "assin-1", asaasSubscriptionId: "sub_1", monthlyPriceSnapshot: 159.9, plan: plano,
+    }]) } };
+    const service = buildBillingService({ prisma, asaas }) as any;
+    service.onModuleDestroy();
+
+    expect(await service.syncExistingCashPaymentDiscounts()).toBe(1);
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", { value: 153.91, billingType: "PIX" });
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_1", { value: 143.91, billingType: "PIX" });
   });
 
   it("assinatura já ajustada não é cobrada de novo pela varredura", async () => {

@@ -35,6 +35,7 @@ export class PromotionsService {
       : { isTestOnly: false, ...filtroPublicoDeEmpresa({ cidade: city }) };
     const companyWhere: any = {
       isActive: true,
+      isPublished: true,
       ...catalogScope,
     };
     if (params.zipCode && this.postalCodeLocations) {

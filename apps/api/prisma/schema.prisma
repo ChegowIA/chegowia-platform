@@ -437,6 +437,7 @@ model User {
   updatedAt         DateTime  @updatedAt
 
   company Company? @relation(fields: [companyId], references: [id])
+  managedCompanies Company[] @relation("CompanyOwner")
 
   refreshTokens              RefreshToken[]
   accountTokens              AccountToken[]
@@ -494,6 +495,8 @@ model RefreshToken {
   assumedAccessKind String?   @db.VarChar(20)
   assumedUserId     String?
   assumedResellerId String?
+  // Empresa escolhida pelo ADMIN dono de várias unidades (não é impersonação).
+  activeCompanyId String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -577,9 +580,11 @@ model IdentityDocument {
 
 model Company {
   id                     String    @id @default(cuid())
+  ownerUserId            String?
+  owner                  User?     @relation("CompanyOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   name                   String
   slug                   String    @unique
-  cnpj                   String?   @unique
+  cnpj                   String?
   phone                  String?
   whatsapp               String?
   addressLine            String?
@@ -597,6 +602,9 @@ model Company {
   avgDeliveryTimeMinutes Int       @default(40)
   logoUrl                String?
   isActive               Boolean   @default(true)
+  isPublished            Boolean   @default(true)
+  // Unidade de homologação descendente da demo original. Nunca vira loja pública.
+  demoRootCompanyId      String?
   // Empresas criadas durante a homologação ficam fora da vitrine pública até
   // o modo temporário ser desligado. Não substitui isActive: a operação segue
   // funcionando normalmente para o administrador da própria empresa.
@@ -637,6 +645,9 @@ model Company {
   superAdminCompanyAccesses  SuperAdminCompanyAccess[]
 
   @@index([city, state])
+  @@index([ownerUserId])
+  @@index([demoRootCompanyId])
+  @@index([cnpj])
   @@index([zipCode])
   @@index([isActive, isTestOnly, city, state])
 }

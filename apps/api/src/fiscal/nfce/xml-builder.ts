@@ -124,7 +124,7 @@ export function buildNfceXml(input: NfceInput): string {
 
   // ---- emit ----
   const emit = infNFe.ele("emit");
-  emit.ele("CNPJ").txt(digits(emitter.cnpj));
+  emit.ele("CNPJ").txt(emitter.cnpj.toUpperCase().replace(/[^A-Z0-9]/g, ""));
   emit.ele("xNome").txt(cut(emitter.legalName, 60));
   opcional(emit, "xFant", emitter.tradeName && cut(emitter.tradeName, 60));
   const enderEmit = emit.ele("enderEmit");
@@ -146,7 +146,7 @@ export function buildNfceXml(input: NfceInput): string {
   // Na NFC-e o destinatário é opcional e só entra quando o cliente pede
   // CPF/CNPJ — o grupo sem documento nenhum é recusado pelo schema. Quando
   // existe e o ambiente é de homologação, o nome tem que ser a frase de teste.
-  const documento = digits(input.customer?.document ?? "");
+  const documento = (input.customer?.document ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (documento) {
     const dest = infNFe.ele("dest");
     if (documento.length === 14) dest.ele("CNPJ").txt(documento);

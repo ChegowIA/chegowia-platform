@@ -42,6 +42,7 @@ describe("fatura atual da empresa no Asaas", () => {
     const usage = { getBillingUsage: jest.fn().mockResolvedValue(usageSummary) };
     const asaas = {
       isConfigured: jest.fn().mockReturnValue(true),
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1", value: 5, billingType: "PIX" }),
       listSubscriptionPayments: jest.fn().mockResolvedValue(payments),
     };
     const usageLedger = { updateMany: jest.fn().mockResolvedValue({ count: 0 }) };

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { Role } from "@prisma/client";
+import { Role, SubscriptionStatus } from "@prisma/client";
 import * as bcrypt from "bcrypt";
+import { randomBytes } from "node:crypto";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { PaginationQueryDto, paginate } from "../common/dto/pagination-query.dto";
@@ -20,6 +21,8 @@ import { LegacyTestDataService } from "../common/legacy-test-data/legacy-test-da
 import { isReservedDemoEmail } from "../common/security/reserved-demo-account";
 import { normalizePostalCode, PostalCodeLocationService } from "../common/geography/postal-code-location.service";
 import { confirmedLocationPatch } from "../common/geography/confirmed-location";
+import { CreateUnitDto } from "./dto/create-unit.dto";
+import { tenantContext } from "../common/tenant/tenant-context";
 
 @Injectable()
 export class CompaniesService {
@@ -53,6 +56,194 @@ export class CompaniesService {
     return candidate;
   }
 
+  /**
+   * Uma unidade é outra Company/tenant, não um departamento da matriz.
+   * Nenhum pedido, funcionário, produto, canal WhatsApp ou saldo é copiado.
+   * Só opções iniciais e o plano são reaproveitados; a assinatura é nova.
+   */
+  async createUnit(identity: JwtPayload, dto: CreateUnitDto) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || user.role !== Role.ADMIN || identity.assumed || !user.isActive) {
+      throw new BadRequestException("Somente o administrador titular pode cadastrar unidades.");
+    }
+    const source = await this.db().company.findFirst({
+      where: { id: identity.companyId ?? "", OR: [{ id: user.companyId ?? "" }, { ownerUserId: user.id }] },
+      include: { settings: true, subscription: { include: { plan: true } } },
+    });
+    if (!source?.subscription?.plan) throw new BadRequestException("A empresa atual precisa ter um plano antes de cadastrar unidades.");
+    if (!source.ownerUserId) {
+      const admins = await this.db().user.findMany({
+        where: { companyId: source.id, role: Role.ADMIN, isActive: true },
+        select: { id: true }, take: 2,
+      });
+      if (admins.length !== 1 || admins[0].id !== user.id) {
+        throw new BadRequestException("Não foi possível identificar com segurança o titular da matriz. Solicite à ChegowIA a definição do responsável antes de criar unidades.");
+      }
+      await this.db().company.updateMany({ where: { id: source.id, ownerUserId: null }, data: { ownerUserId: user.id } });
+      const claimed = await this.db().company.findUnique({ where: { id: source.id }, select: { ownerUserId: true } });
+      if (claimed?.ownerUserId !== user.id) throw new BadRequestException("O titular da matriz mudou. Recarregue a página.");
+      source.ownerUserId = user.id;
+    }
+    if (source.ownerUserId && source.ownerUserId !== user.id) {
+      throw new BadRequestException("O administrador desta unidade não pode criar outras unidades. Solicite ao titular da matriz.");
+    }
+    const isDemoFamily = source.isTestOnly
+      && (source.slug === "operacao-demo-chegowia" || Boolean(source.demoRootCompanyId));
+    if (source.isTestOnly && !isDemoFamily) {
+      throw new BadRequestException("Esta empresa de teste não pode cadastrar unidades.");
+    }
+    if (isReservedDemoEmail(user.email) && !isDemoFamily) {
+      throw new BadRequestException("Esta conta de demonstração não pode criar unidades comerciais.");
+    }
+    const adminEmail = dto.adminEmail.trim().toLowerCase();
+    if (isReservedDemoEmail(adminEmail) || adminEmail === user.email.toLowerCase()) {
+      throw new BadRequestException("Informe o e-mail real e exclusivo do administrador da unidade.");
+    }
+    if (await this.db().user.findUnique({ where: { email: adminEmail } })) {
+      throw new ConflictException("Este e-mail já possui uma conta. Use outro endereço para o administrador da unidade.");
+    }
+    const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : null;
+    if (!cnpj && !isDemoFamily) {
+      throw new BadRequestException("Informe o CNPJ próprio deste estabelecimento.");
+    }
+    const registrationOwner = cnpj ? await this.db().identityDocument.findUnique({ where: { value: cnpj } }) : null;
+    const existingRegistration = cnpj ? await this.db().company.findFirst({
+      where: { cnpj, ...(registrationOwner?.ownerType === "COMPANY" ? { id: registrationOwner.ownerId } : {}) },
+    }) : null;
+    const conflictingUser = cnpj ? await this.db().user.findUnique({ where: { document: cnpj } }) : null;
+    if (conflictingUser || (registrationOwner && registrationOwner.ownerType !== "COMPANY")) {
+      throw new ConflictException("Este CNPJ pertence a outra conta.");
+    }
+    const reuseRegistration = Boolean(existingRegistration);
+    if (reuseRegistration) {
+      const owned = existingRegistration.id === user.companyId || existingRegistration.ownerUserId === user.id;
+      const samePlace = existingRegistration.zipCode === dto.zipCode
+        && normalizeAddress(existingRegistration.addressLine) === normalizeAddress(dto.addressLine)
+        && normalizeAddress(existingRegistration.city) === normalizeAddress(dto.city)
+        && existingRegistration.state?.toUpperCase() === dto.state.toUpperCase();
+      if (!owned || !samePlace || !dto.shareCnpj) {
+        throw new ConflictException("O mesmo CNPJ completo só pode ser reutilizado em outra operação do titular no mesmo endereço físico.");
+      }
+    } else if (dto.shareCnpj || registrationOwner) {
+      throw new ConflictException("Este CNPJ não pode ser reutilizado nesta unidade.");
+    }
+    const slug = await this.uniqueSlug(dto.name);
+    const now = new Date();
+    const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    try {
+      const unit = await this.db().$transaction(async (tx: any) => {
+        const company = await tx.company.create({
+          data: {
+            ownerUserId: user.id,
+            name: dto.name,
+            slug,
+            cnpj,
+            phone: dto.phone,
+            addressLine: dto.addressLine,
+            city: dto.city,
+            state: dto.state,
+            zipCode: dto.zipCode,
+            // O ponto exato deve ser confirmado no mapa em Configurações.
+            locationConfirmedAt: null,
+            deliveryFeeBase: source.deliveryFeeBase,
+            deliveryFeePerKm: source.deliveryFeePerKm,
+            deliveryRadiusKm: source.deliveryRadiusKm,
+            avgDeliveryTimeMinutes: source.avgDeliveryTimeMinutes,
+            logoUrl: source.logoUrl,
+            isTestOnly: Boolean(source.isTestOnly),
+            demoRootCompanyId: isDemoFamily ? source.demoRootCompanyId ?? source.id : null,
+            isPublished: false,
+            settings: { create: {
+              plan: source.subscription.plan.slug,
+              openingHours: source.settings?.openingHours ?? undefined,
+              paymentMethodsEnabled: source.settings?.paymentMethodsEnabled ?? undefined,
+              pickupEnabled: source.settings?.pickupEnabled ?? true,
+            } },
+          },
+        });
+        if (cnpj && !reuseRegistration) await tx.identityDocument.create({
+          data: { value: cnpj, ownerType: "COMPANY", ownerId: company.id },
+        });
+        await tx.clientSubscription.create({
+          data: {
+            companyId: company.id,
+            planId: source.subscription.plan.id,
+            monthlyPriceSnapshot: isDemoFamily ? 0 : source.subscription.plan.monthlyPrice,
+            status: isDemoFamily ? SubscriptionStatus.ATIVA : SubscriptionStatus.EM_TESTE,
+            trialStartedAt: isDemoFamily ? null : now,
+            trialEndsAt: isDemoFamily ? null : trialEndsAt,
+          },
+        });
+        const admin = await tx.user.create({
+          data: {
+            name: dto.adminName.trim(),
+            email: adminEmail,
+            passwordHash: await bcrypt.hash(randomBytes(32).toString("hex"), 12),
+            role: Role.ADMIN,
+            companyId: company.id,
+            employeeProfile: { create: { companyId: company.id, position: "Administrador" } },
+          },
+          select: { id: true, email: true },
+        });
+        return { company, admin };
+      });
+      this.postalCodeLocations.warm(unit.company.zipCode, { city: unit.company.city, state: unit.company.state });
+      const invitationSent = await this.auth.inviteUnitAdmin(unit.admin.id, unit.company.name);
+      return { id: unit.company.id, name: unit.company.name, slug: unit.company.slug,
+        trialEndsAt: isDemoFamily ? null : trialEndsAt,
+        adminEmail: unit.admin.email, invitationSent,
+        message: invitationSent
+          ? "Unidade criada. O administrador recebeu um convite para definir a senha; confirme o ponto no mapa antes de receber pedidos."
+          : "Unidade criada, mas o convite não pôde ser enviado. Reenvie-o pela página de unidades." };
+    } catch (error) {
+      if (isUniqueConstraint(error)) throw new ConflictException("Este CNPJ ou nome de loja já está em uso.");
+      throw error;
+    }
+  }
+
+  async resendUnitAdminInvitation(identity: JwtPayload, id: string) {
+    if (identity.role !== Role.ADMIN || identity.assumed) {
+      throw new BadRequestException("Somente o titular da matriz pode reenviar este convite.");
+    }
+    const company = await this.db().company.findFirst({
+      where: { id, ownerUserId: identity.sub },
+      select: { id: true, name: true, users: { where: { role: Role.ADMIN },
+        orderBy: { createdAt: "asc" }, select: { id: true, email: true, emailVerifiedAt: true } } },
+    });
+    if (!company) throw new NotFoundException("Unidade não encontrada.");
+    const admin = company.users.find((candidate: any) => candidate.id !== identity.sub);
+    if (!admin || admin.emailVerifiedAt) throw new BadRequestException("O administrador já ativou a conta ou não existe.");
+    const invitationSent = await this.auth.inviteUnitAdmin(admin.id, company.name);
+    return { adminEmail: admin.email, invitationSent };
+  }
+
+  async setUnitPublished(identity: JwtPayload, id: string, published: boolean) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || user.role !== Role.ADMIN || identity.assumed || typeof published !== "boolean") {
+      throw new BadRequestException("Esta conta não pode alterar a publicação da unidade.");
+    }
+    const company = await this.db().company.findFirst({
+      where: { id, OR: [{ id: user.companyId ?? "" }, { ownerUserId: user.id }] },
+      include: { subscription: true },
+    });
+    if (!company) throw new NotFoundException("Unidade não encontrada.");
+    if (published) {
+      if (!company.isActive || !company.locationConfirmedAt || company.latitude == null || company.longitude == null) {
+        throw new BadRequestException("Confirme no mapa o ponto de saída desta unidade antes de publicá-la.");
+      }
+      const hasProduct = await tenantContext.runAsCompany(id, async () => await this.db().product.findFirst({
+        where: { companyId: id, isActive: true, category: { isActive: true } }, select: { id: true },
+      }));
+      if (!hasProduct) throw new BadRequestException("Cadastre ao menos um produto ativo antes de publicar esta unidade.");
+      const subscription = company.subscription;
+      const entitled = subscription?.status === SubscriptionStatus.ATIVA
+        || (subscription?.status === SubscriptionStatus.EM_TESTE && subscription.trialEndsAt > new Date());
+      if (!entitled) throw new BadRequestException("Ative a assinatura desta unidade antes de publicá-la.");
+    }
+    return this.db().company.update({ where: { id }, data: { isPublished: published },
+      select: { id: true, isPublished: true } });
+  }
+
   async create(dto: CreateCompanyDto) {
     const slug = dto.slug ? slugify(dto.slug) : await this.uniqueSlug(dto.name);
     const zipCode = normalizePostalCode(dto.zipCode);
@@ -62,7 +253,7 @@ export class CompaniesService {
     const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : null;
     if (cnpj) {
       const [company, user] = await Promise.all([
-        this.db().company.findUnique({ where: { cnpj } }),
+        this.db().company.findFirst({ where: { cnpj } }),
         this.db().user.findUnique({ where: { document: cnpj } }),
       ]);
       if (company || user) throw new ConflictException("Este CNPJ já está vinculado a uma conta.");
@@ -148,8 +339,28 @@ export class CompaniesService {
     if (!zipCode) {
       throw new BadRequestException("Informe o CEP operacional da empresa antes de salvar.");
     }
-    const cnpj = dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : dto.cnpj;
-    if (cnpj) {
+    const cnpj = dto.cnpj === undefined ? current.cnpj : dto.cnpj ? normalizeBrazilDocument(dto.cnpj) : null;
+    if (current.cnpj && (locationChanged || cnpj !== current.cnpj)) {
+      const shared = await this.db().company.findFirst({
+        where: { cnpj: current.cnpj, id: { not: id } },
+        select: { id: true, zipCode: true, addressLine: true, city: true, state: true },
+      });
+      if (shared) {
+        const registration = await this.db().identityDocument.findUnique({ where: { value: current.cnpj } });
+        if (cnpj !== current.cnpj && registration?.ownerId === id) {
+          throw new BadRequestException("Este CNPJ ainda é usado por outra operação. Separe a inscrição dessas unidades antes de alterá-lo.");
+        }
+        if (cnpj === current.cnpj && (
+          shared.zipCode !== zipCode
+          || normalizeAddress(shared.addressLine) !== normalizeAddress(dto.addressLine ?? current.addressLine)
+          || normalizeAddress(shared.city) !== normalizeAddress(dto.city ?? current.city)
+          || shared.state?.toUpperCase() !== (dto.state ?? current.state)?.toUpperCase()
+        )) {
+          throw new BadRequestException("Operações com o mesmo CNPJ devem continuar no mesmo endereço físico. Informe outro CNPJ antes de mudar o local.");
+        }
+      }
+    }
+    if (cnpj && cnpj !== current.cnpj) {
       const [company, user] = await Promise.all([
         this.db().company.findFirst({ where: { cnpj, id: { not: id } } }),
         this.db().user.findUnique({ where: { document: cnpj } }),
@@ -322,6 +533,7 @@ export class CompaniesService {
       : { isTestOnly: false, ...filtroPublicoDeEmpresa({ cidade: params.city }) };
     const where: any = {
       isActive: true,
+      isPublished: true,
       ...catalogScope,
     };
     if (params.search) where.name = { contains: params.search };
@@ -369,6 +581,7 @@ export class CompaniesService {
       where: {
         slug,
         isActive: true,
+        isPublished: true,
         ...catalogScope,
       },
       select: {
@@ -398,4 +611,9 @@ export class CompaniesService {
 function isUniqueConstraint(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error
     && (error as { code?: string }).code === "P2002";
+}
+
+function normalizeAddress(value?: string | null) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }

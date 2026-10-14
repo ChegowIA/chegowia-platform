@@ -358,7 +358,7 @@ export class ToolsService {
     const visibility = this.legacyTestData
       ? await this.legacyTestData.publicCompanyVisibilityWhere(viewer)
       : { isTestOnly: false };
-    const deliveryCompanyWhere: any = { isActive: true, ...visibility };
+    const deliveryCompanyWhere: any = { isActive: true, isPublished: true, ...visibility };
     // Igualdade, não `contains`: "Rio Branco" casaria com "Rio Branco do Sul"
     // e mostraria ao cliente uma loja de outro estado. A comparação já ignora
     // acento e caixa pela collation `utf8mb4_unicode_ci` da coluna.

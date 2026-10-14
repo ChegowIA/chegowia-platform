@@ -18,6 +18,7 @@ import { KitchenAssistant } from "@/components/ai/kitchen-assistant";
 import { MobileDock } from "@/components/layout/mobile-dock";
 import { NonCriticalBoundary } from "@/components/system/non-critical-boundary";
 import { SuperAdminImpersonationBanner } from "@/components/auth/super-admin-impersonation-banner";
+import { UnitSwitcher } from "@/components/layout/unit-switcher";
 
 interface NavItem {
   href: string;
@@ -40,6 +41,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/painel/fiscal", label: "Fiscal", roles: [Role.ADMIN, Role.FUNCIONARIO], permissions: [PermissionKey.FISCAL_VISUALIZAR] },
   { href: "/painel/configuracoes", label: "Configurações", roles: [Role.ADMIN] },
   { href: "/painel/assinatura", label: "Assinatura", roles: [Role.ADMIN] },
+  { href: "/painel/unidades", label: "Unidades", roles: [Role.ADMIN] },
 ];
 
 function matchesPanelRoute(pathname: string | null, href: string) {
@@ -172,7 +174,8 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
     user?.role === Role.ADMIN
     && !isAuditedSupportAccess
     && Boolean(billingStatus?.accessRestricted)
-    && pathname !== "/painel/assinatura";
+    && pathname !== "/painel/assinatura"
+    && pathname !== "/painel/unidades";
 
   useEffect(()=>{
     if(billingLocked){
@@ -218,6 +221,7 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
               {user?.role === Role.MOTOBOY ? "Central de entregas" : user?.role === Role.GARCOM ? "Operação de salão" : "Gestão da empresa"}
             </p>
             <p className="mt-1 line-clamp-1 text-sm font-bold text-white">{user?.name}</p>
+            {user?.role === Role.ADMIN && !user.actorRole && <div className="mt-3"><UnitSwitcher /></div>}
             <span className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-300">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Operação online
             </span>
@@ -265,6 +269,7 @@ export function PainelShell({ children }: { children: React.ReactNode }) {
             <p className="hidden text-xs text-slate-500 dark:text-slate-400 md:block">{user?.role === Role.MOTOBOY ? "Suas rotas e entregas" : user?.role === Role.GARCOM ? "Suas mesas e comandas" : "Visão atual da operação"}</p>
           </div>
           <div className="flex items-center gap-2">
+            {user?.role === Role.ADMIN && !user.actorRole && <Link href="/painel/unidades" className="rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-brand-700 dark:border-slate-700 dark:bg-slate-900 dark:text-brand-300 md:hidden" aria-label="Gerenciar e trocar unidades">Unidades</Link>}
             <ThemeToggle />
             <button
               onClick={async () => {

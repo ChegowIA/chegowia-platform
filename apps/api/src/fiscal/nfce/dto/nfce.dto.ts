@@ -2,8 +2,8 @@ import { Transform } from "class-transformer";
 import { IsEnum, IsInt, IsOptional, IsString, Length, Matches, Min, ValidateIf } from "class-validator";
 import { PaymentMethod } from "@prisma/client";
 
-const onlyDigits = ({ value }: { value: unknown }) =>
-  typeof value === "string" ? value.replace(/\D/g, "") : value;
+const onlyDocumentCharacters = ({ value }: { value: unknown }) =>
+  typeof value === "string" ? value.toUpperCase().replace(/[^A-Z0-9]/g, "") : value;
 
 export class EmitDocumentDto {
   /** Um dos dois é obrigatório: nota de delivery ou de comanda de mesa. */
@@ -17,9 +17,9 @@ export class EmitDocumentDto {
 
   /** CPF ou CNPJ na nota. Ausente = consumidor não identificado. */
   @IsOptional()
-  @Transform(onlyDigits)
+  @Transform(onlyDocumentCharacters)
   @IsString()
-  @Matches(/^(\d{11}|\d{14})$/, { message: "Informe um CPF ou CNPJ válido." })
+  @Matches(/^(\d{11}|[A-Z0-9]{12}\d{2})$/, { message: "Informe um CPF ou CNPJ válido." })
   customerDocument?: string;
 
   /** Só é necessário para comandas antigas que foram fechadas sem recebimento registrado. */

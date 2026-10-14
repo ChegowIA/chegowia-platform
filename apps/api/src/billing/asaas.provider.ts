@@ -71,6 +71,7 @@ export type AsaasSubscription = {
   id: string;
   status: string;
   value: number;
+  billingType?: AsaasBillingType;
   nextDueDate?: string | null;
   customer?: string | null;
 };
@@ -177,7 +178,7 @@ export class AsaasProvider {
   }
 
   async updateSubscription(subscriptionId: string, params: Record<string, unknown>): Promise<AsaasSubscription> {
-    return this.request(`/subscriptions/${encodeURIComponent(subscriptionId)}`, { method: "POST", body: params });
+    return this.request(`/subscriptions/${encodeURIComponent(subscriptionId)}`, { method: "PUT", body: params });
   }
 
   async cancelSubscription(subscriptionId: string) {
@@ -261,7 +262,7 @@ export class AsaasProvider {
   }
 
   async updatePayment(paymentId: string, params: Record<string, unknown>): Promise<AsaasPayment> {
-    return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "POST", body: params });
+    return this.request(`/payments/${encodeURIComponent(paymentId)}`, { method: "PUT", body: params });
   }
 
   // ---------------------------------------------------------------------------
@@ -354,7 +355,7 @@ export class AsaasProvider {
 
   private async request(
     path: string,
-    init: { method: "GET" | "POST" | "DELETE"; body?: unknown; notFoundAsNull?: boolean },
+    init: { method: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown; notFoundAsNull?: boolean },
   ) {
     const url = `${this.baseUrl()}${path}`;
     let response: Response;

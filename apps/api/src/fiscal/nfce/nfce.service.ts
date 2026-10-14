@@ -721,7 +721,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
     const [empresa, admins] = await Promise.all([
       this.db().company.findUnique({ where: { id: companyId }, select: { name: true } }).catch(() => null),
       this.db().user.findMany({
-        where: { companyId, role: Role.ADMIN, isActive: true },
+        where: { OR: [{ companyId }, { managedCompanies: { some: { id: companyId } } }], role: Role.ADMIN, isActive: true },
         select: { email: true },
       }).catch(() => []),
     ]);
@@ -1294,7 +1294,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
 
     evento.ele("cOrgao").txt(cUF);
     evento.ele("tpAmb").txt(input.environment === FiscalEnvironment.PRODUCAO ? "1" : "2");
-    evento.ele("CNPJ").txt(input.cnpj.replace(/\D/g, ""));
+    evento.ele("CNPJ").txt(input.cnpj.toUpperCase().replace(/[^A-Z0-9]/g, ""));
     evento.ele("chNFe").txt(input.accessKey);
     evento.ele("dhEvento").txt(toXmlDate(new Date()));
     evento.ele("tpEvento").txt(input.eventType);
@@ -1313,7 +1313,7 @@ export class NfceService implements OnModuleInit, OnModuleDestroy {
       where: { id: companyId },
       select: { cnpj: true },
     });
-    return (company?.cnpj ?? "").replace(/\D/g, "");
+    return (company?.cnpj ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   }
 
   // -------------------------------------------------------------------------

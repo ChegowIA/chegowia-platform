@@ -53,6 +53,7 @@ interface AssumedContext {
 
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000;
+const UNIT_ADMIN_INVITE_TTL_MS = 24 * 60 * 60 * 1000;
 const MFA_TTL_MS = 10 * 60 * 1000;
 const SUPER_ADMIN_ACCESS_LINK_TTL_MS = 10 * 60 * 1000;
 const SUPER_ADMIN_ASSUMED_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -77,6 +78,7 @@ export class AuthService {
     user: { id: string; email: string; role: Role; companyId: string | null },
     session: MfaSessionWindow,
     assumed?: AssumedContext | null,
+    activeCompanyId?: string | null,
   ): JwtPayload {
     if (assumed) {
       // `sub` continua sendo o usuário real: é o que permite auditar quem agiu
@@ -103,7 +105,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
-      companyId: user.companyId,
+      companyId: activeCompanyId ?? user.companyId,
       mfaSessionStartedAt: session.startedAt.getTime(),
       mfaSessionExpiresAt: session.expiresAt.getTime(),
     };
@@ -113,12 +115,13 @@ export class AuthService {
     user: { id: string; email: string; role: Role; companyId: string | null },
     session: MfaSessionWindow,
     assumed?: AssumedContext | null,
+    activeCompanyId?: string | null,
   ): Promise<IssuedTokens> {
     const effectiveSession = limitMfaSessionWindow(session, assumed?.expiresAt);
     if (effectiveSession.expiresAt.getTime() <= Date.now()) {
       throw new UnauthorizedException("Sessão expirada, faça login novamente.");
     }
-    const accessToken = this.jwtService.sign(this.toPayload(user, effectiveSession, assumed), {
+    const accessToken = this.jwtService.sign(this.toPayload(user, effectiveSession, assumed, activeCompanyId), {
       secret: process.env.JWT_ACCESS_SECRET,
       expiresIn: (process.env.JWT_ACCESS_EXPIRES_IN ?? "15m") as any,
       issuer: process.env.JWT_ISSUER ?? "chegowia-api",
@@ -140,6 +143,8 @@ export class AuthService {
         assumedAccessKind: assumed?.accessKind ?? null,
         assumedUserId: assumed?.subjectUserId ?? null,
         assumedResellerId: assumed?.resellerId ?? null,
+        activeCompanyId: !assumed && user.role === Role.ADMIN && activeCompanyId !== user.companyId
+          ? activeCompanyId ?? null : null,
       },
     });
 
@@ -179,7 +184,10 @@ export class AuthService {
         where: { id: user.companyId },
         select: { isActive: true },
       });
-      if (!company?.isActive) {
+      const hasActiveUnit = !company?.isActive && user.role === Role.ADMIN && Boolean(await this.db().company.findFirst({
+        where: { ownerUserId: user.id, isActive: true }, select: { id: true },
+      }));
+      if (!company?.isActive && !hasActiveUnit) {
         throw new UnauthorizedException(
           "A conta da sua empresa está desativada. Fale com o suporte da ChegowIA.",
         );
@@ -219,11 +227,12 @@ export class AuthService {
     // As únicas contas sem caixa postal são as identidades .invalid criadas
     // pelo script interno de demonstração. Elas não entram por fluxos HTTP
     // públicos e permanecem isoladas; toda conta real chega aqui pelo MFA.
-    const tokens = await this.issueTokens(user, createMfaSessionWindow());
+    const activeCompanyId = await this.defaultOwnedCompanyId(user);
+    const tokens = await this.issueTokens(user, createMfaSessionWindow(), null, activeCompanyId);
     return {
       ...tokens,
       mfaRequired: false as const,
-      user: await this.publicUser(user),
+      user: await this.publicUser(user, activeCompanyId),
       // O painel usa isto para abrir o seletor de contexto logo após entrar.
       multiContext: this.isMultiContextUser(user),
     };
@@ -245,6 +254,21 @@ export class AuthService {
   private isMultiContextUser(user: { email: string; role: Role }) {
     const allowed = this.multiContextEmail();
     return Boolean(allowed) && user.role === Role.SUPER_ADMIN && user.email.trim().toLowerCase() === allowed;
+  }
+
+  /** Se a matriz foi desativada, outra unidade ativa continua acessível. */
+  private async defaultOwnedCompanyId(user: { id: string; role: Role; companyId: string | null }) {
+    if (user.role !== Role.ADMIN || !user.companyId) return null;
+    const primary = await this.db().company.findUnique({
+      where: { id: user.companyId }, select: { isActive: true },
+    });
+    if (primary?.isActive) return null;
+    const unit = await this.db().company.findFirst({
+      where: { ownerUserId: user.id, isActive: true }, select: { id: true },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!unit) throw new UnauthorizedException("Todas as unidades desta conta estão inativas.");
+    return unit.id as string;
   }
 
   /**
@@ -290,6 +314,41 @@ export class AuthService {
         { kind: "STANDALONE" as const, role: Role.CLIENTE, companyId: null, label: "Cliente" },
       ],
     };
+  }
+
+  /** Unidades do empresário: a empresa original e as unidades criadas por ele. */
+  async ownedCompanies(identity: JwtPayload) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || user.role !== Role.ADMIN || identity.assumed) {
+      throw new ForbiddenException("Somente o administrador titular pode gerenciar unidades.");
+    }
+    const companies = await this.db().company.findMany({
+      where: { OR: [{ id: user.companyId ?? "" }, { ownerUserId: user.id }] },
+      select: { id: true, name: true, slug: true, city: true, state: true, phone: true, isActive: true, isPublished: true,
+        isTestOnly: true,
+        ownerUserId: true,
+        users: { where: { role: Role.ADMIN }, select: { id: true, email: true, emailVerifiedAt: true } },
+        subscription: { select: { status: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+    return { activeCompanyId: identity.companyId, companies };
+  }
+
+  /** Troca apenas para empresas que pertencem a esta conta, preservando o MFA. */
+  async switchOwnedCompany(identity: JwtPayload, companyId: string) {
+    const user = await this.db().user.findUnique({ where: { id: identity.sub } });
+    if (!user || user.role !== Role.ADMIN || identity.assumed || !user.isActive) {
+      throw new ForbiddenException("Esta conta não pode trocar de unidade.");
+    }
+    const company = await this.db().company.findFirst({
+      where: { id: companyId, OR: [{ id: user.companyId ?? "" }, { ownerUserId: user.id }] },
+      select: { id: true, isActive: true },
+    });
+    if (!company) throw new NotFoundException("Unidade não encontrada para esta conta.");
+    if (!company.isActive) throw new ForbiddenException("Unidade inativa.");
+    const activeCompanyId = company.id === user.companyId ? null : company.id;
+    const tokens = await this.issueTokens(user, this.mfaSessionFromIdentity(identity), null, activeCompanyId);
+    return { ...tokens, user: await this.publicUser(user, company.id) };
   }
 
   /**
@@ -732,6 +791,25 @@ export class AuthService {
     }
   }
 
+  /** Convite individual: a senha inicial é aleatória e só o dono do e-mail pode defini-la. */
+  async inviteUnitAdmin(userId: string, companyName: string) {
+    const user = await this.db().user.findUnique({ where: { id: userId } });
+    if (!user?.isActive || user.role !== Role.ADMIN || user.emailVerifiedAt || !user.companyId) return false;
+    await this.db().accountToken.updateMany({
+      where: { userId, type: AccountTokenType.REDEFINICAO_SENHA, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+    const token = await this.createUrlToken(userId, AccountTokenType.REDEFINICAO_SENHA, UNIT_ADMIN_INVITE_TTL_MS);
+    try {
+      await this.mail.sendUnitAdminInvite(user.email, user.name, companyName, token);
+      return true;
+    } catch (error) {
+      this.logger.error(`Falha ao enviar convite da unidade para ${user.id}`,
+        error instanceof Error ? error.stack : String(error));
+      return false;
+    }
+  }
+
   async forgotPassword(emailInput: string) {
     const email = emailInput.trim().toLowerCase();
     const user = await this.db().user.findUnique({ where: { email } });
@@ -840,10 +918,11 @@ export class AuthService {
       where: { id: record.id },
       data: { usedAt: new Date() },
     });
-    const tokens = await this.issueTokens(record.user, createMfaSessionWindow());
+    const activeCompanyId = await this.defaultOwnedCompanyId(record.user);
+    const tokens = await this.issueTokens(record.user, createMfaSessionWindow(), null, activeCompanyId);
     return {
       ...tokens,
-      user: await this.publicUser(record.user),
+      user: await this.publicUser(record.user, activeCompanyId),
       multiContext: this.isMultiContextUser(record.user),
     };
   }
@@ -953,13 +1032,24 @@ export class AuthService {
       }
     }
 
+    let activeCompanyId: string | null = null;
+    if (!assumed && user.role === Role.ADMIN && record.activeCompanyId) {
+      const company = await this.db().company.findFirst({
+        where: { id: record.activeCompanyId, ownerUserId: user.id, isActive: true },
+        select: { id: true },
+      });
+      if (company) activeCompanyId = company.id;
+    }
+    if (!assumed && user.role === Role.ADMIN && !activeCompanyId) {
+      activeCompanyId = await this.defaultOwnedCompanyId(user);
+    }
     const tokens = await this.issueTokens(user, {
       startedAt: record.sessionStartedAt,
       expiresAt: record.expiresAt,
-    }, assumed);
+    }, assumed, activeCompanyId);
     return {
       ...tokens,
-      user: await this.publicSessionUser(user, assumed),
+      user: assumed ? await this.publicSessionUser(user, assumed) : await this.publicUser(user, activeCompanyId),
     };
   }
 
@@ -993,7 +1083,7 @@ export class AuthService {
         resellerId: identity.assumedResellerId ?? null,
       }
       : null;
-    return this.publicSessionUser(user, assumed);
+    return assumed ? this.publicSessionUser(user, assumed) : this.publicUser(user, identity.companyId);
   }
 
   private async createUrlToken(userId: string, type: AccountTokenType, ttlMs: number) {
@@ -1092,14 +1182,14 @@ export class AuthService {
     };
   }
 
-  private async publicUser(user: any) {
+  private async publicUser(user: any, activeCompanyId?: string | null) {
     const permissionKeys = await this.permissionKeysFor(user);
     return {
       id: user.id,
       name: user.name,
       email: user.email,
       role: user.role,
-      companyId: user.companyId,
+      companyId: activeCompanyId ?? user.companyId,
       avatarUrl: user.avatarUrl,
       emailVerified: Boolean(user.emailVerifiedAt),
       permissionKeys,

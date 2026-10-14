@@ -6,7 +6,7 @@ describe("segurança das rotas anônimas de cadastro", () => {
     function build(existingPending: any) {
       const prisma = {
         user: { findUnique: jest.fn().mockResolvedValue(null) },
-        company: { findUnique: jest.fn().mockResolvedValue(null) },
+        company: { findUnique: jest.fn().mockResolvedValue(null), findFirst: jest.fn().mockResolvedValue(null) },
         softwarePlan: { findFirst: jest.fn().mockResolvedValue({ id: "plano-1", monthlyPrice: 159.9, currency: "brl" }) },
         resellerProfile: { findFirst: jest.fn().mockResolvedValue(null), findUnique: jest.fn().mockResolvedValue(null) },
         clientApplication: {

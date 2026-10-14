@@ -13,6 +13,7 @@ describe("dados legados da homologação", () => {
     userEmail?: string;
     address?: any;
     company?: any;
+    descendants?: any[];
     postalMatch?: boolean;
   } = {}) {
     const address = options.address === undefined
@@ -53,6 +54,7 @@ describe("dados legados da homologação", () => {
       },
       company: {
         findFirst: jest.fn().mockResolvedValue(company),
+        findMany: jest.fn().mockResolvedValue(options.descendants ?? []),
         update: jest.fn().mockResolvedValue(company),
       },
     };
@@ -84,7 +86,7 @@ describe("dados legados da homologação", () => {
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({
       OR: [
         { isTestOnly: false },
-        { slug: "operacao-demo-chegowia", isTestOnly: true },
+        { id: { in: ["demo-company"] }, isTestOnly: true },
       ],
     });
     expect(postalCodeLocations.isLikelyWithinDeliveryRadius).toHaveBeenCalledWith(expect.objectContaining({
@@ -96,6 +98,11 @@ describe("dados legados da homologação", () => {
 
   it("oculta a demo quando a triagem de CEP informa que o endereço está fora do raio", async () => {
     const { service } = createService({ postalMatch: false });
+    await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
+  });
+
+  it("não confia apenas no e-mail de um token antigo quando a conta mudou de endereço de e-mail", async () => {
+    const { service } = createService({ userEmail: "outra.pessoa@example.com" });
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
   });
 
@@ -130,7 +137,7 @@ describe("dados legados da homologação", () => {
     await expect(service.publicCatalogCompanyScope(targetViewer, "Aparecida de Goiânia")).resolves.toEqual({
       OR: [
         expect.objectContaining({ isTestOnly: false }),
-        expect.objectContaining({ slug: "operacao-demo-chegowia", isTestOnly: true }),
+        expect.objectContaining({ id: { in: ["demo-company"] }, isTestOnly: true }),
       ],
     });
   });
@@ -145,6 +152,25 @@ describe("dados legados da homologação", () => {
 
     const other = createService({ userEmail: "outra.pessoa@example.com" });
     await expect(other.service.publicCompanyVisibilityWhereForUserId("outra-conta"))
+      .resolves.toEqual({ isTestOnly: false });
+  });
+
+  it("mostra descendentes demo apenas à conta autorizada e somente dentro do raio de cada unidade", async () => {
+    const descendants = [
+      { id: "demo-filial-perto", zipCode: "74013010", city: "Goiânia", state: "GO", deliveryRadiusKm: 8 },
+      { id: "demo-filial-longe", zipCode: "74800000", city: "Goiânia", state: "GO", deliveryRadiusKm: 8 },
+    ];
+    const { service, prisma, postalCodeLocations } = createService({ descendants });
+    postalCodeLocations.isLikelyWithinDeliveryRadius
+      .mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ OR: [
+      { isTestOnly: false },
+      { id: { in: ["demo-company", "demo-filial-perto"] }, isTestOnly: true },
+    ] });
+    expect(prisma.company.findMany).toHaveBeenCalledWith({
+      where: { demoRootCompanyId: "demo-company", isActive: true, isTestOnly: true },
+    });
+    await expect(service.publicCompanyVisibilityWhere({ ...targetViewer, email: "outro@example.com" }))
       .resolves.toEqual({ isTestOnly: false });
   });
 });

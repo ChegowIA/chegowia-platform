@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 
 /**
- * Chave de acesso da NFC-e: 44 dígitos que identificam o documento em todo o
+ * Chave de acesso da NFC-e: 44 caracteres que identificam o documento em todo o
  * país e que o consumidor digita no site da SEFAZ para consultar a nota.
  *
  * Composição (layout 4.00):
@@ -54,8 +54,8 @@ export function buildAccessKey(parts: AccessKeyParts): string {
 
   const ano = String(parts.issuedAt.getFullYear()).slice(-2);
   const mes = String(parts.issuedAt.getMonth() + 1).padStart(2, "0");
-  const cnpj = parts.cnpj.replace(/\D/g, "").padStart(14, "0");
-  if (cnpj.length !== 14) throw new Error("CNPJ do emitente inválido para a chave de acesso.");
+  const cnpj = parts.cnpj.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!/^[A-Z0-9]{12}\d{2}$/.test(cnpj)) throw new Error("CNPJ do emitente inválido para a chave de acesso.");
 
   const semDigito = [
     cUF,
@@ -79,7 +79,7 @@ export function accessKeyCheckDigit(first43: string): string {
   let soma = 0;
   let peso = 2;
   for (let i = first43.length - 1; i >= 0; i -= 1) {
-    soma += Number(first43[i]) * peso;
+    soma += (first43[i].charCodeAt(0) - 48) * peso;
     peso = peso === 9 ? 2 : peso + 1;
   }
   const resto = soma % 11;
@@ -88,8 +88,9 @@ export function accessKeyCheckDigit(first43: string): string {
 }
 
 export function isValidAccessKey(key: string): boolean {
-  if (!/^\d{44}$/.test(key)) return false;
-  return accessKeyCheckDigit(key.slice(0, 43)) === key[43];
+  const normalized = key.toUpperCase();
+  if (!/^\d{6}[A-Z0-9]{12}\d{26}$/.test(normalized)) return false;
+  return accessKeyCheckDigit(normalized.slice(0, 43)) === normalized[43];
 }
 
 /** Quebra a chave nos campos que a compõem, para telas e conferência. */

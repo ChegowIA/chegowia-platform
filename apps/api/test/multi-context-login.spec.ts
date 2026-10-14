@@ -251,6 +251,7 @@ describe("login com empresa desativada", () => {
       },
       company: {
         findUnique: jest.fn().mockResolvedValue({ isActive: overrides.companyAtiva ?? true }),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
     };
     const service: any = Object.create(AuthService.prototype);

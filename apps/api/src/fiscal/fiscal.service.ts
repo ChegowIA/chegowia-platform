@@ -236,7 +236,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       where: { id: companyId },
       select: { cnpj: true },
     });
-    const companyDocument = company?.cnpj?.replace(/\D/g, "");
+    const companyDocument = company?.cnpj?.toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (metadata.document && companyDocument && metadata.document !== companyDocument) {
       throw new ConflictException(
         "O CNPJ do certificado não corresponde ao CNPJ da empresa.",
@@ -418,7 +418,10 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
       ];
 
       const destinatarios = await this.db().user.findMany({
-        where: { companyId: certificado.companyId, role: Role.ADMIN, isActive: true },
+        where: { OR: [
+          { companyId: certificado.companyId },
+          { managedCompanies: { some: { id: certificado.companyId } } },
+        ], role: Role.ADMIN, isActive: true },
         select: { email: true },
       }).catch(() => []);
 

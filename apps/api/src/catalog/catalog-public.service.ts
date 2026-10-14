@@ -70,6 +70,7 @@ export class CatalogPublicService {
       : { isTestOnly: false, ...filtroPublicoDeEmpresa({ cidade }) };
     const where: any = {
       isActive: true,
+      isPublished: true,
       ...catalogScope,
     };
     if (!zipCode || !this.postalCodeLocations) return where;

@@ -62,7 +62,7 @@ export class ResellersService {
     }
     const [documentUser, documentCompany] = await Promise.all([
       this.db().user.findUnique({ where: { document: normalizedDocument } }),
-      this.db().company.findUnique({ where: { cnpj: normalizedDocument } }),
+      this.db().company.findFirst({ where: { cnpj: normalizedDocument } }),
     ]);
     if (documentUser || documentCompany) throw new ConflictException("Este CPF/CNPJ já está vinculado a uma conta.");
     const previous = await this.db().resellerApplication.findFirst({
@@ -226,7 +226,7 @@ export class ResellersService {
     if (existing) throw new ConflictException("Já existe uma conta com este e-mail.");
     const [documentUser, documentCompany] = await Promise.all([
       this.db().user.findUnique({ where: { document: application.document } }),
-      this.db().company.findUnique({ where: { cnpj: application.document } }),
+      this.db().company.findFirst({ where: { cnpj: application.document } }),
     ]);
     if (documentUser || documentCompany) throw new ConflictException("Este CPF/CNPJ já está vinculado a uma conta.");
     const code = await this.uniqueCode(application.fullName);

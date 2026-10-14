@@ -54,6 +54,7 @@ describe("ativação pelo Asaas", () => {
         { id: "pay_1", invoiceUrl: "https://asaas.com/i/pay_1", status: "PENDING" },
       ]),
       getPayment: jest.fn(),
+      findPayment: jest.fn().mockResolvedValue(null),
       ...(overrides.asaas ?? {}),
     };
     const service = buildBillingService({ prisma, asaas });
@@ -71,7 +72,7 @@ describe("ativação pelo Asaas", () => {
       expect.objectContaining({ cpfCnpj: "12345678000199", email: "dono@loja.com.br" }),
     );
     expect(asaas.createSubscription).toHaveBeenCalledWith(
-      expect.objectContaining({ customer: "cus_1", value: 159.9 }),
+      expect.objectContaining({ customer: "cus_1", value: 143.91, billingType: "PIX" }),
     );
     expect(result).toEqual({ url: "https://asaas.com/i/pay_1", reused: false });
     expect(prisma.clientSubscription.update).toHaveBeenCalledWith(
@@ -82,20 +83,63 @@ describe("ativação pelo Asaas", () => {
   it("reaproveita a cobrança em aberto em vez de gerar outra a cada clique", async () => {
     const { service, asaas } = build({
       asaas: {
-        getPayment: jest.fn().mockResolvedValue({
+        findPayment: jest.fn().mockResolvedValue({
           id: "pay_1",
           status: "PENDING",
           invoiceUrl: "https://asaas.com/i/pay_1",
         }),
+        getSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1", value: 159.9, billingType: "UNDEFINED" }),
+        updatePayment: jest.fn().mockResolvedValue({ invoiceUrl: "https://asaas.com/i/pay_1" }),
+        updateSubscription: jest.fn().mockResolvedValue({}),
       },
     });
     (service as never as Record<string, any>).db().clientSubscription.findUnique.mockResolvedValue({
       ...assinatura,
       asaasPaymentId: "pay_1",
+      asaasSubscriptionId: "sub_asaas_1",
     });
 
     const result = await service.companyCheckout("empresa-1");
 
+    expect(result).toEqual({ url: "https://asaas.com/i/pay_1", reused: true });
+    expect(asaas.createSubscription).not.toHaveBeenCalled();
+  });
+
+  it("cria a assinatura por Pix com o desconto de 10% desde a primeira fatura", async () => {
+    const { service, asaas } = build();
+
+    await service.companyCheckout("empresa-1", "PIX");
+
+    expect(asaas.createSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      billingType: "PIX",
+      value: 143.91,
+    }));
+  });
+
+  it("reprecifica uma fatura de ativação reaproveitada antes de mostrar o link", async () => {
+    const { service, asaas } = build({
+      asaas: {
+        findPayment: jest.fn().mockResolvedValue({
+          id: "pay_1", value: 169.9, status: "PENDING", billingType: "UNDEFINED",
+          invoiceUrl: "https://asaas.com/i/pay_1",
+        }),
+        getSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1", value: 159.9, billingType: "UNDEFINED" }),
+        listSubscriptionPayments: jest.fn().mockResolvedValue([{
+          id: "pay_1", value: 169.9, status: "PENDING", billingType: "UNDEFINED",
+          invoiceUrl: "https://asaas.com/i/pay_1",
+        }]),
+        updatePayment: jest.fn().mockResolvedValue({ invoiceUrl: "https://asaas.com/i/pay_1" }),
+        updateSubscription: jest.fn().mockResolvedValue({}),
+      },
+    });
+    (service as never as Record<string, any>).db().clientSubscription.findUnique.mockResolvedValue({
+      ...assinatura, asaasPaymentId: "pay_1", asaasSubscriptionId: "sub_asaas_1",
+    });
+
+    const result = await service.companyCheckout("empresa-1", "BOLETO");
+
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", { value: 153.91, billingType: "BOLETO" });
+    expect(asaas.updateSubscription).toHaveBeenCalledWith("sub_asaas_1", { value: 143.91, billingType: "BOLETO" });
     expect(result).toEqual({ url: "https://asaas.com/i/pay_1", reused: true });
     expect(asaas.createSubscription).not.toHaveBeenCalled();
   });
@@ -186,6 +230,10 @@ describe("conciliação de cobrança paga sem ativação", () => {
     const asaas = {
       isConfigured: jest.fn().mockReturnValue(true),
       getPayment: jest.fn().mockResolvedValue({ id: "pay_1", status, value: 5, subscription: "sub_asaas_1", customer: "cus_1" }),
+      findPayment: jest.fn().mockResolvedValue({ id: "pay_1", status, value: 5, subscription: "sub_asaas_1", customer: "cus_1" }),
+      getSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1", value: 5, billingType: "UNDEFINED" }),
+      updateSubscription: jest.fn().mockResolvedValue({}),
+      updatePayment: jest.fn().mockResolvedValue({}),
       createCustomer: jest.fn(),
       createSubscription: jest.fn(),
       listSubscriptionPayments: jest.fn().mockResolvedValue([]),
@@ -212,7 +260,7 @@ describe("conciliação de cobrança paga sem ativação", () => {
 
   it("devolve o link quando a cobrança segue em aberto", async () => {
     const { service, asaas } = build("PENDING");
-    asaas.getPayment.mockResolvedValue({ id: "pay_1", status: "PENDING", invoiceUrl: "https://asaas.com/i/pay_1" });
+    asaas.findPayment.mockResolvedValue({ id: "pay_1", status: "PENDING", invoiceUrl: "https://asaas.com/i/pay_1" });
 
     const result = await service.companyCheckout("empresa-1");
 
@@ -541,10 +589,10 @@ describe("consumo acumulado na fatura de ativação", () => {
       createCustomer: jest.fn().mockResolvedValue({ id: "cus_1" }),
       createSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1" }),
       listSubscriptionPayments: jest.fn().mockResolvedValue([
-        { id: "pay_1", status: "PENDING", value: 159.9, invoiceUrl: "https://asaas.com/i/pay_1" },
+        { id: "pay_1", status: "PENDING", value: 143.91, invoiceUrl: "https://asaas.com/i/pay_1" },
       ]),
       updatePayment: jest.fn().mockResolvedValue({}),
-      getPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", value: 168.3, invoiceUrl: "https://asaas.com/i/pay_1" }),
+      getPayment: jest.fn().mockResolvedValue({ id: "pay_1", status: "PENDING", value: 152.31, invoiceUrl: "https://asaas.com/i/pay_1" }),
       ...(overrides.asaas ?? {}),
     };
     const service = buildBillingService({ prisma, asaas });
@@ -560,9 +608,9 @@ describe("consumo acumulado na fatura de ativação", () => {
 
     await service.companyCheckout("empresa-1");
 
-    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 168.3 }));
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 152.31 }));
     // O valor da assinatura fica intocado: o acréscimo não pode se repetir todo mês.
-    expect(asaas.createSubscription).toHaveBeenCalledWith(expect.objectContaining({ value: 159.9 }));
+    expect(asaas.createSubscription).toHaveBeenCalledWith(expect.objectContaining({ value: 143.91 }));
   });
 
   it("marca o consumo como sincronizado na cobrança da ativação", async () => {
@@ -646,10 +694,10 @@ describe("consumo do teste na ativação", () => {
       createCustomer: jest.fn(),
       createSubscription: jest.fn().mockResolvedValue({ id: "sub_asaas_1" }),
       listSubscriptionPayments: jest.fn().mockResolvedValue([
-        { id: "pay_1", status: "PENDING", value: 159.9, invoiceUrl: "https://asaas.com/i/pay_1" },
+        { id: "pay_1", status: "PENDING", value: 143.91, invoiceUrl: "https://asaas.com/i/pay_1" },
       ]),
       updatePayment: jest.fn().mockResolvedValue({}),
-      getPayment: jest.fn().mockResolvedValue({ id: "pay_1", value: 164, invoiceUrl: "https://asaas.com/i/pay_1" }),
+      getPayment: jest.fn().mockResolvedValue({ id: "pay_1", value: 148.01, invoiceUrl: "https://asaas.com/i/pay_1" }),
     };
     process.env.BILLING_PROVIDER = "ASAAS";
     const service = buildBillingService({ prisma, asaas });
@@ -657,7 +705,7 @@ describe("consumo do teste na ativação", () => {
 
     await service.companyCheckout("empresa-1");
 
-    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 164 }));
+    expect(asaas.updatePayment).toHaveBeenCalledWith("pay_1", expect.objectContaining({ value: 148.01 }));
     // A consulta não filtra por trialCoveredAt: é isso que traz o gasto do teste.
     expect(prisma.usageLedger.findMany.mock.calls[0][0].where.trialCoveredAt).toBeUndefined();
     delete process.env.BILLING_PROVIDER;

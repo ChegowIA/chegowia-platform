@@ -10,6 +10,7 @@ import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { SwitchContextDto } from "./dto/switch-context.dto";
+import { SwitchOwnedCompanyDto } from "./dto/switch-owned-company.dto";
 import { ConsumeCompanyAccessLinkDto } from "./dto/consume-company-access-link.dto";
 import { JwtPayload } from "../common/interfaces/jwt-payload.interface";
 import { Role } from "@prisma/client";
@@ -36,6 +37,32 @@ export class AuthController {
 
   private setRefreshCookie(res: Response, cookieValue: string, expiresAt: Date) {
     res.cookie(REFRESH_COOKIE, cookieValue, { ...REFRESH_COOKIE_OPTIONS, expires: expiresAt });
+  }
+
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Get("my-companies")
+  myCompanies(@CurrentUser() user: JwtPayload) {
+    return this.authService.ownedCompanies(user);
+  }
+
+  @Roles(Role.ADMIN)
+  @AllowInactiveSubscription()
+  @Post("my-companies/switch")
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async switchOwnedCompany(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SwitchOwnedCompanyDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.switchOwnedCompany(user, dto.companyId);
+    this.setRefreshCookie(res, result.refreshTokenCookie, result.refreshTokenExpiresAt);
+    return {
+      accessToken: result.accessToken,
+      user: result.user,
+      sessionExpiresAt: result.sessionExpiresAt,
+    };
   }
 
   @Public()

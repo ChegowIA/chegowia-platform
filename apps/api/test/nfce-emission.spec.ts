@@ -30,6 +30,13 @@ const tributacao = {
 };
 
 describe("chave de acesso da NFC-e", () => {
+  it("preserva CNPJ alfanumérico e calcula o DV sobre ASCII menos 48", () => {
+    const chave = buildAccessKey({ uf: "GO", issuedAt: new Date("2026-10-14T12:00:00-03:00"),
+      cnpj: "00.000.000/E08G-12", series: 1, number: 1, emissionType: 1, numericCode: "12345678" });
+    expect(chave.slice(6, 20)).toBe("00000000E08G12");
+    expect(isValidAccessKey(chave)).toBe(true);
+    expect(parseAccessKey(chave).cnpj).toBe("00000000E08G12");
+  });
   it("monta 44 dígitos com dígito verificador válido", () => {
     const chave = buildAccessKey({
       uf: "MG",

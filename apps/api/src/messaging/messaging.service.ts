@@ -1781,6 +1781,7 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       where: {
         slug: companySlug,
         isActive: true,
+        isPublished: true,
         ...visibility,
       },
     });

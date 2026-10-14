@@ -240,6 +240,8 @@ async function main() {
 
     const staff = [];
     for (const person of staffDefinition) staff.push(await upsertStaff(tx, company.id, person, passwordHash));
+    const demoOwner = staff.find((person) => person.role === "ADMIN");
+    if (demoOwner) await tx.company.update({ where: { id: company.id }, data: { ownerUserId: demoOwner.id } });
     await syncStaffPermissions(tx, staff);
 
     const customer = await upsertCustomer(tx, company.id, passwordHash);

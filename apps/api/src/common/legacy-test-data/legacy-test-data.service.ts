@@ -19,7 +19,7 @@ const HIDDEN_TEST_COMPANIES = { isTestOnly: false };
  */
 @Injectable()
 export class LegacyTestDataService {
-  private readonly pendingDemoAccessChecks = new Map<string, Promise<boolean>>();
+  private readonly pendingDemoAccessChecks = new Map<string, Promise<string[]>>();
 
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
@@ -50,13 +50,14 @@ export class LegacyTestDataService {
       ...filtroPublicoDeEmpresa({ cidade: city }),
     };
     if (!viewer?.sub || !isDemoCatalogEmail(viewer.email)) return publicCompanies;
-    if (!(await this.canViewPrivateDemo(viewer.sub))) return publicCompanies;
+    const demoIds = await this.eligibleDemoCompanyIds(viewer.sub);
+    if (!demoIds.length) return publicCompanies;
 
     return {
       OR: [
         publicCompanies,
         {
-          slug: DEMO_COMPANY_SLUG,
+          id: { in: demoIds },
           isTestOnly: true,
           // A exceção continua sujeita à assinatura. Só a pré-triagem por
           // município é dispensada, pois a rota real já confirmou a distância.
@@ -77,11 +78,12 @@ export class LegacyTestDataService {
   }
 
   private async visibilityForEligibleUser(userId: string) {
-    return await this.canViewPrivateDemo(userId)
+    const demoIds = await this.eligibleDemoCompanyIds(userId);
+    return demoIds.length
       ? {
         OR: [
           HIDDEN_TEST_COMPANIES,
-          { slug: DEMO_COMPANY_SLUG, isTestOnly: true },
+          { id: { in: demoIds }, isTestOnly: true },
         ],
       }
       : HIDDEN_TEST_COMPANIES;
@@ -95,19 +97,20 @@ export class LegacyTestDataService {
    * a visibilidade dependente de um serviço externo e esconde uma loja válida
    * quando o provedor de mapas oscila.
    */
-  private async canViewPrivateDemo(userId: string): Promise<boolean> {
+  private async eligibleDemoCompanyIds(userId: string): Promise<string[]> {
     const pending = this.pendingDemoAccessChecks.get(userId);
     if (pending) return pending;
 
     const check = this.checkPrivateDemoAccess(userId)
-      .catch(() => false)
+      .catch(() => [] as string[])
       .finally(() => this.pendingDemoAccessChecks.delete(userId));
     this.pendingDemoAccessChecks.set(userId, check);
     return check;
   }
 
-  private async checkPrivateDemoAccess(userId: string): Promise<boolean> {
-    const [address, company] = await Promise.all([
+  private async checkPrivateDemoAccess(userId: string): Promise<string[]> {
+    const [user, address, root] = await Promise.all([
+      this.db().user.findUnique({ where: { id: userId }, select: { email: true } }),
       this.db().address.findFirst({
         where: { userId, zipCode: { not: null } },
         orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
@@ -116,20 +119,24 @@ export class LegacyTestDataService {
         where: { slug: DEMO_COMPANY_SLUG, isActive: true, isTestOnly: true },
       }),
     ]);
-    if (!address || !company || !address.zipCode || !company.zipCode) {
-      return false;
-    }
-
-    const radiusKm = Number(company.deliveryRadiusKm);
-    if (!Number.isFinite(radiusKm) || radiusKm <= 0) return false;
-
-    return await this.postalCodeLocations.isLikelyWithinDeliveryRadius({
-      customerZipCode: address.zipCode,
-      customerHint: { city: address.city, state: address.state },
-      companyZipCode: company.zipCode,
-      companyHint: { city: company.city, state: company.state },
-      deliveryRadiusKm: radiusKm,
+    if (!isDemoCatalogEmail(user?.email) || !address?.zipCode || !root) return [];
+    const descendants = await this.db().company.findMany({
+      where: { demoRootCompanyId: root.id, isActive: true, isTestOnly: true },
     });
+    const matches = await Promise.all([root, ...descendants].map(async (company: any) => {
+      if (!company.zipCode) return null;
+      const radiusKm = Number(company.deliveryRadiusKm);
+      if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
+      const nearby = await this.postalCodeLocations.isLikelyWithinDeliveryRadius({
+        customerZipCode: address.zipCode,
+        customerHint: { city: address.city, state: address.state },
+        companyZipCode: company.zipCode,
+        companyHint: { city: company.city, state: company.state },
+        deliveryRadiusKm: radiusKm,
+      });
+      return nearby ? company.id as string : null;
+    }));
+    return matches.filter((id): id is string => Boolean(id));
   }
 }
 

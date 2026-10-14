@@ -51,6 +51,14 @@ describe("cliente do Asaas", () => {
     expect(JSON.parse(chamada().init.body)).toEqual(expect.objectContaining({ cycle: "MONTHLY" }));
   });
 
+  it("atualiza assinatura e cobrança com PUT, como exige a API do Asaas", async () => {
+    await provider.updateSubscription("sub_1", { value: 143.91, billingType: "PIX" });
+    await provider.updatePayment("pay_1", { value: 143.91, billingType: "PIX" });
+
+    expect(fetchMock.mock.calls[0][1].method).toBe("PUT");
+    expect(fetchMock.mock.calls[1][1].method).toBe("PUT");
+  });
+
   it("recusa erro de negócio que vem com HTTP 200", async () => {
     // O Asaas devolve 200 com `errors` em parte das recusas; confiar no código
     // HTTP faria a cobrança ser dada como criada sem existir.

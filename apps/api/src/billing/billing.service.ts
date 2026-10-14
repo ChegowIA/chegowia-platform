@@ -73,6 +73,8 @@ const ASAAS_ANTICIPATION_RECHECK_INTERVAL_MS = 15 * 60_000;
 const RESELLER_COMMISSION_RATE = 0.30;
 /** Desconto que o código de indicação dá ao cliente, e por quantos meses. */
 const REFERRAL_DISCOUNT_RATE = 0.15;
+/** Desconto permanente da mensalidade enquanto a cobrança for por Pix ou boleto. */
+const CASH_PAYMENT_DISCOUNT_RATE = 0.10;
 const REFERRAL_DISCOUNT_MONTHS = 3;
 const REFERRAL_DISCOUNT_SYNC_INTERVAL_MS = 60 * 60_000;
 /**
@@ -145,6 +147,24 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
    * uma chamada a mais, e não vale uma coluna no banco.
    */
   private readonly cobrancasComValorTravado = new Set<string>();
+  /** Evita consultar a mesma recorrência no Asaas a cada atualização do painel. */
+  private readonly asaasPricingCache = new Map<string, { value: number; billingType?: AsaasBillingType; expiresAt: number }>();
+  private cashDiscountCursor: string | null = null;
+  private cashDiscountNextPassAt = 0;
+  private cashDiscountPassHadErrors = false;
+
+  private async asaasSubscriptionPricing(subscriptionId: string, forceFresh = false) {
+    const cached = this.asaasPricingCache.get(subscriptionId);
+    if (!forceFresh && cached && cached.expiresAt > Date.now()) return cached;
+    const remote = await this.asaas.getSubscription(subscriptionId);
+    const value = Number(remote.value);
+    if (!Number.isFinite(value) || value < 0) {
+      throw new BadGatewayException("Não foi possível conferir a mensalidade atual no Asaas.");
+    }
+    const pricing = { value, billingType: remote.billingType, expiresAt: Date.now() + 10 * 60_000 };
+    this.asaasPricingCache.set(subscriptionId, pricing);
+    return pricing;
+  }
 
   private deveConferir(chave: string, intervaloMs: number) {
     const anterior = this.ultimaConferencia.get(chave) ?? 0;
@@ -179,6 +199,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     return plans.map((plan: any) => ({
       ...plan,
       monthlyPrice: this.effectivePlanMonthlyPrice(plan),
+      pixBoletoDiscountRate: this.billingProvider() === "ASAAS" ? CASH_PAYMENT_DISCOUNT_RATE : 0,
     }));
   }
 
@@ -253,9 +274,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   /**
    * Valor da cobrança já considerando a forma de pagamento.
    *
-   * Só o cartão carrega a taxa. Pix e boleto custam R$ 1,99 fixos e seguem no
-   * preço do plano — repassar centavos ali só daria ao cliente um motivo a mais
-   * para desistir na hora de pagar.
+   * Pix e boleto recebem 10% de desconto apenas na mensalidade (após eventual
+   * desconto de indicação). Consumo variável de IA/WhatsApp não é descontado.
+   * O cartão mantém a mensalidade sem esse desconto e carrega a taxa.
    *
    * O cálculo é de acréscimo por dentro, não soma simples: somar a taxa ao
    * preço faria o Asaas cobrar o percentual sobre o total já acrescido, e a
@@ -273,6 +294,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     billingType?: AsaasBillingType,
   ) {
     const base = this.subscriptionChargeValue(subscription);
+    if (billingType === "PIX" || billingType === "BOLETO") {
+      return Math.round(base * (1 - CASH_PAYMENT_DISCOUNT_RATE) * 100) / 100;
+    }
     if (billingType !== "CREDIT_CARD") return base;
     const { percent, fixed } = this.cardFee();
     return Math.round(((base + fixed) / (1 - percent / 100)) * 100) / 100;
@@ -292,11 +316,18 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     });
     if (!subscription) throw new NotFoundException("Assinatura não encontrada.");
 
+    if (!subscription.asaasSubscriptionId && this.billingProvider() !== "ASAAS") {
+      return { currentBillingType: null, options: [] };
+    }
     const { percent, fixed } = this.cardFee();
+    const currentBillingType = subscription.asaasSubscriptionId
+      ? (await this.asaasSubscriptionPricing(subscription.asaasSubscriptionId)).billingType ?? null
+      : null;
     return {
+      currentBillingType,
       options: [
-        { billingType: "PIX" as const, label: "Pix", value: this.chargeValueForBillingType(subscription, "PIX"), note: "Sem acréscimo." },
-        { billingType: "BOLETO" as const, label: "Boleto", value: this.chargeValueForBillingType(subscription, "BOLETO"), note: "Sem acréscimo." },
+        { billingType: "PIX" as const, label: "Pix", value: this.chargeValueForBillingType(subscription, "PIX"), note: "10% de desconto na mensalidade, todos os meses." },
+        { billingType: "BOLETO" as const, label: "Boleto", value: this.chargeValueForBillingType(subscription, "BOLETO"), note: "10% de desconto na mensalidade, todos os meses." },
         {
           billingType: "CREDIT_CARD" as const,
           label: "Cartão de crédito",
@@ -310,44 +341,68 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   /**
    * Troca a forma de pagamento da assinatura.
    *
-   * O valor muda junto, porque só o cartão carrega a taxa — então a troca
-   * precisa alcançar dois lugares: a assinatura, que dita as cobranças
-   * futuras, e a fatura em aberto, que é a que o cliente vai pagar agora. Sem
-   * o segundo, quem trocasse para Pix continuaria vendo o preço do cartão no
-   * boleto do mês.
+   * Atualiza a assinatura e as cobranças pendentes, sem apagar o consumo
+   * variável já lançado nelas. Cobranças pagas nunca são reprecificadas.
    *
    * A troca vale a cada mês: nada aqui prende o cliente à escolha da ativação.
    */
   async changeCompanyBillingType(companyId: string, billingType: AsaasBillingType) {
+    if (!["PIX", "BOLETO", "CREDIT_CARD"].includes(billingType)) {
+      throw new BadRequestException("Forma de pagamento inválida.");
+    }
     const subscription = await this.db().clientSubscription.findUnique({
       where: { companyId },
       include: { plan: true },
     });
     if (!subscription) throw new NotFoundException("Assinatura não encontrada.");
-    if (this.billingProvider() !== "ASAAS") {
+    if (!subscription.asaasSubscriptionId && this.billingProvider() !== "ASAAS") {
       throw new BadRequestException("A troca de forma de pagamento está disponível apenas no provedor atual.");
     }
 
+    if (!subscription.asaasSubscriptionId) throw new BadRequestException("Assinatura Asaas não encontrada.");
     const value = this.chargeValueForBillingType(subscription, billingType);
-
-    if (subscription.asaasSubscriptionId) {
-      await this.asaas.updateSubscription(subscription.asaasSubscriptionId, { value, billingType });
-    }
-
-    // A cobrança em aberto é atualizada separadamente: alterar a assinatura só
-    // alcança o que ainda vai ser gerado.
-    let invoiceUrl: string | null = null;
-    if (subscription.asaasPaymentId) {
-      const atual = await this.asaas.findPayment(subscription.asaasPaymentId).catch(() => null);
-      const quitada = ["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH"].includes(String(atual?.status ?? ""));
-      if (atual && !quitada) {
-        const atualizada = await this.asaas.updatePayment(subscription.asaasPaymentId, { value, billingType });
-        invoiceUrl = atualizada?.invoiceUrl ?? atual.invoiceUrl ?? null;
-      }
-    }
+    const invoiceUrl = await this.repriceAsaasSubscription(subscription.asaasSubscriptionId, value, billingType);
 
     this.logger.log(`Empresa ${companyId} passou a pagar por ${billingType}; valor da cobrança agora é ${value}.`);
     return { billingType, value, invoiceUrl };
+  }
+
+  /**
+   * O Asaas altera só parcelas futuras ao atualizar a assinatura. Ajustamos
+   * separadamente as pendentes, preservando a diferença entre o valor da
+   * mensalidade anterior e o total (consumo já sincronizado). Se qualquer
+   * alteração falhar, tentamos desfazer as cobranças tocadas antes de avisar.
+   */
+  private async repriceAsaasSubscription(subscriptionId: string, value: number, billingType: AsaasBillingType) {
+    const remote = await this.asaasSubscriptionPricing(subscriptionId, true);
+    const previousMonthly = remote.value;
+    const pending = (await this.asaas.listSubscriptionPayments(subscriptionId))
+      .filter((payment) => ["PENDING", "OVERDUE"].includes(payment.status) && !payment.deleted);
+    const updated: Array<{ id: string; value: number; billingType: string }> = [];
+    let invoiceUrl: string | null = null;
+    try {
+      for (const payment of pending) {
+        const variableAmount = Math.max(0, Number(payment.value) - previousMonthly);
+        const revised = await this.asaas.updatePayment(payment.id, {
+          value: roundBillingAmount(value + variableAmount),
+          billingType,
+        });
+        updated.push({ id: payment.id, value: Number(payment.value), billingType: payment.billingType });
+        invoiceUrl ??= revised?.invoiceUrl ?? payment.invoiceUrl ?? null;
+      }
+      await this.asaas.updateSubscription(subscriptionId, { value, billingType });
+      this.asaasPricingCache.set(subscriptionId, { value, billingType, expiresAt: Date.now() + 10 * 60_000 });
+    } catch (error) {
+      for (const payment of updated.reverse()) {
+        await this.asaas.updatePayment(payment.id, { value: payment.value, billingType: payment.billingType })
+          .catch((rollbackError: unknown) => this.logger.error(
+            `Falhou a reversão da cobrança ${payment.id} após erro na troca de pagamento.`,
+            this.stripeErrorForLog(rollbackError),
+          ));
+      }
+      throw error;
+    }
+    return invoiceUrl;
   }
 
   /**
@@ -375,6 +430,19 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     // Uma cobrança pode conter consumo variável além do plano. Também nunca
     // prometemos comissão maior que o dinheiro efetivamente pago pelo cliente.
     return Math.min(received, monthly);
+  }
+
+  /** O consumo incluído na mesma fatura nunca pode virar base de comissão. */
+  private async asaasCommissionableMonthlyAmount(subscription: any, payment: { id?: string; value?: unknown }) {
+    const received = Math.max(0, Number(payment.value ?? 0));
+    const ledger = this.db().usageLedger;
+    if (!payment.id || !ledger?.aggregate) return this.commissionableMonthlyAmount(subscription, received);
+    const usage = await ledger.aggregate({
+      where: { asaasPaymentId: String(payment.id) },
+      _sum: { billableAmount: true },
+    });
+    const variable = Math.max(0, Number(usage?._sum?.billableAmount ?? 0));
+    return this.commissionableMonthlyAmount(subscription, roundBillingAmount(Math.max(0, received - variable)));
   }
 
   /** Cadastros históricos sem teste continuam conciliáveis; os novos exigem os 7 dias completos. */
@@ -497,7 +565,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
     const [documentUser, documentCompany] = await Promise.all([
       this.db().user.findUnique({ where: { document: normalizedDocument } }),
-      this.db().company.findUnique({ where: { cnpj: normalizedDocument } }),
+      this.db().company.findFirst({ where: { cnpj: normalizedDocument } }),
     ]);
     if (documentUser || documentCompany) throw new ConflictException("Este CNPJ já está vinculado a uma conta.");
     const plan = await this.db().softwarePlan.findFirst({ where: { id: dto.planId, isActive: true } });
@@ -1247,6 +1315,15 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const trialActive = this.isTrialActive(subscription, now);
     const trialExpired = this.isTrialExpired(subscription, now);
     const monthlyPrice = this.effectiveSubscriptionMonthlyPrice(subscription);
+    let asaasMonthlyPrice = monthlyPrice;
+    if (subscription.asaasSubscriptionId && this.asaas.isConfigured?.()) {
+      try {
+        const remote = await this.asaasSubscriptionPricing(subscription.asaasSubscriptionId);
+        asaasMonthlyPrice = remote.value;
+      } catch (error) {
+        this.logger.warn(`Não foi possível conferir a mensalidade Asaas de ${companyId}: ${this.stripeErrorForLog(error)}`);
+      }
+    }
     const paidCurrentPeriod = subscription.status === SubscriptionStatus.ATIVA
       && Boolean(subscription.currentPeriodEnd && subscription.currentPeriodEnd.getTime() > now.getTime());
     // Um período ATIVO que ainda não terminou já teve a mensalidade quitada.
@@ -1255,7 +1332,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const baseMonthlyPriceDue = (
       (subscription.status === SubscriptionStatus.ATIVA && !paidCurrentPeriod)
       || subscription.status === SubscriptionStatus.INADIMPLENTE
-    ) ? monthlyPrice : 0;
+    ) ? asaasMonthlyPrice : 0;
     // Um webhook pode falhar depois de o Asaas confirmar o pagamento. A tela
     // reconcilia a própria empresa antes de calcular o extrato, para que um
     // lançamento quitado não fique visível até a próxima rodada do worker.
@@ -1277,7 +1354,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const upcomingVariableAmount = Number.isFinite(rawUpcomingVariableAmount)
       ? Math.max(0, rawUpcomingVariableAmount)
       : 0;
-    const upcomingMonthlyPrice = roundBillingAmount(monthlyPrice);
+    // A previsão usa o preço efetivo da recorrência, não o de tabela.
+    const upcomingMonthlyPrice = roundBillingAmount(asaasMonthlyPrice);
     const nextBillingEstimate = paidCurrentPeriod && !subscription.canceledAt
       ? {
           dueDate: subscription.currentPeriodEnd,
@@ -1567,7 +1645,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       where: { id: subscription.companyId },
       select: { name: true, cnpj: true, phone: true },
     });
-    const document = (company?.cnpj ?? "").replace(/\D/g, "");
+    const document = normalizeBrazilDocument(company?.cnpj ?? "");
     if (!document) {
       this.logger.error(
         `Ativação bloqueada: a empresa ${subscription.companyId} não tem CNPJ, exigido pelo Asaas para emitir cobrança.`,
@@ -1602,8 +1680,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     billingType?: AsaasBillingType,
   ) {
     if (subscription.asaasPaymentId) {
-      try {
-        const existing = await this.asaas.getPayment(subscription.asaasPaymentId);
+      // Somente 404 permite criar outra: falha de rede não pode gerar uma
+      // segunda assinatura/cobrança para o mesmo cliente.
+      const existing = await this.asaas.findPayment(subscription.asaasPaymentId);
+      if (existing) {
         // Já paga: o webhook não chegou ou falhou. Ativar aqui é o que impede o
         // pior caso desta tela — o empresário clicar de novo e pagar duas vezes.
         if (ASAAS_PAID_STATUSES.includes(existing.status)) {
@@ -1620,17 +1700,27 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           return { activated: true, reused: true };
         }
         if (existing.invoiceUrl) {
+          // Reaproveitar o link não pode ignorar a forma selecionada: uma
+          // fatura antiga pode ter sido emitida sem o desconto ou com cartão.
+          if (billingType) {
+            if (!subscription.asaasSubscriptionId) {
+              throw new BadGatewayException("A cobrança existente não está vinculada à assinatura Asaas.");
+            }
+            const updatedUrl = await this.repriceAsaasSubscription(
+              subscription.asaasSubscriptionId,
+              this.chargeValueForBillingType(subscription, billingType),
+              billingType,
+            );
+            return { url: updatedUrl ?? existing.invoiceUrl, reused: true };
+          }
           return { url: existing.invoiceUrl, reused: true };
         }
-      } catch {
-        // Cobrança apagada no painel do Asaas: seguimos e criamos outra.
       }
     }
 
     const customerId = await this.ensureAsaasCustomer(subscription, admin);
-    // Com código de indicação a cobrança já nasce com os 15%; o preço cheio
-    // volta quando a janela de três meses fecha. No cartão entra também a taxa
-    // da operadora, que é repassada ao cliente.
+    // Código de indicação entra primeiro; Pix/boleto recebem mais 10% sobre a
+    // mensalidade resultante. Cartão mantém sua taxa. Consumo fica à parte.
     const monthlyPrice = this.chargeValueForBillingType(subscription, billingType);
     // `dueDate` do Asaas é data civil no Brasil, não instante UTC. Depois das
     // 21h BRT, `toISOString()` já é amanhã e criaria uma fatura futura sem o
@@ -1685,7 +1775,11 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       orderBy: { createdAt: "asc" },
       select: { email: true, name: true },
     });
-    if (!admin) {
+    const billingAdmin = admin ?? await this.db().user.findFirst({
+      where: { managedCompanies: { some: { id: companyId } }, role: Role.ADMIN, isActive: true },
+      select: { email: true, name: true },
+    });
+    if (!billingAdmin) {
       // Quem lê esta tela é o empresário, que não tem acesso ao painel da
       // plataforma nem como resolver isso sozinho.
       this.logger.error(
@@ -1696,8 +1790,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    if (this.billingProvider() === "ASAAS") {
-      return this.companyCheckoutAsaas(subscription, admin, billingType);
+    if (subscription.asaasSubscriptionId || this.billingProvider() === "ASAAS") {
+      // Nunca emitimos uma fatura UNDEFINED: ela permitiria pagar por Pix ou
+      // boleto pelo preço cheio, sem que o servidor soubesse a escolha.
+      return this.companyCheckoutAsaas(subscription, billingAdmin, billingType ?? "PIX");
     }
 
     if (!this.stripe) {
@@ -1726,20 +1822,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // O admin já foi resolvido acima: o e-mail dele vira o cliente na cobrança,
-    // e não pode cair no usuário logado — um superadmin gerando a fatura pelo
-    // contexto assumido colocaria o endereço da plataforma na conta do cliente.
-    if (!admin) {
-      // Quem lê esta tela é o empresário, que não tem acesso ao painel da
-      // plataforma nem como resolver isso sozinho. O detalhe acionável vai para
-      // o log, onde a equipe consegue agir.
-      this.logger.error(
-        `Ativação bloqueada: a empresa ${companyId} não tem usuário ADMIN ativo, e é o e-mail dele que vira o cliente no Stripe.`,
-      );
-      throw new BadRequestException(
-        "Não conseguimos identificar o responsável pela conta desta empresa. Fale com o suporte da ChegowIA para liberar a ativação.",
-      );
-    }
+    // O responsável titular já foi resolvido acima, inclusive para unidades
+    // administradas pela mesma conta sem duplicar o login no banco.
 
     /**
      * A chave de idempotência precisa mudar sempre que os parâmetros mudarem: a
@@ -1753,7 +1837,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         Math.round(monthlyPrice * 100),
         subscription.plan.currency,
         canUseStoredStripePrice ? subscription.plan.stripePriceId : "inline",
-        subscription.stripeCustomerId ?? admin.email,
+        subscription.stripeCustomerId ?? billingAdmin.email,
         subscription.resellerId ?? "",
       ].join("|"))
       .digest("hex")
@@ -1764,7 +1848,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const session = await this.stripe.checkout.sessions.create({
       mode: "subscription",
       locale: "pt-BR",
-      ...(subscription.stripeCustomerId ? { customer: subscription.stripeCustomerId } : { customer_email: admin.email }),
+      ...(subscription.stripeCustomerId ? { customer: subscription.stripeCustomerId } : { customer_email: billingAdmin.email }),
       line_items: [canUseStoredStripePrice
         ? { price: subscription.plan.stripePriceId!, quantity: 1 }
         : {
@@ -1978,6 +2062,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           employeeProfile: { create: { companyId: company.id, position: "Administrador" } },
         },
       });
+      await tx.company.update({ where: { id: company.id }, data: { ownerUserId: createdAdmin.id } });
       await tx.clientSubscription.create({
         data: {
           companyId: company.id,
@@ -2221,7 +2306,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const [emailUser, documentUser, documentCompany] = await Promise.all([
       this.db().user.findUnique({ where: { email: application.email } }),
       this.db().user.findUnique({ where: { document: application.document } }),
-      this.db().company.findUnique({ where: { cnpj: application.document } }),
+      this.db().company.findFirst({ where: { cnpj: application.document } }),
     ]);
     if (emailUser) throw new ConflictException("Este e-mail já possui uma conta ativa.");
     if (documentUser || documentCompany) throw new ConflictException("Este CNPJ já está vinculado a uma conta.");
@@ -2381,15 +2466,21 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     }
 
     for (const assinatura of vencidas) {
-      const cheio = this.effectiveSubscriptionMonthlyPrice(assinatura);
       try {
-        await this.asaas.updateSubscription(assinatura.asaasSubscriptionId, { value: cheio });
+        const remote = await this.asaasSubscriptionPricing(assinatura.asaasSubscriptionId, true);
+        const billingType = (["PIX", "BOLETO", "CREDIT_CARD"] as const).find((type) => type === remote.billingType)
+          ?? "UNDEFINED";
+        const value = this.chargeValueForBillingType(
+          { ...assinatura, discountRemovedAt: new Date() },
+          billingType,
+        );
+        await this.repriceAsaasSubscription(assinatura.asaasSubscriptionId, value, billingType);
         await this.db().clientSubscription.update({
           where: { id: assinatura.id },
           data: { discountRemovedAt: new Date() },
         });
         this.logger.log(
-          `Desconto de indicação encerrado na assinatura ${assinatura.id}: valor voltou para ${cheio}.`,
+          `Desconto de indicação encerrado na assinatura ${assinatura.id}: mensalidade agora ${value}.`,
         );
       } catch (error) {
         // Falhar aqui não pode derrubar o resto da fila: a próxima rodada tenta
@@ -2402,6 +2493,56 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       }
     }
     return vencidas.length;
+  }
+
+  /**
+   * Aplica a nova regra também a assinaturas já existentes em Pix/boleto.
+   * Varre lotes pequenos no worker para não estourar a cota da API do Asaas;
+   * só reduz valores maiores que o preço promocional e nunca toca nas pagas.
+   */
+  private async syncExistingCashPaymentDiscounts() {
+    const now = Date.now();
+    if (now < this.cashDiscountNextPassAt || !this.deveConferir("desconto-pix-boleto", 60_000)) return 0;
+    if (!this.db().clientSubscription?.findMany) return 0;
+    const subscriptions = await this.db().clientSubscription.findMany({
+      where: {
+        asaasSubscriptionId: { not: null },
+        canceledAt: null,
+        status: { in: [SubscriptionStatus.EM_TESTE, SubscriptionStatus.ATIVA, SubscriptionStatus.INADIMPLENTE] },
+        ...(this.cashDiscountCursor ? { id: { gt: this.cashDiscountCursor } } : {}),
+      },
+      orderBy: { id: "asc" },
+      take: 20,
+      include: { plan: true },
+    });
+    if (!subscriptions.length) {
+      this.cashDiscountCursor = null;
+      this.cashDiscountNextPassAt = now + (this.cashDiscountPassHadErrors ? 60 : 24 * 60) * 60_000;
+      this.cashDiscountPassHadErrors = false;
+      return 0;
+    }
+    this.cashDiscountCursor = subscriptions[subscriptions.length - 1].id;
+    let adjusted = 0;
+    for (const subscription of subscriptions) {
+      try {
+        const remote = await this.asaasSubscriptionPricing(subscription.asaasSubscriptionId!, true);
+        if (remote.billingType !== "PIX" && remote.billingType !== "BOLETO") continue;
+        const target = this.chargeValueForBillingType(subscription, remote.billingType);
+        if (remote.value - target < 0.01) continue;
+        await this.repriceAsaasSubscription(subscription.asaasSubscriptionId!, target, remote.billingType);
+        adjusted++;
+        this.logger.log(`Desconto de 10% aplicado à assinatura existente ${subscription.id} (${remote.billingType}).`);
+      } catch (error) {
+        this.cashDiscountPassHadErrors = true;
+        this.logger.error(`Não foi possível aplicar o desconto à assinatura ${subscription.id}.`, this.stripeErrorForLog(error));
+      }
+    }
+    if (subscriptions.length < 20) {
+      this.cashDiscountCursor = null;
+      this.cashDiscountNextPassAt = now + (this.cashDiscountPassHadErrors ? 60 : 24 * 60) * 60_000;
+      this.cashDiscountPassHadErrors = false;
+    }
+    return adjusted;
   }
 
   /**
@@ -2449,6 +2590,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         recuperacaoOk = await this.runJob("asaas-renovacoes-pagas", () => this.reconcilePaidAsaasRenewals()) && recuperacaoOk;
         await this.runJob("asaas-comissoes-pendentes", () => this.reconcilePendingAsaasCommissions());
         await this.runJob("desconto-indicacao", () => this.syncExpiredReferralDiscounts());
+        await this.runJob("desconto-pix-boleto", () => this.syncExistingCashPaymentDiscounts());
       }
 
       // O fim do período é suficiente para interromper o acesso, mesmo se o
@@ -3824,7 +3966,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     if (!this.isAsaasSubscriptionMonthlyPayment(assinatura, cobranca)) return;
 
     const paymentId = String(cobranca.id ?? "");
-    const bruto = this.commissionableMonthlyAmount(assinatura, cobranca.value);
+    const bruto = await this.asaasCommissionableMonthlyAmount(assinatura, cobranca);
     if (!paymentId || !bruto) return;
 
     const taxa = this.resellerCommissionRate(assinatura.reseller);
@@ -3929,7 +4071,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       // conservada. Assim um PAYMENT_RECEIVED atrasado jamais cria saldo para
       // uma cobrança que já foi desfeita — inclusive em dados históricos.
       if (!this.isAsaasSubscriptionMonthlyPayment(assinatura, cobranca)) return;
-      const bruto = this.commissionableMonthlyAmount(assinatura, cobranca.value);
+      const bruto = await this.asaasCommissionableMonthlyAmount(assinatura, cobranca);
       if (!bruto) return;
       const taxa = this.resellerCommissionRate(assinatura.reseller);
       await ledger.upsert({

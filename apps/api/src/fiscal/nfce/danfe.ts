@@ -38,7 +38,7 @@ export interface DanfeInput {
 
 export function buildDanfeHtml(input: DanfeInput): string {
   const moeda = (cents: number) => fromCents(cents).toFixed(2).replace(".", ",");
-  const chaveFormatada = input.accessKey.replace(/(\d{4})(?=\d)/g, "$1 ");
+  const chaveFormatada = input.accessKey.replace(/(.{4})(?=.)/g, "$1 ");
   const consulta = consultaUrl(input.emitterState, input.environment);
 
   const itens = input.items
@@ -158,7 +158,7 @@ export function buildDanfeText(input: DanfeInput): string {
   partes.push("-".repeat(48));
   partes.push(centro(`NFC-e ${input.number} Serie ${input.series}`));
   partes.push(centro(formatDateTime(input.issuedAt)));
-  partes.push(input.accessKey.replace(/(\d{4})(?=\d)/g, "$1 "));
+  partes.push(input.accessKey.replace(/(.{4})(?=.)/g, "$1 "));
   if (input.protocolNumber) partes.push(centro(`Protocolo ${input.protocolNumber}`));
   partes.push(centro(input.customerDocument ? `CPF/CNPJ ${formatDocument(input.customerDocument)}` : "CONSUMIDOR NAO IDENTIFICADO"));
   partes.push(input.qrCodeUrl);
@@ -168,12 +168,12 @@ export function buildDanfeText(input: DanfeInput): string {
 }
 
 function formatCnpj(value: string) {
-  const digitos = value.replace(/\D/g, "").padStart(14, "0");
+  const digitos = value.toUpperCase().replace(/[^A-Z0-9]/g, "").padStart(14, "0");
   return `${digitos.slice(0, 2)}.${digitos.slice(2, 5)}.${digitos.slice(5, 8)}/${digitos.slice(8, 12)}-${digitos.slice(12)}`;
 }
 
 function formatDocument(value: string) {
-  const digitos = value.replace(/\D/g, "");
+  const digitos = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (digitos.length === 14) return formatCnpj(digitos);
   return `${digitos.slice(0, 3)}.${digitos.slice(3, 6)}.${digitos.slice(6, 9)}-${digitos.slice(9)}`;
 }
