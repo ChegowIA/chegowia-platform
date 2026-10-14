@@ -1727,9 +1727,9 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         return `• ${item.quantity}x ${item.productName}${configuration ? ` (${configuration})` : ""} — R$ ${Number(item.totalPrice).toFixed(2)}`;
       }),
       `Subtotal: R$ ${Number(order.subtotal).toFixed(2)}`,
-      `Entrega: R$ ${Number(order.deliveryFee).toFixed(2)}`,
+      ...(order.fulfillmentType === "PICKUP" ? ["Retirada no local: sem frete"] : [`Entrega: R$ ${Number(order.deliveryFee).toFixed(2)}`]),
       `Total: R$ ${Number(order.total).toFixed(2)}`,
-      `Endereço: ${order.deliveryStreet}, ${order.deliveryNumber} - ${order.deliveryNeighborhood}, ${order.deliveryCity}/${order.deliveryState}`,
+      ...(order.fulfillmentType === "PICKUP" ? [] : [`Endereço: ${order.deliveryStreet}, ${order.deliveryNumber} - ${order.deliveryNeighborhood}, ${order.deliveryCity}/${order.deliveryState}`]),
       `Pagamento: ${order.paymentMethod}`,
     ];
     return lines.join("\n");

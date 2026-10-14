@@ -12,7 +12,7 @@ import {
   Min,
   ValidateNested,
 } from "class-validator";
-import { PaymentMethod } from "@prisma/client";
+import { OrderFulfillmentType, PaymentMethod } from "@prisma/client";
 
 export class ProductOptionSelectionDto {
   @IsString()
@@ -59,8 +59,13 @@ export class CreateOrderDto {
   @IsString()
   companySlug: string;
 
+  @IsOptional()
   @IsString()
-  addressId: string;
+  addressId?: string;
+
+  @IsOptional()
+  @IsEnum(OrderFulfillmentType)
+  fulfillmentType?: OrderFulfillmentType;
 
   @IsEnum(PaymentMethod)
   paymentMethod: PaymentMethod;

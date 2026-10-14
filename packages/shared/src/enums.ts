@@ -72,6 +72,11 @@ export enum OrderSource {
   WHATSAPP = "WHATSAPP",
 }
 
+export enum OrderFulfillmentType {
+  DELIVERY = "DELIVERY",
+  PICKUP = "PICKUP",
+}
+
 export enum PromotionStatus {
   RASCUNHO = "RASCUNHO",
   PENDENTE_CONFIRMACAO = "PENDENTE_CONFIRMACAO",

@@ -13,6 +13,10 @@ export class UpdateCompanySettingsDto {
 
   @IsOptional()
   @IsBoolean()
+  pickupEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   aiEnabled?: boolean;
 
   @IsOptional()

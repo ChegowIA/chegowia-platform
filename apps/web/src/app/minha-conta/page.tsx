@@ -314,7 +314,7 @@ export default function MinhaContaPage() {
                   >
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <p className="font-bold text-slate-950 dark:text-slate-100">#{order.id.slice(0, 8)}</p>
-                      <OrderStatusBadge status={order.status} />
+                      <OrderStatusBadge status={order.status} fulfillmentType={order.fulfillmentType} />
                     </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400">{formatDateTime(order.createdAt)}</p>
                     <p className="mt-1 text-sm font-bold text-brand-700 dark:text-brand-300">{formatCurrency(order.total)}</p>

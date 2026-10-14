@@ -1,5 +1,5 @@
 import request from "supertest";
-import { DeliveryStatus, OrderStatus, Role } from "@prisma/client";
+import { DeliveryStatus, OrderFulfillmentType, OrderStatus, Role } from "@prisma/client";
 import { PermissionKey } from "@chegowia/shared";
 import { Harness, createHarness } from "./harness";
 import { CompanyFixture, createCompany, createCustomer } from "./fixtures";
@@ -64,6 +64,42 @@ describe("pedido ponta a ponta (e2e)", () => {
     expect(Number(salvo?.items[0].unitPrice)).toBe(40);
     expect(Number(salvo?.deliveryLatitude)).toBeCloseTo(-19.9245, 5);
     expect(Number(salvo?.deliveryLongitude)).toBeCloseTo(-43.9385, 5);
+  });
+
+  it("cria retirada sem endereço, frete, rota ou entrega e conclui no balcão", async () => {
+    const response = await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders"))
+      .send({ companySlug: loja.slug, fulfillmentType: OrderFulfillmentType.PICKUP, paymentMethod: "DINHEIRO", items: [{ productId: loja.productId, quantity: 2 }] });
+    expect(response.status).toBe(201);
+    expect(response.body.fulfillmentType).toBe(OrderFulfillmentType.PICKUP);
+    expect(Number(response.body.total)).toBe(80);
+    expect(Number(response.body.deliveryFee)).toBe(0);
+    expect(response.body.addressId).toBeNull();
+    expect(response.body.delivery).toBeNull();
+    expect(response.body.pickupAddressLine).toBe("Av. Afonso Pena, 1000");
+
+    const id = response.body.id;
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/status`)).send({ status: OrderStatus.CONFIRMADO }).expect(200);
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/status`)).send({ status: OrderStatus.EM_PREPARO }).expect(200);
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/status`)).send({ status: OrderStatus.PRONTO }).expect(200);
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/status`)).send({ status: OrderStatus.SAIU_PARA_ENTREGA }).expect(400);
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/status`)).send({ status: OrderStatus.ENTREGUE }).expect(400);
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/payment/paid`)).expect(200);
+    await comoLoja(request(harness.app.getHttpServer()).patch(`/api/orders/${id}/status`)).send({ status: OrderStatus.ENTREGUE }).expect(200);
+
+    const saved = await harness.prisma.order.findUnique({ where: { id }, include: { delivery: true, statusHistory: true } });
+    expect(saved?.status).toBe(OrderStatus.ENTREGUE);
+    expect(saved?.delivery).toBeNull();
+    expect(saved?.statusHistory.map((entry) => entry.status)).not.toContain(OrderStatus.SAIU_PARA_ENTREGA);
+  });
+
+  it("respeita retirada desativada pela loja e mantém entrega exigindo endereço", async () => {
+    await comoLoja(request(harness.app.getHttpServer()).patch("/api/companies/me/settings"))
+      .send({ pickupEnabled: false }).expect(200);
+    const payload = { companySlug: loja.slug, paymentMethod: "DINHEIRO", items: [{ productId: loja.productId, quantity: 1 }] };
+    await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders"))
+      .send({ ...payload, fulfillmentType: OrderFulfillmentType.PICKUP }).expect(400);
+    await comoCliente(request(harness.app.getHttpServer()).post("/api/me/orders"))
+      .send({ ...payload, fulfillmentType: OrderFulfillmentType.DELIVERY }).expect(400);
   });
 
   it("não substitui um ponto sem confirmação pelo centro do CEP", async () => {

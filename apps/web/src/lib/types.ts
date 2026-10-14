@@ -10,6 +10,7 @@ import {
   FiscalEmissionType,
   FiscalEnvironment,
   MessagingChannelStatus,
+  OrderFulfillmentType,
   OrderStatus,
   PaymentMethod,
   PaymentStatus,
@@ -61,6 +62,7 @@ export interface Company {
 export interface CompanySettings {
   openingHours?: Record<string, string> | null;
   paymentMethodsEnabled?: string[] | null;
+  pickupEnabled?: boolean;
   aiEnabled: boolean;
   aiKnowledgeBase?: string | null;
   whatsappNumber?: string | null;
@@ -243,6 +245,7 @@ export interface OrderItem {
 export interface Order {
   id: string;
   companyId: string;
+  fulfillmentType?: OrderFulfillmentType;
   status: OrderStatus;
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
@@ -253,11 +256,15 @@ export interface Order {
   discount: number;
   total: number;
   notes?: string | null;
-  deliveryStreet: string;
-  deliveryNumber: string;
-  deliveryNeighborhood: string;
-  deliveryCity: string;
-  deliveryState: string;
+  pickupAddressLine?: string | null;
+  pickupCity?: string | null;
+  pickupState?: string | null;
+  pickupZipCode?: string | null;
+  deliveryStreet: string | null;
+  deliveryNumber: string | null;
+  deliveryNeighborhood: string | null;
+  deliveryCity: string | null;
+  deliveryState: string | null;
   deliveryLatitude?: number | null;
   deliveryLongitude?: number | null;
   createdAt: string;
@@ -277,7 +284,7 @@ export interface Order {
     motoboyLongitude?: number | null;
     motoboyLocationUpdatedAt?: string | null;
   } | null;
-  company?: { id: string; name: string; slug: string; whatsapp?: string | null };
+  company?: { id: string; name: string; slug: string; whatsapp?: string | null; addressLine?: string | null; city?: string | null; state?: string | null };
 }
 
 export interface DeliveryQuote {

@@ -134,5 +134,9 @@ describe("avisos de pedido pelo WhatsApp da loja", () => {
   it("mantém mensagem de status objetiva, sem preço nem dados sensíveis", () => {
     expect(orderMessage("Pizzaria da Ana", "123456", OrderStatus.SAIU_PARA_ENTREGA))
       .toContain("a caminho da entrega");
+    expect(orderMessage("Pizzaria da Ana", "123456", OrderStatus.PRONTO, true))
+      .toContain("pronto para retirada");
+    expect(orderMessage("Pizzaria da Ana", "123456", OrderStatus.ENTREGUE, true))
+      .toContain("retirado pelo cliente");
   });
 });

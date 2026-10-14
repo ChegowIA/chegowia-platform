@@ -10,6 +10,7 @@ import { PublicHeader } from "@/components/layout/public-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { OrderStatusBadge } from "@/components/ui/badge";
+import { isPickupOrder } from "@/lib/order-fulfillment";
 
 export default function MyOrdersPage() {
   const router = useRouter();
@@ -55,12 +56,12 @@ export default function MyOrdersPage() {
                     Pedido #{order.id.slice(0, 8)}
                   </Link>
                   <p className="text-sm text-slate-500 dark:text-slate-400">
-                    {formatDateTime(order.createdAt)} · {order.company?.name}
+                    {formatDateTime(order.createdAt)} · {order.company?.name} · {isPickupOrder(order) ? "Retirada no local" : "Entrega"}
                   </p>
                   <p className="text-sm text-slate-500 dark:text-slate-400">{formatCurrency(order.total)}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <OrderStatusBadge status={order.status} />
+                  <OrderStatusBadge status={order.status} fulfillmentType={order.fulfillmentType} />
                   <Button
                     size="sm"
                     variant="outline"

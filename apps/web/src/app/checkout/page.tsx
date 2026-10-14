@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PaymentMethod, Role } from "@chegowia/shared";
+import { OrderFulfillmentType, PaymentMethod, Role } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { homePathForRole } from "@/lib/auth-routes";
 import { useAuthStore } from "@/lib/auth-store";
 import { cartSubtotal, useCartStore } from "@/lib/cart-store";
-import { Address, DeliveryQuote, Order } from "@/lib/types";
+import { Address, Company, DeliveryQuote, Order } from "@/lib/types";
 import { formatCurrency } from "@/lib/format";
 import { PublicHeader } from "@/components/layout/public-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +20,7 @@ import { DeliveryPin, DeliveryPinPicker } from "@/components/deliveries/delivery
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   [PaymentMethod.DINHEIRO]: "Dinheiro",
-  [PaymentMethod.CARTAO_ENTREGA]: "Cartão na entrega",
+  [PaymentMethod.CARTAO_ENTREGA]: "Cartão no recebimento",
   [PaymentMethod.PIX_MANUAL]: "Pix",
 };
 
@@ -100,6 +100,7 @@ function CheckoutForm() {
   const subtotal = cartSubtotal(items);
 
   const [addressId, setAddressId] = useState<string>("");
+  const [fulfillmentType, setFulfillmentType] = useState<OrderFulfillmentType>(OrderFulfillmentType.DELIVERY);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PaymentMethod.DINHEIRO);
   const [notes, setNotes] = useState("");
   const [whatsappNotificationsAccepted, setWhatsappNotificationsAccepted] = useState(false);
@@ -107,6 +108,22 @@ function CheckoutForm() {
   const [showAddressForm, setShowAddressForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [addressPin, setAddressPin] = useState<DeliveryPin | null>(null);
+  const isPickup = fulfillmentType === OrderFulfillmentType.PICKUP;
+
+  const { data: company } = useQuery({
+    queryKey: ["checkout-company", companySlug],
+    enabled: Boolean(companySlug),
+    queryFn: async () => (await api.get<Company>(`/companies/public/${companySlug}`)).data,
+  });
+  const enabledPaymentMethods = Array.isArray(company?.settings?.paymentMethodsEnabled) && company.settings.paymentMethodsEnabled.length > 0
+    ? Object.values(PaymentMethod).filter((method) => company.settings?.paymentMethodsEnabled?.includes(method))
+    : Object.values(PaymentMethod);
+
+  useEffect(() => {
+    if (company && !enabledPaymentMethods.includes(paymentMethod)) {
+      setPaymentMethod(enabledPaymentMethods[0] ?? PaymentMethod.DINHEIRO);
+    }
+  }, [company, enabledPaymentMethods, paymentMethod]);
 
   const { data: addresses, isLoading: loadingAddresses } = useQuery({
     queryKey: ["my-addresses"],
@@ -148,7 +165,7 @@ function CheckoutForm() {
   const deliveryQuote = useQuery({
     queryKey: ["delivery-quote", companySlug, addressId, selectedAddress?.locationConfirmedAt,
       selectedAddress?.latitude, selectedAddress?.longitude],
-    enabled: Boolean(companySlug && addressId && selectedAddress?.locationConfirmedAt),
+    enabled: Boolean(!isPickup && companySlug && addressId && selectedAddress?.locationConfirmedAt),
     retry: false,
     staleTime: 5 * 60 * 1_000,
     queryFn: async () => {
@@ -157,14 +174,24 @@ function CheckoutForm() {
     },
   });
 
+  const pickupNotifications = useQuery({
+    queryKey: ["pickup-notifications", companySlug],
+    enabled: Boolean(isPickup && companySlug),
+    queryFn: async () => (await api.get<{ whatsappNotificationsAvailable: boolean }>("/me/orders/notification-availability", { params: { companySlug } })).data,
+  });
+  const whatsappNotificationsAvailable = isPickup
+    ? pickupNotifications.data?.whatsappNotificationsAvailable
+    : deliveryQuote.data?.whatsappNotificationsAvailable;
+
   const createOrder = useMutation({
     mutationFn: async () => {
       const { data } = await api.post<Order>("/me/orders", {
         companySlug,
-        addressId,
+        fulfillmentType,
+        addressId: isPickup ? undefined : addressId,
         paymentMethod,
         notes: notes || undefined,
-        whatsappNotificationsAccepted: Boolean(deliveryQuote.data?.whatsappNotificationsAvailable && whatsappNotificationsAccepted),
+        whatsappNotificationsAccepted: Boolean(whatsappNotificationsAvailable && whatsappNotificationsAccepted),
         whatsappPhone: whatsappNotificationsAccepted ? whatsappPhone : undefined,
         items: items.map((i) => ({
           productId: i.productId,
@@ -185,11 +212,11 @@ function CheckoutForm() {
 
   function handleConfirm() {
     setFormError(null);
-    if (!addressId) {
+    if (!isPickup && !addressId) {
       setFormError("Selecione ou cadastre um endereço de entrega.");
       return;
     }
-    if (deliveryQuote.data?.whatsappNotificationsAvailable && whatsappNotificationsAccepted) {
+    if (whatsappNotificationsAvailable && whatsappNotificationsAccepted) {
       const phone = whatsappPhone.replace(/\D/g, "");
       if (phone.length !== 11 || phone[2] !== "9") {
         setFormError("Informe um celular com DDD para receber os avisos pelo WhatsApp.");
@@ -215,6 +242,19 @@ function CheckoutForm() {
   return (
     <div className="space-y-6">
       <Card>
+        <CardHeader><CardTitle>Como deseja receber?</CardTitle></CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2">
+          <button type="button" aria-pressed={!isPickup} onClick={() => setFulfillmentType(OrderFulfillmentType.DELIVERY)} className={`rounded-xl border p-4 text-left transition ${!isPickup ? "border-brand-500 bg-brand-50 text-brand-950 ring-2 ring-brand-300 dark:bg-brand-950/40 dark:text-brand-100" : "border-slate-200 text-slate-700 hover:border-brand-300 dark:border-slate-700 dark:text-slate-200"}`}>
+            <strong className="block">Receber em casa</strong><span className="mt-1 block text-xs">Entrega no endereço escolhido, com frete calculado pela rota.</span>
+          </button>
+          {company?.addressLine && company.city && company.state && company.settings?.pickupEnabled !== false && (
+            <button type="button" aria-pressed={isPickup} onClick={() => setFulfillmentType(OrderFulfillmentType.PICKUP)} className={`rounded-xl border p-4 text-left transition ${isPickup ? "border-brand-500 bg-brand-50 text-brand-950 ring-2 ring-brand-300 dark:bg-brand-950/40 dark:text-brand-100" : "border-slate-200 text-slate-700 hover:border-brand-300 dark:border-slate-700 dark:text-slate-200"}`}>
+              <strong className="block">Retirar no local</strong><span className="mt-1 block text-xs">Sem taxa de entrega. Aguarde o aviso de pedido pronto.</span>
+            </button>
+          )}
+        </CardContent>
+      </Card>
+      {isPickup ? <Card><CardHeader><CardTitle>Local da retirada</CardTitle></CardHeader><CardContent className="text-sm text-slate-700 dark:text-slate-200"><p className="font-semibold">{company?.name ?? "Loja"}</p><p>{[company?.addressLine, company?.city, company?.state].filter(Boolean).join(" · ") || "Confirme o endereço de retirada com a loja."}</p><p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Mostre o número do pedido no balcão. A loja confirmará a retirada no sistema.</p></CardContent></Card> : <Card>
         <CardHeader>
           <CardTitle>Endereço de entrega</CardTitle>
         </CardHeader>
@@ -286,7 +326,7 @@ function CheckoutForm() {
             />
           )}
         </CardContent>
-      </Card>
+      </Card>}
 
       <Card>
         <CardHeader>
@@ -294,16 +334,16 @@ function CheckoutForm() {
         </CardHeader>
         <CardContent>
           <Select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
-            {Object.values(PaymentMethod).map((pm) => (
+            {enabledPaymentMethods.map((pm) => (
               <option key={pm} value={pm}>
-                {PAYMENT_LABELS[pm]}
+                {isPickup && pm === PaymentMethod.CARTAO_ENTREGA ? "Cartão na retirada" : PAYMENT_LABELS[pm]}
               </option>
             ))}
           </Select>
         </CardContent>
       </Card>
 
-      {deliveryQuote.data?.whatsappNotificationsAvailable && (
+      {whatsappNotificationsAvailable && (
         <Card>
             <CardHeader><CardTitle>Acompanhar pelo WhatsApp</CardTitle></CardHeader>
             <CardContent className="space-y-3">
@@ -325,7 +365,7 @@ function CheckoutForm() {
           <CardTitle>Observações</CardTitle>
         </CardHeader>
         <CardContent>
-          <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex: tocar campainha" />
+          <Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={isPickup ? "Ex: vou buscar às 19h" : "Ex: tocar campainha"} />
         </CardContent>
       </Card>
 
@@ -347,7 +387,7 @@ function CheckoutForm() {
             <span className="text-slate-600 dark:text-slate-300">Subtotal</span>
             <span>{formatCurrency(subtotal)}</span>
           </div>
-          <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
+          {!isPickup && <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
             <span>Rota até o ponto confirmado</span>
             <span>
               {deliveryQuote.isLoading
@@ -356,11 +396,11 @@ function CheckoutForm() {
                   ? `${deliveryQuote.data.distanceKm.toFixed(2)} km · ~${deliveryQuote.data.durationMinutes} min`
                   : "aguardando endereço"}
             </span>
-          </div>
+          </div>}
           <div className="flex justify-between text-sm text-slate-500 dark:text-slate-400">
             <span>Taxa de entrega</span>
             <span>
-              {deliveryQuote.data
+              {isPickup ? formatCurrency(0) : deliveryQuote.data
                 ? formatCurrency(deliveryQuote.data.deliveryFee)
                 : "calculada pela rota"}
             </span>
@@ -369,7 +409,7 @@ function CheckoutForm() {
       </Card>
 
       {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
-      {deliveryQuote.isError && (
+      {!isPickup && deliveryQuote.isError && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
           <p className="text-sm text-red-800 dark:text-red-300">{apiErrorMessage(deliveryQuote.error)}</p>
           <Button type="button" variant="outline" size="sm" isLoading={deliveryQuote.isFetching} onClick={() => void deliveryQuote.refetch()}>
@@ -384,7 +424,7 @@ function CheckoutForm() {
         className="w-full"
         size="lg"
         isLoading={createOrder.isPending}
-        disabled={!deliveryQuote.data || deliveryQuote.isFetching || deliveryQuote.isError}
+        disabled={isPickup ? !company || company.settings?.pickupEnabled === false : !deliveryQuote.data || deliveryQuote.isFetching || deliveryQuote.isError}
         onClick={handleConfirm}
       >
         Confirmar pedido

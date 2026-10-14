@@ -69,6 +69,11 @@ enum OrderSource {
   WHATSAPP
 }
 
+enum OrderFulfillmentType {
+  DELIVERY
+  PICKUP
+}
+
 enum PromotionStatus {
   RASCUNHO
   PENDENTE_CONFIRMACAO
@@ -916,6 +921,7 @@ model CompanySettings {
   companyId             String   @unique
   openingHours          Json?
   paymentMethodsEnabled Json?
+  pickupEnabled         Boolean  @default(true)
   aiEnabled             Boolean  @default(true)
   aiKnowledgeBase       String?  @db.Text
   whatsappNumber        String?
@@ -1212,16 +1218,21 @@ model Order {
   // mas não usam modelo fora dela sem este consentimento.
   whatsappNotificationConsentAt DateTime?
   source                        OrderSource @default(SITE)
+  fulfillmentType               OrderFulfillmentType @default(DELIVERY)
   whatsappConversationId        String?
   whatsappOrderDraftId          String?     @unique
 
   addressId            String?
-  deliveryStreet       String
-  deliveryNumber       String
+  pickupAddressLine     String?
+  pickupCity            String?
+  pickupState           String?
+  pickupZipCode         String? @db.VarChar(8)
+  deliveryStreet       String?
+  deliveryNumber       String?
   deliveryComplement   String?
-  deliveryNeighborhood String
-  deliveryCity         String
-  deliveryState        String
+  deliveryNeighborhood String?
+  deliveryCity         String?
+  deliveryState        String?
   deliveryReference    String?
   deliveryLatitude     Decimal? @db.Decimal(10, 7)
   deliveryLongitude    Decimal? @db.Decimal(10, 7)

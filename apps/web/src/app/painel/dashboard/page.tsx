@@ -115,7 +115,7 @@ export default function DashboardPage() {
         <Table
           columns={[
             { header: "Cliente", render: (o: Order) => o.customer?.name ?? o.customerName ?? "-" },
-            { header: "Status", render: (o: Order) => <OrderStatusBadge status={o.status} /> },
+            { header: "Status", render: (o: Order) => <OrderStatusBadge status={o.status} fulfillmentType={o.fulfillmentType} /> },
             { header: "Total", render: (o: Order) => formatCurrency(Number(o.total)) },
             { header: "Criado em", render: (o: Order) => formatDateTime(o.createdAt) },
             {

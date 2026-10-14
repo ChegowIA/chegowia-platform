@@ -155,7 +155,11 @@ export class OrderWhatsAppNotificationsService implements OnModuleInit, OnModule
         }
 
         const shortCode = order.id.slice(-6).toUpperCase();
-        const body = orderMessage(order.company.name, shortCode, notification.orderStatus);
+        const pickup = order.fulfillmentType === "PICKUP";
+        const statusText = pickup && notification.orderStatus === OrderStatus.PRONTO ? "pronto para retirada"
+          : pickup && notification.orderStatus === OrderStatus.ENTREGUE ? "retirado pelo cliente"
+          : STATUS_TEXT[notification.orderStatus];
+        const body = orderMessage(order.company.name, shortCode, notification.orderStatus, pickup);
         const params = {
           appId: channel.gupshupAppId ?? "",
           appToken: await this.appTokenFor(channel),
@@ -172,7 +176,7 @@ export class OrderWhatsAppNotificationsService implements OnModuleInit, OnModule
             templateId: config.orderUpdateTemplateId ?? null,
             templateName: config.orderUpdateTemplateName ?? null,
             languageCode: config.orderUpdateTemplateLanguage || "pt_BR",
-            variables: [order.customerName || order.customer?.name || "cliente", shortCode, order.company.name, STATUS_TEXT[notification.orderStatus]],
+            variables: [order.customerName || order.customer?.name || "cliente", shortCode, order.company.name, statusText],
           })
           : await this.gupshup.sendText({ ...params, body });
         accepted = true;
@@ -266,8 +270,11 @@ function channelConfig(channel: any): Record<string, any> {
   return channel?.config && typeof channel.config === "object" && !Array.isArray(channel.config) ? channel.config : {};
 }
 
-export function orderMessage(companyName: string, shortCode: string, status: OrderStatus) {
-  const lines = [`${companyName} · pedido #${shortCode}`, `Atualização: ${STATUS_TEXT[status]}.`];
+export function orderMessage(companyName: string, shortCode: string, status: OrderStatus, pickup = false) {
+  const statusText = pickup && status === OrderStatus.PRONTO ? "pronto para retirada"
+    : pickup && status === OrderStatus.ENTREGUE ? "retirado pelo cliente"
+    : STATUS_TEXT[status];
+  const lines = [`${companyName} · pedido #${shortCode}`, `Atualização: ${statusText}.`];
   lines.push("Se precisar de ajuda, responda esta mensagem.");
   return lines.join("\n");
 }

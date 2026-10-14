@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { createHash } from "node:crypto";
-import { DeliveryStatus, MessagingChannelStatus, MessagingChannelType, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role, WhatsAppOrderDraftStatus } from "@prisma/client";
+import { DeliveryStatus, MessagingChannelStatus, MessagingChannelType, OrderFulfillmentType, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role, WhatsAppOrderDraftStatus } from "@prisma/client";
 import { ORDER_STATUS_FLOW } from "@chegowia/shared";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { businessDayRange, dateKeyInTimeZone, formatDateKey } from "../common/utils/business-date";
@@ -193,11 +193,23 @@ export class OrdersService {
       throw new NotFoundException(LOJA_INDISPONIVEL_POR_ASSINATURA);
     }
 
-    const address = await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } });
-    if (!address) throw new NotFoundException("Endereço não encontrado.");
-    this.assertConfirmedSiteLocations(company, address);
+    const fulfillmentType = dto.fulfillmentType ?? OrderFulfillmentType.DELIVERY;
+    if (fulfillmentType === OrderFulfillmentType.PICKUP && company.settings?.pickupEnabled === false) {
+      throw new BadRequestException("Esta loja não oferece retirada no local.");
+    }
+    if (fulfillmentType === OrderFulfillmentType.PICKUP && (!company.addressLine || !company.city || !company.state)) {
+      throw new BadRequestException("A loja precisa informar o endereço de retirada nas Configurações.");
+    }
+    if (fulfillmentType === OrderFulfillmentType.DELIVERY && !dto.addressId) {
+      throw new BadRequestException("Selecione um endereço de entrega.");
+    }
+    const address = fulfillmentType === OrderFulfillmentType.DELIVERY
+      ? await this.db().address.findFirst({ where: { id: dto.addressId, userId: customerId } })
+      : null;
+    if (fulfillmentType === OrderFulfillmentType.DELIVERY && !address) throw new NotFoundException("Endereço não encontrado.");
+    if (address) this.assertConfirmedSiteLocations(company, address);
     this.assertCompanyCanReceiveOrder(company, dto.paymentMethod);
-    const deliveryQuote = await this.calculateDeliveryQuote(company, address);
+    const deliveryQuote = address ? await this.calculateDeliveryQuote(company, address) : null;
     const wantsWhatsApp = dto.whatsappNotificationsAccepted === true;
     const notificationPhone = wantsWhatsApp ? normalizarTelefoneBrasileiro(dto.whatsappPhone ?? "") : null;
     if (wantsWhatsApp && (!notificationPhone || notificationPhone.length !== 13)) {
@@ -214,7 +226,7 @@ export class OrdersService {
       const itemsData = await this.resolveTrustedOrderItems(dto.items);
       const subtotal = this.roundCurrency(itemsData.reduce((sum, item) => sum + item.totalPrice, 0));
 
-      const deliveryFee = deliveryQuote.deliveryFee;
+      const deliveryFee = deliveryQuote?.deliveryFee ?? 0;
       const total = this.roundCurrency(subtotal + deliveryFee);
 
       const order = await this.db().$transaction(async (tx: any) => {
@@ -223,26 +235,31 @@ export class OrdersService {
           customerId,
           customerPhone: notificationPhone,
           whatsappNotificationConsentAt: notificationPhone ? new Date() : null,
-          addressId: address.id,
-          deliveryStreet: address.street,
-          deliveryNumber: address.number,
-          deliveryComplement: address.complement,
-          deliveryNeighborhood: address.neighborhood,
-          deliveryCity: address.city,
-          deliveryState: address.state,
-          deliveryReference: address.reference,
-          deliveryLatitude: address.latitude,
-          deliveryLongitude: address.longitude,
+          fulfillmentType,
+          pickupAddressLine: address ? null : company.addressLine,
+          pickupCity: address ? null : company.city,
+          pickupState: address ? null : company.state,
+          pickupZipCode: address ? null : company.zipCode,
+          addressId: address?.id ?? null,
+          deliveryStreet: address?.street ?? null,
+          deliveryNumber: address?.number ?? null,
+          deliveryComplement: address?.complement ?? null,
+          deliveryNeighborhood: address?.neighborhood ?? null,
+          deliveryCity: address?.city ?? null,
+          deliveryState: address?.state ?? null,
+          deliveryReference: address?.reference ?? null,
+          deliveryLatitude: address?.latitude ?? null,
+          deliveryLongitude: address?.longitude ?? null,
           subtotal,
           deliveryFee,
-          deliveryDistanceKm: deliveryQuote.distanceKm,
-          deliveryRouteDurationMinutes: deliveryQuote.durationMinutes,
+          deliveryDistanceKm: deliveryQuote?.distanceKm ?? null,
+          deliveryRouteDurationMinutes: deliveryQuote?.durationMinutes ?? null,
           total,
           paymentMethod: dto.paymentMethod,
           notes: dto.notes,
           items: { create: itemsData.map((item) => this.persistedOrderItem(item)) },
           statusHistory: { create: { status: OrderStatus.RECEBIDO, changedByUserId: customerId } },
-          delivery: { create: { companyId: company.id } },
+          ...(address ? { delivery: { create: { companyId: company.id } } } : {}),
           payment: { create: { companyId: company.id, method: dto.paymentMethod, amount: total } },
           },
           include: ORDER_INCLUDE,
@@ -290,6 +307,18 @@ export class OrdersService {
       ...await this.calculateDeliveryQuote(company, address),
       whatsappNotificationsAvailable: await this.orderUpdateTemplateAvailable(company.id),
     };
+  }
+
+  async notificationAvailabilityForCustomer(customerId: string, companySlug: string) {
+    const visibility = this.legacyTestData
+      ? await this.legacyTestData.publicCompanyVisibilityWhereForUserId(customerId)
+      : { isTestOnly: false };
+    const company = await this.db().company.findFirst({
+      where: { slug: companySlug, isActive: true, ...visibility },
+      select: { id: true },
+    });
+    if (!company) throw new NotFoundException("Loja não encontrada.");
+    return { whatsappNotificationsAvailable: await this.orderUpdateTemplateAvailable(company.id) };
   }
 
   // -------------------------------------------------------------------------
@@ -438,7 +467,7 @@ export class OrdersService {
   async myOrders(customerId: string) {
     return this.db().order.findMany({
       where: { customerId },
-      include: { ...ORDER_INCLUDE, company: { select: { id: true, name: true, slug: true, whatsapp: true } } },
+      include: { ...ORDER_INCLUDE, company: { select: { id: true, name: true, slug: true, whatsapp: true, addressLine: true, city: true, state: true } } },
       orderBy: { createdAt: "desc" },
     });
   }
@@ -446,7 +475,7 @@ export class OrdersService {
   async myOrderDetail(customerId: string, id: string) {
     const order = await this.db().order.findFirst({
       where: { id, customerId },
-      include: { ...ORDER_INCLUDE, company: { select: { id: true, name: true, slug: true, whatsapp: true } } },
+      include: { ...ORDER_INCLUDE, company: { select: { id: true, name: true, slug: true, whatsapp: true, addressLine: true, city: true, state: true } } },
     });
     if (!order) throw new NotFoundException("Pedido não encontrado.");
     return order;
@@ -456,6 +485,7 @@ export class OrdersService {
     const original = await this.myOrderDetail(customerId, orderId);
     return this.createForCustomer(customerId, {
       companySlug: original.company.slug,
+      fulfillmentType: original.fulfillmentType,
       addressId: original.addressId,
       paymentMethod: original.paymentMethod,
       notes: original.notes ?? undefined,
@@ -604,7 +634,11 @@ export class OrdersService {
       throw new ForbiddenException("Cozinha só pode marcar como Em preparo ou Pronto.");
     }
 
-    this.assertValidTransition(order.status, nextStatus);
+    if (order.fulfillmentType === OrderFulfillmentType.PICKUP && nextStatus === OrderStatus.ENTREGUE && order.paymentStatus !== PaymentStatus.PAGO) {
+      throw new BadRequestException("Confirme o pagamento antes de marcar o pedido como retirado pelo cliente.");
+    }
+
+    this.assertValidTransition(order.status, nextStatus, order.fulfillmentType);
 
     const deliveryStatus = ORDER_TO_DELIVERY_STATUS[nextStatus];
     const updated = await this.db().$transaction(async (tx: any) => {
@@ -664,14 +698,17 @@ export class OrdersService {
     return updated;
   }
 
-  private assertValidTransition(current: OrderStatus, next: OrderStatus) {
+  private assertValidTransition(current: OrderStatus, next: OrderStatus, fulfillmentType: OrderFulfillmentType = OrderFulfillmentType.DELIVERY) {
     if (current === OrderStatus.ENTREGUE || current === OrderStatus.CANCELADO) {
       throw new BadRequestException(`Pedido já está em um status final (${current}).`);
     }
     if (next === OrderStatus.CANCELADO) return;
 
-    const currentIndex = ORDER_STATUS_FLOW.indexOf(current as any);
-    const nextIndex = ORDER_STATUS_FLOW.indexOf(next as any);
+    const flow = fulfillmentType === OrderFulfillmentType.PICKUP
+      ? ORDER_STATUS_FLOW.filter((status) => status !== OrderStatus.SAIU_PARA_ENTREGA)
+      : ORDER_STATUS_FLOW;
+    const currentIndex = flow.indexOf(current as any);
+    const nextIndex = flow.indexOf(next as any);
     if (nextIndex !== currentIndex + 1) {
       throw new BadRequestException(`Transição de status inválida: ${current} -> ${next}.`);
     }

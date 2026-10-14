@@ -89,6 +89,7 @@ export default function ConfiguracoesPage() {
   const [storeImageFile, setStoreImageFile] = useState<File | null>(null);
   const [storeImagePreviewUrl, setStoreImagePreviewUrl] = useState<string | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<string[]>([]);
+  const [pickupEnabled, setPickupEnabled] = useState(true);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiKnowledgeBase, setAiKnowledgeBase] = useState("");
   const [settingsWhatsapp, setSettingsWhatsapp] = useState("");
@@ -130,6 +131,7 @@ export default function ConfiguracoesPage() {
     setPinConfirmed(Boolean(company.locationConfirmedAt));
     setOpeningHours(openingHoursDraft(company.settings?.openingHours));
     setPaymentMethods(company.settings?.paymentMethodsEnabled ?? []);
+    setPickupEnabled(company.settings?.pickupEnabled ?? true);
     setAiEnabled(company.settings?.aiEnabled ?? true);
     setAiKnowledgeBase(company.settings?.aiKnowledgeBase ?? "");
     setSettingsWhatsapp(company.settings?.whatsappNumber ?? "");
@@ -210,13 +212,14 @@ export default function ConfiguracoesPage() {
     mutationFn: async () => {
       const { data } = await api.patch("/companies/me/settings", {
         paymentMethodsEnabled: paymentMethods,
+        pickupEnabled,
       });
       return data;
     },
     onSuccess: () => {
       setError(null);
-      setSuccess("Formas de pagamento atualizadas.");
-      updateCachedSettings({ paymentMethodsEnabled: paymentMethods });
+      setSuccess("Formas de pedido e pagamento atualizadas.");
+      updateCachedSettings({ paymentMethodsEnabled: paymentMethods, pickupEnabled });
     },
     onError: (err) => setError(apiErrorMessage(err)),
   });
@@ -472,9 +475,14 @@ export default function ConfiguracoesPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Formas de pagamento aceitas</CardTitle>
+          <CardTitle>Pedidos e formas de pagamento</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-4">
+        <CardContent className="space-y-4">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 p-4 text-sm dark:border-slate-700">
+            <input type="checkbox" className="mt-1" checked={pickupEnabled} onChange={(event) => setPickupEnabled(event.target.checked)} />
+            <span className="text-slate-700 dark:text-slate-200"><strong className="block">Permitir retirada no local</strong>O cliente faz o pedido pelo site, paga no balcão ou por Pix conforme os métodos aceitos e recebe aviso quando estiver pronto. Não há frete nem motoboy.</span>
+          </label>
+          <div className="flex flex-wrap gap-4">
           {Object.values(PaymentMethod).map((method) => (
             <label key={method} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
               <input
@@ -482,13 +490,14 @@ export default function ConfiguracoesPage() {
                 checked={paymentMethods.includes(method)}
                 onChange={() => togglePaymentMethod(method)}
               />
-              {method.replaceAll("_", " ")}
+              {method === PaymentMethod.CARTAO_ENTREGA ? "Cartão presencial (na entrega ou retirada)" : method.replaceAll("_", " ")}
             </label>
           ))}
+          </div>
         </CardContent>
         <CardActions>
           <Button className="w-full sm:w-auto" isLoading={savePaymentMethods.isPending} onClick={() => savePaymentMethods.mutate()}>
-            Salvar formas de pagamento
+            Salvar pedidos e pagamentos
           </Button>
         </CardActions>
       </Card>

@@ -13,6 +13,7 @@ import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/compone
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
 import { OrderStatusBadge } from "@/components/ui/badge";
+import { isPickupOrder, orderStatusLabel } from "@/lib/order-fulfillment";
 import { Table } from "@/components/ui/table";
 
 export default function PedidoDetalhePage() {
@@ -52,10 +53,12 @@ export default function PedidoDetalhePage() {
       return [OrderStatus.EM_PREPARO, OrderStatus.PRONTO];
     }
 
-    const currentIndex = ORDER_STATUS_FLOW.indexOf(order.status);
+    const flow = isPickupOrder(order) ? ORDER_STATUS_FLOW.filter((status) => status !== OrderStatus.SAIU_PARA_ENTREGA) : ORDER_STATUS_FLOW;
+    const currentIndex = flow.indexOf(order.status);
     const options: OrderStatus[] = [];
-    if (currentIndex >= 0 && currentIndex + 1 < ORDER_STATUS_FLOW.length) {
-      options.push(ORDER_STATUS_FLOW[currentIndex + 1]);
+    if (currentIndex >= 0 && currentIndex + 1 < flow.length) {
+      const next = flow[currentIndex + 1];
+      if (!(isPickupOrder(order) && next === OrderStatus.ENTREGUE && order.paymentStatus !== "PAGO")) options.push(next);
     }
     options.push(OrderStatus.CANCELADO);
     return options;
@@ -79,7 +82,10 @@ export default function PedidoDetalhePage() {
       const { data } = await api.patch(`/orders/${orderId}/payment/paid`);
       return data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["order", orderId] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["order", orderId] });
+      void queryClient.invalidateQueries({ queryKey: ["orders"] });
+    },
     onError: (err) => setError(apiErrorMessage(err)),
   });
 
@@ -114,7 +120,7 @@ export default function PedidoDetalhePage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Pedido #{order.id.slice(0, 8)}</h1>
-        <OrderStatusBadge status={order.status} />
+        <OrderStatusBadge status={order.status} fulfillmentType={order.fulfillmentType} />
       </div>
 
       {error && <p className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">{error}</p>}
@@ -146,7 +152,7 @@ export default function PedidoDetalhePage() {
             <CardContent className="space-y-2">
               {order.statusHistory.map((h, idx) => (
                 <div key={idx} className="flex items-center justify-between text-sm">
-                  <OrderStatusBadge status={h.status} />
+                  <OrderStatusBadge status={h.status} fulfillmentType={order.fulfillmentType} />
                   <span className="text-slate-500 dark:text-slate-400">{formatDateTime(h.createdAt)}</span>
                 </div>
               ))}
@@ -167,10 +173,10 @@ export default function PedidoDetalhePage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Entrega</CardTitle>
+              <CardTitle>{isPickupOrder(order) ? "Retirada no local" : "Entrega"}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-sm text-slate-700 dark:text-slate-300">
-              <p>
+              {isPickupOrder(order) ? <><p>O cliente buscará o pedido na loja. Quando estiver pronto, mova para “Pronto para retirada”; após confirmar o pagamento e entregar no balcão, marque “Retirado pelo cliente”.</p><p className="font-medium">Local combinado: {[order.pickupAddressLine, order.pickupCity, order.pickupState, order.pickupZipCode].filter(Boolean).join(" · ")}</p></> : <><p>
                 {order.deliveryStreet}, {order.deliveryNumber}
               </p>
               <p>{order.deliveryNeighborhood}</p>
@@ -187,7 +193,7 @@ export default function PedidoDetalhePage() {
                 <p className="pt-2 text-slate-500 dark:text-slate-400">
                   Status da entrega: <strong>{order.delivery.status.replaceAll("_", " ")}</strong>
                 </p>
-              )}
+              )}</>}
             </CardContent>
           </Card>
 
@@ -201,7 +207,7 @@ export default function PedidoDetalhePage() {
               </p>
               <p className="font-semibold">Total: {formatCurrency(Number(order.total))}</p>
               <p>
-                Método: {order.paymentMethod.replaceAll("_", " ")} · Status: <strong>{order.paymentStatus}</strong>
+                Método: {isPickupOrder(order) && order.paymentMethod === "CARTAO_ENTREGA" ? "Cartão na retirada" : order.paymentMethod.replaceAll("_", " ")} · Status: <strong>{order.paymentStatus}</strong>
               </p>
             </CardContent>
             {order.paymentStatus !== "PAGO" && (
@@ -223,7 +229,7 @@ export default function PedidoDetalhePage() {
                   <option value="">Selecione...</option>
                   {statusOptions.map((s) => (
                     <option key={s} value={s}>
-                      {s.replaceAll("_", " ")}
+                      {orderStatusLabel(s, isPickupOrder(order))}
                     </option>
                   ))}
                 </Select>
@@ -241,7 +247,7 @@ export default function PedidoDetalhePage() {
             </Card>
           )}
 
-          {user?.role !== Role.MOTOBOY && user?.role !== Role.COZINHA && !order.delivery?.motoboyId && (
+          {!isPickupOrder(order) && user?.role !== Role.MOTOBOY && user?.role !== Role.COZINHA && !order.delivery?.motoboyId && (
             <Card>
               <CardHeader>
                 <CardTitle>Atribuir motoboy</CardTitle>

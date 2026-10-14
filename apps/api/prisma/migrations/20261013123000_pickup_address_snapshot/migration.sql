@@ -1,0 +1,5 @@
+ALTER TABLE `Order`
+  ADD COLUMN `pickupAddressLine` VARCHAR(191) NULL,
+  ADD COLUMN `pickupCity` VARCHAR(191) NULL,
+  ADD COLUMN `pickupState` VARCHAR(191) NULL,
+  ADD COLUMN `pickupZipCode` VARCHAR(8) NULL;

@@ -1,4 +1,6 @@
 import clsx from "clsx";
+import { OrderFulfillmentType, OrderStatus } from "@chegowia/shared";
+import { orderStatusLabel } from "@/lib/order-fulfillment";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "info" | "brand";
 
@@ -29,6 +31,6 @@ const ORDER_STATUS_TONE: Record<string, Tone> = {
   CANCELADO: "danger",
 };
 
-export function OrderStatusBadge({ status }: { status: string }) {
-  return <Badge tone={ORDER_STATUS_TONE[status] ?? "neutral"}>{status.replaceAll("_", " ")}</Badge>;
+export function OrderStatusBadge({ status, fulfillmentType }: { status: OrderStatus; fulfillmentType?: OrderFulfillmentType }) {
+  return <Badge tone={ORDER_STATUS_TONE[status] ?? "neutral"}>{orderStatusLabel(status, fulfillmentType === OrderFulfillmentType.PICKUP)}</Badge>;
 }

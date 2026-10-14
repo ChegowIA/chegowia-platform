@@ -14,6 +14,7 @@ import { DeliveryLocationMap } from "@/components/deliveries/delivery-location-m
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { OrderStatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { isPickupOrder, orderStatusLabel } from "@/lib/order-fulfillment";
 
 export default function OrderTrackingPage() {
   const params = useParams<{ id: string }>();
@@ -72,7 +73,7 @@ export default function OrderTrackingPage() {
                   {formatDateTime(order.createdAt)} · {order.company?.name}
                 </p>
               </div>
-              <OrderStatusBadge status={order.status} />
+              <OrderStatusBadge status={order.status} fulfillmentType={order.fulfillmentType} />
             </div>
 
             <Card>
@@ -83,7 +84,7 @@ export default function OrderTrackingPage() {
                 <ol className="space-y-3">
                   {order.statusHistory.map((h, idx) => (
                     <li key={idx} className="flex items-center justify-between text-sm">
-                      <span className="text-slate-700 dark:text-slate-200">{h.status.replaceAll("_", " ")}</span>
+                      <span className="text-slate-700 dark:text-slate-200">{orderStatusLabel(h.status, isPickupOrder(order))}</span>
                       <span className="text-slate-400">{formatDateTime(h.createdAt)}</span>
                     </li>
                   ))}
@@ -117,7 +118,7 @@ export default function OrderTrackingPage() {
               </CardContent>
             </Card>
 
-	            <Card>
+	            {isPickupOrder(order) ? <Card><CardHeader><CardTitle>Retirada no local</CardTitle></CardHeader><CardContent className="space-y-2 text-sm text-slate-700 dark:text-slate-200"><p>Mostre o número <strong>#{order.id.slice(0, 8)}</strong> na loja ao buscar seu pedido.</p><p>{order.company?.name}</p><p>{[order.pickupAddressLine, order.pickupCity, order.pickupState, order.pickupZipCode].filter(Boolean).join(" · ") || "Consulte o endereço de retirada na página da loja."}</p>{order.status === "PRONTO" && <p className="font-semibold text-emerald-700 dark:text-emerald-300">Seu pedido está pronto para retirada!</p>}</CardContent></Card> : <Card>
 	              <CardHeader>
 	                <CardTitle>Entrega</CardTitle>
 	              </CardHeader>
@@ -164,7 +165,7 @@ export default function OrderTrackingPage() {
 	                  </>
 	                )}
 	              </CardContent>
-	            </Card>
+	            </Card>}
 
             <Card>
               <CardHeader>
@@ -175,10 +176,10 @@ export default function OrderTrackingPage() {
                   <span className="text-slate-500 dark:text-slate-400">Subtotal</span>
                   <span>{formatCurrency(order.subtotal)}</span>
                 </div>
-                <div className="flex justify-between">
+                {!isPickupOrder(order) && <div className="flex justify-between">
                   <span className="text-slate-500 dark:text-slate-400">Taxa de entrega</span>
                   <span>{formatCurrency(order.deliveryFee)}</span>
-                </div>
+                </div>}
                 {order.deliveryDistanceKm !== null && order.deliveryDistanceKm !== undefined && (
                   <div className="flex justify-between">
                     <span className="text-slate-500 dark:text-slate-400">Rota estimada</span>

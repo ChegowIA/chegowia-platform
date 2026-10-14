@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import { Role } from "@prisma/client";
 import { Roles } from "../common/decorators/roles.decorator";
@@ -16,6 +16,11 @@ export class MyOrdersController {
   @Post("quote")
   quote(@CurrentUser("sub") customerId: string, @Body() dto: DeliveryQuoteDto) {
     return this.ordersService.quoteForCustomer(customerId, dto);
+  }
+
+  @Get("notification-availability")
+  notificationAvailability(@CurrentUser("sub") customerId: string, @Query("companySlug") companySlug: string) {
+    return this.ordersService.notificationAvailabilityForCustomer(customerId, companySlug);
   }
 
   @Post()

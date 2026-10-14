@@ -3,7 +3,7 @@
 import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ORDER_STATUS_FLOW, OrderStatus, PermissionKey, Role } from "@chegowia/shared";
+import { ORDER_STATUS_FLOW, OrderFulfillmentType, OrderStatus, PermissionKey, Role } from "@chegowia/shared";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/auth-store";
 import { Employee, Order } from "@/lib/types";
@@ -12,6 +12,7 @@ import { toneColumn } from "@/lib/surface";
 import { Input } from "@/components/ui/input";
 import { connectSocket } from "@/lib/socket-client";
 import { playNewOrderAlert, unlockNewOrderSound } from "@/lib/new-order-sound";
+import { isPickupOrder } from "@/lib/order-fulfillment";
 
 const COLUMNS: Array<{
   status: OrderStatus;
@@ -42,6 +43,7 @@ interface OrderFlowResponse {
 
 export default function PedidosPage() {
   const [search, setSearch] = useState("");
+  const [fulfillmentFilter, setFulfillmentFilter] = useState<"ALL" | OrderFulfillmentType>("ALL");
   const [todayDate, setTodayDate] = useState(currentDateKey);
   const [selectedDate, setSelectedDate] = useState(currentDateKey);
   const [followToday, setFollowToday] = useState(true);
@@ -97,6 +99,7 @@ export default function PedidosPage() {
   });
 
   const orders = useMemo(() => data?.items ?? [], [data?.items]);
+  const visibleOrders = useMemo(() => orders.filter((order) => fulfillmentFilter === "ALL" || (order.fulfillmentType ?? OrderFulfillmentType.DELIVERY) === fulfillmentFilter), [orders, fulfillmentFilter]);
   const draggedOrder = orders.find((order) => order.id === draggedId);
   const firstDate = data?.firstDate ?? selectedDate;
   const lastDate = data?.lastDate ?? todayDate;
@@ -171,6 +174,7 @@ export default function PedidosPage() {
   function canMove(order: Order | undefined, target: OrderStatus) {
     if (!canEditOrders) return false;
     if (!order || order.status === target || order.status === OrderStatus.ENTREGUE || order.status === OrderStatus.CANCELADO) return false;
+    if (isPickupOrder(order) && target === OrderStatus.ENTREGUE && order.paymentStatus !== "PAGO") return false;
     if (target === OrderStatus.CANCELADO) return user?.role !== Role.COZINHA;
     if (user?.role === Role.COZINHA) {
       return (
@@ -178,15 +182,18 @@ export default function PedidosPage() {
         (order.status === OrderStatus.EM_PREPARO && target === OrderStatus.PRONTO)
       );
     }
-    const currentIndex = ORDER_STATUS_FLOW.indexOf(order.status);
-    return ORDER_STATUS_FLOW[currentIndex + 1] === target;
+    const flow = isPickupOrder(order) ? ORDER_STATUS_FLOW.filter((status) => status !== OrderStatus.SAIU_PARA_ENTREGA) : ORDER_STATUS_FLOW;
+    const currentIndex = flow.indexOf(order.status);
+    return flow[currentIndex + 1] === target;
   }
 
   function handleDrop(target: OrderStatus) {
     if (draggedOrder && canMove(draggedOrder, target)) {
       updateStatus.mutate({ order: draggedOrder, status: target });
     } else if (draggedOrder && draggedOrder.status !== target) {
-      setError("Mova o pedido para a próxima etapa disponível. Etapas não podem ser puladas.");
+      setError(isPickupOrder(draggedOrder) && target === OrderStatus.ENTREGUE && draggedOrder.paymentStatus !== "PAGO"
+        ? "Confirme o pagamento nos detalhes do pedido antes de marcar a retirada."
+        : "Mova o pedido para a próxima etapa disponível. Etapas não podem ser puladas.");
     }
     setDraggedId(null);
     setOverStatus(null);
@@ -314,6 +321,12 @@ export default function PedidosPage() {
         </div>
       </section>
 
+      <div className="flex flex-wrap gap-2" aria-label="Filtrar pedidos por modalidade">
+        {([ ["ALL", "Todos"], [OrderFulfillmentType.DELIVERY, "Entrega"], [OrderFulfillmentType.PICKUP, "Retirada no local"] ] as const).map(([value, label]) => (
+          <button key={value} type="button" aria-pressed={fulfillmentFilter === value} onClick={() => setFulfillmentFilter(value)} className={`rounded-full border px-4 py-2 text-xs font-bold transition ${fulfillmentFilter === value ? "border-brand-600 bg-brand-600 text-white" : "border-slate-200 bg-white text-slate-700 hover:border-brand-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"}`}>{label} · {orders.filter((order) => value === "ALL" || (order.fulfillmentType ?? OrderFulfillmentType.DELIVERY) === value).length}</button>
+        ))}
+      </div>
+
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-bold text-slate-400">
           <span className="hidden sm:inline">Navegue pelas etapas do fluxo</span>
@@ -331,7 +344,7 @@ export default function PedidosPage() {
       >
         <div className="flex w-max min-w-full gap-4 pr-1">
           {COLUMNS.map((column) => {
-            const columnOrders = orders.filter((order) => order.status === column.status);
+            const columnOrders = visibleOrders.filter((order) => order.status === column.status);
             const validTarget = canMove(draggedOrder, column.status);
             return (
               <section
@@ -349,7 +362,7 @@ export default function PedidosPage() {
                 <header className={`flex items-center justify-between px-4 py-3.5 text-white ${column.header}`}>
                   <div className="flex items-center gap-2">
                     <span className="h-2.5 w-2.5 rounded-full bg-white shadow-[0_0_0_4px_rgba(255,255,255,.18)] dark:bg-slate-900" />
-                    <h2 className="text-sm font-black">{column.title}</h2>
+                    <h2 className="text-sm font-black">{fulfillmentFilter === OrderFulfillmentType.PICKUP && column.status === OrderStatus.ENTREGUE ? "Retirados" : column.title}</h2>
                   </div>
                   <span className="grid h-7 min-w-7 place-items-center rounded-full bg-white/20 px-2 text-xs font-black text-white ring-1 ring-white/25">
                     {columnOrders.length}
@@ -435,6 +448,7 @@ function OrderCard({
           <p className="text-[10px] font-black uppercase tracking-wider text-brand-600">#{order.id.slice(0, 7)}</p>
           <h3 className="mt-1 line-clamp-1 font-black text-slate-950 dark:text-slate-100">{order.customer?.name ?? order.customerName ?? "Cliente"}</h3>
           {order.source === "WHATSAPP" && <span className="mt-1 inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">WhatsApp IA</span>}
+          {order.fulfillmentType === OrderFulfillmentType.PICKUP && <span className="mt-1 inline-flex rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-800 dark:bg-violet-950/50 dark:text-violet-200">Retirada no local</span>}
         </div>
         {draggable && <span className="select-none text-lg leading-none text-slate-300 group-hover:text-slate-500 dark:text-slate-600 dark:group-hover:text-slate-300" title="Arrastar">⠿</span>}
       </div>
@@ -448,7 +462,7 @@ function OrderCard({
         {order.items.length > 2 && <p className="text-[11px] font-bold text-slate-400">+ {order.items.length - 2} outro(s) item(ns)</p>}
       </div>
 
-      {canAssign && ![OrderStatus.ENTREGUE, OrderStatus.CANCELADO].includes(order.status) && (
+      {canAssign && !isPickupOrder(order) && ![OrderStatus.ENTREGUE, OrderStatus.CANCELADO].includes(order.status) && (
         <label className="mb-3 block">
           <span className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">
             <DeliveryIcon /> Entregador

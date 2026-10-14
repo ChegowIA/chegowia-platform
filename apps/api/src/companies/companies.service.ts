@@ -387,7 +387,7 @@ export class CompaniesService {
           where: { isActive: true },
           select: { id: true, neighborhood: true, city: true, deliveryFee: true },
         },
-        settings: { select: { openingHours: true, paymentMethodsEnabled: true } },
+        settings: { select: { openingHours: true, paymentMethodsEnabled: true, pickupEnabled: true } },
       },
     });
     if (!company) throw new NotFoundException("Loja não encontrada.");

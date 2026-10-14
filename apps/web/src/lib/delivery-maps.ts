@@ -1,10 +1,10 @@
 interface DeliveryAddress {
-  deliveryStreet: string;
-  deliveryNumber: string;
+  deliveryStreet: string | null;
+  deliveryNumber: string | null;
   deliveryComplement?: string | null;
-  deliveryNeighborhood: string;
-  deliveryCity: string;
-  deliveryState: string;
+  deliveryNeighborhood: string | null;
+  deliveryCity: string | null;
+  deliveryState: string | null;
   deliveryLatitude?: number | null;
   deliveryLongitude?: number | null;
 }
@@ -16,10 +16,10 @@ export interface LatLng {
 
 export function deliveryAddressLabel(order: DeliveryAddress): string {
   return [
-    `${order.deliveryStreet}, ${order.deliveryNumber}`,
+    order.deliveryStreet && order.deliveryNumber ? `${order.deliveryStreet}, ${order.deliveryNumber}` : null,
     order.deliveryComplement,
     order.deliveryNeighborhood,
-    `${order.deliveryCity}/${order.deliveryState}`,
+    order.deliveryCity && order.deliveryState ? `${order.deliveryCity}/${order.deliveryState}` : null,
   ]
     .filter(Boolean)
     .join(" - ");
