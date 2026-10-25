@@ -154,9 +154,10 @@ describe("fila segura de prospecção", () => {
     expect(db.platformOutreachSenderState.updateMany).toHaveBeenCalled();
   });
 
-  it("respeita o horário comercial em Brasília", () => {
+  it("respeita a janela diária em Brasília, inclusive domingo", () => {
     expect(dentroDoHorarioComercial(new Date("2026-08-20T12:00:00Z"))).toBe(true);
     expect(dentroDoHorarioComercial(new Date("2026-08-20T02:00:00Z"))).toBe(false);
-    expect(dentroDoHorarioComercial(new Date("2026-08-23T15:00:00Z"))).toBe(false);
+    expect(dentroDoHorarioComercial(new Date("2026-08-23T15:00:00Z"))).toBe(true);
+    expect(dentroDoHorarioComercial(new Date("2026-08-24T02:00:00Z"))).toBe(false);
   });
 });

@@ -48,8 +48,8 @@ const INTERVALO_DO_WORKER_MS = 10_000;
 const ESPERA_APOS_TETO_MS = 15 * 60 * 1000;
 
 /**
- * Janela em que uma abordagem comercial autorizada é aceitável.
- * Domingo fica de fora para evitar contato fora do expediente.
+ * Janela diária em que uma abordagem comercial autorizada é aceitável,
+ * inclusive aos domingos.
  */
 const HORA_INICIAL_PADRAO = 9;
 const HORA_FINAL_PADRAO = 20;
@@ -741,8 +741,7 @@ function partesNoFusoComercial(momento: Date) {
 }
 
 export function dentroDoHorarioComercial(momento = new Date()) {
-  const { hora, diaDaSemana } = partesNoFusoComercial(momento);
-  if (diaDaSemana.startsWith("dom")) return false;
+  const { hora } = partesNoFusoComercial(momento);
   return hora >= HORA_INICIAL_PADRAO && hora < HORA_FINAL_PADRAO;
 }
 
