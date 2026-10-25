@@ -87,6 +87,30 @@ describe("validação de copy da DeepSeek", () => {
   });
 });
 
+describe("edição versionada do prompt comercial", () => {
+  it("salva prompts curtos e maiores que o antigo limite sem truncar", async () => {
+    const create = jest.fn().mockImplementation(({ data }: any) => Promise.resolve(data));
+    const db: any = { platformOutreachPrompt: {
+      findFirst: jest.fn().mockResolvedValue({ version: 3, systemPrompt: "versão anterior" }), create,
+    } };
+    const service = new OutreachIntelligenceService(db, { chat: jest.fn() } as never);
+    const short = await service.updatePrompt("  Nova orientação  ", "admin-1");
+    expect(short).toMatchObject({ version: 4, systemPrompt: "Nova orientação" });
+
+    const longText = "Orientação comercial contextualizada. ".repeat(2_200).trim();
+    const long = await service.updatePrompt(longText, "admin-1");
+    expect(long.systemPrompt).toBe(longText);
+    expect(long.systemPrompt.length).toBeGreaterThan(65_535);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejeita somente texto vazio ou valor que não seja string", async () => {
+    const service = new OutreachIntelligenceService({} as never, { chat: jest.fn() } as never);
+    await expect(service.updatePrompt("   ", "admin-1")).rejects.toThrow("Informe o texto");
+    await expect(service.updatePrompt({ texto: "indevido" } as never, "admin-1")).rejects.toThrow("Informe o texto");
+  });
+});
+
 describe("falha da DeepSeek na fila persistente", () => {
   it("limita regenerações e envia JSON inválido para revisão, sem liberar mensagem", async () => {
     const campaign = { id: "c1", status: "RASCUNHO", preparationRequestedAt: new Date(),

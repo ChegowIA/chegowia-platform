@@ -192,9 +192,9 @@ export function IntelligentOutreachPanel() {
     <details className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
       <summary className="cursor-pointer text-base font-bold text-slate-950 dark:text-slate-100">Prompt de copywriting</summary>
       <div className="mt-4 max-w-3xl space-y-3">
-          <p className="text-sm text-slate-600 dark:text-slate-300">Prompt interno versionado · versão {prompt.data?.version ?? "…"}. Alterar cria uma versão nova; campanhas preparadas conservam sua versão.</p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">Prompt interno versionado · versão {prompt.data?.version ?? "…"}. Não há limite fixo de caracteres no editor; alterar cria uma versão nova e campanhas preparadas conservam a anterior. A requisição, o modelo de IA e a mensagem gerada ainda têm limites técnicos próprios.</p>
           <Textarea rows={12} value={promptDraft ?? prompt.data?.systemPrompt ?? ""} onChange={(event) => setPromptDraft(event.target.value)} />
-          <Button variant="outline" disabled={busy || !promptDraft || promptDraft.length < 400} onClick={() => void run(async () => {
+          <Button variant="outline" disabled={busy || !promptDraft?.trim()} onClick={() => void run(async () => {
             await api.put(`${API}/prompt`, { systemPrompt: promptDraft }); setPromptDraft(null);
             await queryClient.invalidateQueries({ queryKey: ["intelligent-outreach-prompt"] });
           })}>Criar nova versão do prompt</Button>

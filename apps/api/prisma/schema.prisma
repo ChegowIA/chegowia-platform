@@ -2457,7 +2457,7 @@ model PlatformOutreachImportRow {
 model PlatformOutreachPrompt {
   id String @id @default(cuid())
   version Int @unique
-  systemPrompt String @db.Text
+  systemPrompt String @db.LongText
   createdByUserId String?
   createdAt DateTime @default(now())
 }

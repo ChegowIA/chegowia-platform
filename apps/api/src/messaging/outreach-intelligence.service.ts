@@ -195,8 +195,8 @@ export class OutreachIntelligenceService {
   }
 
   async updatePrompt(content: string, userId: string) {
-    const systemPrompt = String(content ?? "").trim();
-    if (systemPrompt.length < 400 || systemPrompt.length > 6000) throw new BadRequestException("O prompt deve ter entre 400 e 6.000 caracteres.");
+    const systemPrompt = typeof content === "string" ? content.trim() : "";
+    if (!systemPrompt) throw new BadRequestException("Informe o texto do prompt de copywriting.");
     const current = await this.prompt();
     return this.db().platformOutreachPrompt.create({ data: {
       version: current.version + 1, systemPrompt, createdByUserId: userId,
