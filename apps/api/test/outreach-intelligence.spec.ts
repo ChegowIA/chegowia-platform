@@ -1,6 +1,6 @@
 import * as XLSX from "@e965/xlsx";
 import {
-  mapOutreachRows, outreachPreviewFingerprint, parseOutreachWorkbook,
+  mapOutreachRows, outreachPreviewFingerprint, parseOutreachConsentDate, parseOutreachWorkbook,
   suggestOutreachMapping, validateOutreachCopy, validateOutreachMapping,
 } from "../src/messaging/outreach-intelligence";
 import { OutreachIntelligenceService } from "../src/messaging/outreach-intelligence.service";
@@ -64,6 +64,66 @@ describe("importação XLSX de prospecção", () => {
     ])).sheets[0];
     expect(sheet.rows).toHaveLength(1);
     expect(mapOutreachRows(sheet, { name: 0, phone: 1, segment: 2 })[0].name).toBe("Açaí Lua");
+  });
+
+  it("mapeia origem, evidência e data/hora sem tratar uma permissão isolada como opt-in", () => {
+    const sheet = parseOutreachWorkbook(xlsx([
+      ["Nome", "Telefone", "Categoria", "Permissão para WhatsApp", "Origem da autorização", "Evidência da autorização", "Data da autorização"],
+      ["Pizzaria Sol", "62 99999-8888", "Pizzaria", "Sim", "Formulário do site", "protocolo-123456", "01/08/2024 14:30"],
+      ["Pizzaria Lua", "62 99999-8887", "Pizzaria", "Sim", "", "", ""],
+      ["Pizzaria Mar", "62 99999-8886", "Pizzaria", "Sim", "Formulário do site", "", "01/08/2024 14:30"],
+      ["Pizzaria Céu", "62 99999-8885", "Pizzaria", "Sim", "Formulário do site", "protocolo-123456", "31/02/2024 14:30"],
+    ])).sheets[0];
+    const mapping = suggestOutreachMapping(sheet.headers);
+    expect(mapping).toMatchObject({ consent: 3, consentSource: 4, consentEvidence: 5, consentAt: 6 });
+    const rows = mapOutreachRows(sheet, mapping);
+    expect(rows[0]).toMatchObject({ consentSource: "Formulário do site", consentEvidence: "protocolo-123456", consentIssue: null });
+    expect(rows[0].consentAt?.toISOString()).toBe("2024-08-01T17:30:00.000Z");
+    expect(rows[1].consentAt).toBeNull();
+    expect(rows[2].consentIssue).toMatch(/incompleta/);
+    expect(rows[3].consentIssue).toMatch(/data.*inválida/);
+    expect(parseOutreachConsentDate("2024-08-01T17:30:00Z")?.toISOString()).toBe("2024-08-01T17:30:00.000Z");
+    expect(parseOutreachConsentDate("01/01/2999 10:00")).toBeNull();
+  });
+
+  it("mostra a autorização na prévia e a persiste somente nas linhas completas", async () => {
+    const buffer = xlsx([
+      ["Nome", "Telefone", "Categoria", "Origem da autorização", "Evidência da autorização", "Data da autorização", "Permissão para WhatsApp"],
+      ["Pizzaria Sol", "62 99999-8888", "Pizzaria", "Formulário do site", "protocolo-123456", "01/08/2024 14:30", "Sim"],
+      ["Pizzaria Lua", "62 99999-8887", "Pizzaria", "Formulário do site", "", "01/08/2024 14:30", "Sim"],
+      ["Pizzaria Mar", "62 99999-8886", "Pizzaria", "", "", "", ""],
+      ["Pizzaria Não", "62 99999-8885", "Pizzaria", "Formulário do site", "protocolo-123456", "01/08/2024 14:30", "Não"],
+    ]);
+    const targets: any[] = [];
+    const importRows: any[] = [];
+    const db: any = {
+      platformWhatsAppChannel: { upsert: jest.fn().mockResolvedValue({ id: "channel-1" }) },
+      user: { findUnique: jest.fn().mockResolvedValue({ name: "Admin" }) },
+      platformOutreachBlock: { findMany: jest.fn().mockResolvedValue([]) },
+      platformOutreachTarget: { findMany: jest.fn().mockResolvedValue([]),
+        createMany: jest.fn(async ({ data }: any) => { targets.push(...data); }) },
+      company: { findMany: jest.fn().mockResolvedValue([]) },
+      platformOutreachCampaign: { create: jest.fn(async ({ data }: any) => ({ id: "campaign-1", ...data })) },
+      platformOutreachImportRow: { createMany: jest.fn(async ({ data }: any) => { importRows.push(...data); }) },
+    };
+    db.$transaction = jest.fn((callback: any) => callback(db));
+    const service = new OutreachIntelligenceService(db, { chat: jest.fn() } as never);
+    const preview = await service.preview(buffer);
+    expect(preview.verifiedConsent).toBe(1);
+    expect(preview.unverifiedConsent).toBe(3);
+    expect(preview.samples[1].consentIssue).toMatch(/incompleta/);
+    const result = await service.confirmImport(buffer, { hash: preview.hash,
+      previewFingerprint: preview.previewFingerprint, sheet: preview.selectedSheet,
+      mapping: preview.mapping, name: "Campanha de teste" }, "admin-1");
+    expect(result).toMatchObject({ authorizationReady: 1, authorizationPending: 2, excludedRows: 1 });
+    expect(targets[0]).toMatchObject({ consentStatus: "CONFIRMADO", consentSource: "Formulário do site", consentEvidence: "protocolo-123456" });
+    expect(targets[0].consentAt.toISOString()).toBe("2024-08-01T17:30:00.000Z");
+    expect(targets[1].consentStatus).toBe("NAO_VERIFICADO");
+    expect(targets[1].consentSource).toBe("Formulário do site");
+    expect(targets[1].consentAt).toBeNull();
+    expect(targets[3]).toMatchObject({ status: "DESCARTADO", consentStatus: "NEGADO", discardReason: "planilha indica não contatar" });
+    expect(importRows[0].originalData.values[4]).toBe("protocolo-123456");
+    expect(importRows[1].mappedData.consentIssue).toMatch(/incompleta/);
   });
 });
 

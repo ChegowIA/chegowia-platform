@@ -54,7 +54,7 @@ export class OutreachIntelligenceService {
       try {
         // Custo da plataforma: mapeamento de planilha do SUPER_ADMIN, sem tenant.
         const result = await this.ai.chat([
-          { role: "system", content: "Mapeie somente cabeçalhos reais da planilha de prospecção. Não invente colunas nem analise dados pessoais. Retorne JSON {mapping:{name,phone,segment,city,state,address,website,consent}}; cada valor é índice inteiro existente ou null." },
+          { role: "system", content: "Mapeie somente cabeçalhos reais da planilha de prospecção. Não invente colunas nem analise dados pessoais. Retorne JSON {mapping:{name,phone,segment,city,state,address,website,consent,consentSource,consentEvidence,consentAt}}; cada valor é índice inteiro existente ou null. consentSource é a origem da autorização, consentEvidence é o registro/protocolo e consentAt é a data/hora da autorização; não confunda uma coluna genérica de permissão com esses campos." },
           { role: "user", content: JSON.stringify({ headers: sheet.headers, fields: OUTREACH_FIELDS }) },
         ], undefined, { responseFormat: "json_object", thinking: false, temperature: 0, maxTokens: 300 });
         const obj = parseJsonObject(result.content);
@@ -93,10 +93,14 @@ export class OutreachIntelligenceService {
       validRows: rows.filter((row) => !row.issue).length,
       invalidRows: rows.filter((row) => row.issue).length,
       duplicatePhones: duplicated,
-      unverifiedConsent: rows.filter((row) => !row.issue).length,
+      verifiedConsent: rows.filter((row) => !row.issue && row.consentAt).length,
+      unverifiedConsent: rows.filter((row) => !row.issue && !row.consentAt).length,
       samples: rows.slice(0, 30).map((row) => ({
         rowNumber: row.rowNumber, name: row.name, phone: row.phone ? formatarTelefoneParaExibicao(row.phone) : null,
-        segment: row.segment, city: row.city, consent: row.consentValue || "Não verificado", issue: row.issue,
+        segment: row.segment, city: row.city, consent: row.consentValue,
+        consentSource: row.consentSource, consentEvidence: row.consentEvidence,
+        consentDate: row.consentDateValue, consentReady: Boolean(row.consentAt),
+        consentIssue: row.consentIssue, issue: row.issue,
       })),
     };
   }
@@ -126,6 +130,7 @@ export class OutreachIntelligenceService {
     ]);
     const blocked = new Set<string>(blocks.map((item: any) => item.phone));
     const contacted = new Set<string>(previous.map((item: any) => item.phone));
+    const deniedInSheet = new Set(rows.filter((row) => row.consentDenied && row.phone).map((row) => row.phone));
     const customerPhones = new Set<string>();
     const { normalizarTelefoneBrasileiro } = await import("./outreach-contacts");
     for (const customer of customers) for (const raw of [customer.phone, customer.whatsapp]) {
@@ -148,14 +153,22 @@ export class OutreachIntelligenceService {
           targetId = randomUUID();
           firstByPhone.set(row.phone, targetId);
           reason = blocked.has(row.phone) ? "pediu para não receber"
+            : deniedInSheet.has(row.phone) ? "planilha indica não contatar"
             : contacted.has(row.phone) ? "já foi abordado antes"
               : customerPhones.has(row.phone) ? "já é cliente" : null;
-          status = reason ? "DESCARTADO" : "VALIDO_SEM_AUTORIZACAO";
+          status = reason ? "DESCARTADO" : row.consentAt ? "VALIDO_COM_AUTORIZACAO"
+            : row.consentIssue ? "AUTORIZACAO_PENDENTE" : "VALIDO_SEM_AUTORIZACAO";
           targetData.push({
             id: targetId, phone: row.phone, name: row.name, company: row.name, city: row.city,
             segment: row.segment, address: row.address, website: row.website, sourceRowNumber: row.rowNumber,
             status: reason ? OutreachTargetStatus.DESCARTADO : OutreachTargetStatus.PENDENTE,
-            discardReason: reason, consentStatus: "NAO_VERIFICADO",
+            discardReason: reason, consentStatus: deniedInSheet.has(row.phone) ? "NEGADO"
+              : row.consentAt && !reason ? "CONFIRMADO" : "NAO_VERIFICADO",
+            // Campos parciais também ficam disponíveis para correção manual;
+            // somente o trio validado altera consentStatus para CONFIRMADO.
+            consentSource: row.consentSource && row.consentSource.length <= 191 ? row.consentSource : null,
+            consentEvidence: row.consentEvidence && row.consentEvidence.length <= 1000 ? row.consentEvidence : null,
+            consentAt: row.consentAt,
           });
         }
       }
@@ -164,7 +177,9 @@ export class OutreachIntelligenceService {
         originalData: row.originalData, mappedData: {
           name: row.name, phone: row.phone, segment: row.segment, city: row.city,
           state: row.state, address: row.address, website: row.website, consentInSpreadsheet: row.consentValue,
-        }, status, reason,
+          consentSource: row.consentSource, consentEvidence: row.consentEvidence,
+          consentDate: row.consentDateValue, consentIssue: row.consentIssue,
+        }, status, reason: reason ?? row.consentIssue,
       });
     }
     const campaign = await this.db().$transaction(async (tx: any) => {
@@ -186,7 +201,8 @@ export class OutreachIntelligenceService {
       invalidRows: rowData.filter((row) => row.status === "INVALIDO").length,
       duplicateRows: rowData.filter((row) => row.status === "DUPLICADO").length,
       excludedRows: rowData.filter((row) => row.status === "DESCARTADO").length,
-      authorizationPending: targetData.filter((item) => item.status === OutreachTargetStatus.PENDENTE).length };
+      authorizationReady: targetData.filter((item) => item.status === OutreachTargetStatus.PENDENTE && item.consentStatus === "CONFIRMADO").length,
+      authorizationPending: targetData.filter((item) => item.status === OutreachTargetStatus.PENDENTE && item.consentStatus !== "CONFIRMADO").length };
   }
 
   async prompt() {
@@ -221,7 +237,7 @@ export class OutreachIntelligenceService {
     await this.requireCampaign(campaignId);
     const take = 50;
     const safePage = Number.isInteger(page) && page > 0 ? Math.min(page, 200) : 1;
-    const where = { campaignId, status: { not: "VALIDO_SEM_AUTORIZACAO" } };
+    const where = { campaignId, status: { notIn: ["VALIDO_SEM_AUTORIZACAO", "VALIDO_COM_AUTORIZACAO"] } };
     const [total, rows] = await Promise.all([
       this.db().platformOutreachImportRow.count({ where }),
       this.db().platformOutreachImportRow.findMany({ where, orderBy: { rowNumber: "asc" }, skip: (safePage - 1) * take, take }),

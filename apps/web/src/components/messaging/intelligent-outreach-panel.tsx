@@ -9,21 +9,26 @@ import { Card, CardContent } from "@/components/ui/card";
 import { FormField, Input, Textarea } from "@/components/ui/input";
 import { QRCodeSVG } from "qrcode.react";
 
-type Field = "name" | "phone" | "segment" | "city" | "state" | "address" | "website" | "consent";
+type Field = "name" | "phone" | "segment" | "city" | "state" | "address" | "website" | "consent" | "consentSource" | "consentEvidence" | "consentAt";
 const FIELDS: Array<{ key: Field; label: string }> = [
   { key: "name", label: "Estabelecimento" }, { key: "phone", label: "Telefone" },
   { key: "segment", label: "Segmento" }, { key: "city", label: "Cidade" },
   { key: "state", label: "UF" }, { key: "address", label: "Endereço" },
   { key: "website", label: "Website" }, { key: "consent", label: "Permissão (informativa)" },
+  { key: "consentSource", label: "Origem da autorização" },
+  { key: "consentEvidence", label: "Evidência da autorização" },
+  { key: "consentAt", label: "Data e hora da autorização" },
 ];
 type Mapping = Partial<Record<Field, number>>;
 type Preview = {
   hash: string; previewFingerprint: string; selectedSheet: string; mapping: Mapping;
   sheets: Array<{ name: string; rows: number; headers: string[] }>;
   totalRows: number; validRows: number; invalidRows: number; duplicatePhones: number;
-  unverifiedConsent: number; aiMappingUsed: boolean; mappingWarning: string | null;
+  verifiedConsent: number; unverifiedConsent: number; aiMappingUsed: boolean; mappingWarning: string | null;
   samples: Array<{ rowNumber: number; name: string | null; phone: string | null;
-    segment: string | null; city: string | null; consent: string; issue: string | null }>;
+    segment: string | null; city: string | null; consent: string | null;
+    consentSource: string | null; consentEvidence: string | null; consentDate: string | null;
+    consentReady: boolean; consentIssue: string | null; issue: string | null }>;
 };
 type Campaign = {
   id: string; name: string; status: string; sourceType: string; totalTargets: number; pendingCount: number;
@@ -35,7 +40,7 @@ type Attempt = { id: string; status: string; startedAt: string; finishedAt: stri
 type Target = {
   id: string; sourceRowNumber: number | null; name: string | null; phoneFormatted: string;
   segment: string | null; city: string | null; status: string; consentStatus: string;
-  consentSource: string | null; consentAt: string | null; generationStatus: string;
+  consentSource: string | null; consentEvidence: string | null; consentAt: string | null; generationStatus: string;
   proposal: string | null; messageText: string | null; mainBenefit: string | null;
   approvalStatus: string; responseCategory: string | null; responseSuggestion: string | null;
   responseText: string | null;
@@ -54,6 +59,12 @@ type Sender = { configured: boolean; status: string; phone: string | null; qrCod
 type Prompt = { version: number; systemPrompt: string };
 
 const API = "/platform/whatsapp/outreach";
+function localDateTime(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : "";
+}
 const statusLabel: Record<string, string> = {
   RASCUNHO: "Rascunho", ENVIANDO: "Enviando", PAUSADA: "Pausada", CONCLUIDA: "Concluída", CANCELADA: "Cancelada",
   PENDENTE: "Pendente", RESERVADO: "Tentativa em andamento", ENVIADO: "Aceito pela API", RESPONDEU: "Respondeu",
@@ -80,6 +91,22 @@ export function IntelligentOutreachPanel() {
   const [promptDraft, setPromptDraft] = useState<string | null>(null);
   const [proposalDraft, setProposalDraft] = useState<Record<string, string>>({});
   const [consentDraft, setConsentDraft] = useState<Record<string, { source: string; evidence: string; at: string }>>({});
+
+  function updateConsentDraft(target: Target, field: "source" | "evidence" | "at", value: string) {
+    setConsentDraft((current) => ({ ...current, [target.id]: {
+      source: current[target.id]?.source ?? target.consentSource ?? "",
+      evidence: current[target.id]?.evidence ?? target.consentEvidence ?? "",
+      at: current[target.id]?.at ?? localDateTime(target.consentAt), [field]: value,
+    } }));
+  }
+
+  function consentPayload(target: Target) {
+    const current = consentDraft[target.id];
+    const at = current?.at ?? localDateTime(target.consentAt);
+    return { status: "CONFIRMADO", source: current?.source ?? target.consentSource ?? "",
+      evidence: current?.evidence ?? target.consentEvidence ?? "",
+      at: at ? new Date(at).toISOString() : "" };
+  }
 
   const campaigns = useQuery({ queryKey: ["intelligent-outreach-campaigns"],
     queryFn: async () => (await api.get<Campaign[]>(`${API}/campaigns`)).data,
@@ -203,7 +230,7 @@ export function IntelligentOutreachPanel() {
 
     <Card><CardContent className="space-y-4 p-5">
       <div><h3 className="text-lg font-bold text-slate-950 dark:text-slate-100">1. Importar planilha</h3>
-        <p className="text-sm text-slate-600 dark:text-slate-300">O arquivo é lido no servidor. A IA vê apenas cabeçalhos ambíguos. A prévia não cria leads e nenhum campo de permissão da planilha vira opt-in automaticamente.</p></div>
+        <p className="text-sm text-slate-600 dark:text-slate-300">O arquivo é lido no servidor. A IA vê apenas cabeçalhos ambíguos. Origem, evidência e data/hora completas e válidas são importadas como autorização; uma coluna isolada de “permissão” não basta.</p></div>
       <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
         <FormField label="Arquivo XLSX"><Input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => {
           setFile(event.target.files?.[0] ?? null); setPreview(null); setMapping({}); setMappingDirty(false);
@@ -214,7 +241,8 @@ export function IntelligentOutreachPanel() {
         <div className="flex flex-wrap gap-3 text-sm font-semibold text-slate-800 dark:text-slate-200">
           <span>{preview.totalRows} linhas não vazias</span><span>{preview.validRows} válidas</span>
           <span>{preview.invalidRows} inválidas</span><span>{preview.duplicatePhones} repetidas</span>
-          <span>{preview.unverifiedConsent} sem autorização comprovada</span>
+          <span>{preview.verifiedConsent} com autorização declarada</span>
+          <span>{preview.unverifiedConsent} sem autorização completa</span>
         </div>
         <label className="block text-sm text-slate-700 dark:text-slate-200">Aba a importar
           <select className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 dark:border-slate-700 dark:bg-slate-950" value={preview.selectedSheet} onChange={(event) => void previewFile(event.target.value)}>
@@ -235,11 +263,14 @@ export function IntelligentOutreachPanel() {
         {preview.mappingWarning && <p className="text-sm text-amber-700 dark:text-amber-300">{preview.mappingWarning}</p>}
         {mappingDirty && <Button variant="outline" disabled={busy} onClick={() => void previewFile(preview.selectedSheet, true)}>Recalcular prévia com este mapeamento</Button>}
         <div className="max-h-64 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
-          <table className="w-full min-w-[650px] text-left text-xs"><thead className="sticky top-0 bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"><tr>
-            <th className="p-2">Linha</th><th className="p-2">Estabelecimento</th><th className="p-2">Telefone</th><th className="p-2">Segmento</th><th className="p-2">Permissão da origem</th><th className="p-2">Validação</th>
+          <table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"><tr>
+            <th className="p-2">Linha</th><th className="p-2">Estabelecimento</th><th className="p-2">Telefone</th><th className="p-2">Segmento</th>
+            <th className="p-2">Origem</th><th className="p-2">Evidência</th><th className="p-2">Data/hora</th><th className="p-2">Validação</th>
           </tr></thead><tbody>{preview.samples.map((row) => <tr key={row.rowNumber} className="border-t border-slate-100 dark:border-slate-800">
             <td className="p-2">{row.rowNumber}</td><td className="p-2">{row.name || "—"}</td><td className="p-2">{row.phone || "—"}</td>
-            <td className="p-2">{row.segment || "—"}</td><td className="p-2">{row.consent}</td><td className="p-2">{row.issue || "Válido; opt-in pendente"}</td>
+            <td className="p-2">{row.segment || "—"}</td><td className="p-2">{row.consentSource || "—"}</td>
+            <td className="max-w-52 break-all p-2">{row.consentEvidence || "—"}</td><td className="p-2">{row.consentDate || "—"}</td>
+            <td className="p-2">{row.issue || row.consentIssue || (row.consentReady ? "Autorização pronta para importação" : "Autorização pendente")}</td>
           </tr>)}</tbody></table>
         </div>
         <FormField label="Nome da campanha"><Input value={campaignName} maxLength={120} onChange={(event) => setCampaignName(event.target.value)} placeholder="Ex.: pizzarias de Goiânia · outubro" /></FormField>
@@ -315,16 +346,13 @@ export function IntelligentOutreachPanel() {
                 </div>
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
                   <p className="font-semibold text-amber-900 dark:text-amber-200">Autorização para contato</p>
-                  <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">A planilha não comprova opt-in. Registre uma evidência verificável obtida antes do envio; não marque como autorizada por suposição.</p>
+                  <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">As três colunas completas da planilha são preenchidas automaticamente. Confira se a origem e a evidência correspondem a uma autorização real; não registre por suposição.</p>
                   <div className="grid gap-2 sm:grid-cols-3">
-                    <Input placeholder="Origem da autorização" value={consentDraft[target.id]?.source ?? ""} onChange={(event) => setConsentDraft((current) => ({ ...current, [target.id]: { ...current[target.id], source: event.target.value, evidence: current[target.id]?.evidence ?? "", at: current[target.id]?.at ?? "" } }))} />
-                    <Input placeholder="Evidência (protocolo/link/registro)" value={consentDraft[target.id]?.evidence ?? ""} onChange={(event) => setConsentDraft((current) => ({ ...current, [target.id]: { ...current[target.id], evidence: event.target.value, source: current[target.id]?.source ?? "", at: current[target.id]?.at ?? "" } }))} />
-                    <Input type="datetime-local" value={consentDraft[target.id]?.at ?? ""} onChange={(event) => setConsentDraft((current) => ({ ...current, [target.id]: { ...current[target.id], at: event.target.value, source: current[target.id]?.source ?? "", evidence: current[target.id]?.evidence ?? "" } }))} />
+                    <Input aria-label="Origem da autorização" placeholder="Origem da autorização" value={consentDraft[target.id]?.source ?? target.consentSource ?? ""} onChange={(event) => updateConsentDraft(target, "source", event.target.value)} />
+                    <Input aria-label="Evidência da autorização" placeholder="Evidência (protocolo/link/registro)" value={consentDraft[target.id]?.evidence ?? target.consentEvidence ?? ""} onChange={(event) => updateConsentDraft(target, "evidence", event.target.value)} />
+                    <Input aria-label="Data e hora da autorização" type="datetime-local" value={consentDraft[target.id]?.at ?? localDateTime(target.consentAt)} onChange={(event) => updateConsentDraft(target, "at", event.target.value)} />
                   </div>
-                  <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy} onClick={() => void targetAction(target.id, "consent", {
-                    status: "CONFIRMADO", source: consentDraft[target.id]?.source, evidence: consentDraft[target.id]?.evidence,
-                    at: consentDraft[target.id]?.at ? new Date(consentDraft[target.id].at).toISOString() : "",
-                  })}>Registrar opt-in</Button>
+                  <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy} onClick={() => void targetAction(target.id, "consent", consentPayload(target))}>{target.consentStatus === "CONFIRMADO" ? "Atualizar autorização" : "Registrar opt-in"}</Button>
                     <Button size="sm" variant="outline" disabled={busy} onClick={() => void targetAction(target.id, "consent", { status: "NEGADO" })}>Não contatar</Button></div>
                 </div>
               </div>}

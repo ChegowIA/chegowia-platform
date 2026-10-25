@@ -9,7 +9,10 @@ export const OUTREACH_MAX_COLUMNS = 80;
 export const OUTREACH_MAX_MESSAGE_CHARS = 500;
 export const OUTREACH_MIN_INTERVAL_MS = 60_000;
 
-export const OUTREACH_FIELDS = ["name", "phone", "segment", "city", "state", "address", "website", "consent"] as const;
+export const OUTREACH_FIELDS = [
+  "name", "phone", "segment", "city", "state", "address", "website", "consent",
+  "consentSource", "consentEvidence", "consentAt",
+] as const;
 export type OutreachField = typeof OUTREACH_FIELDS[number];
 export type OutreachMapping = Partial<Record<OutreachField, number>>;
 
@@ -57,6 +60,9 @@ const ALIASES: Record<OutreachField, string[]> = {
   address: ["endereco completo", "endereco", "rua endereco original", "rua", "logradouro", "bairro"],
   website: ["website", "website url cadastrada", "website link cadastrado", "site", "url", "dominio"],
   consent: ["permissao para whatsapp", "permissao whatsapp", "permissao_whatsapp", "autorizacao", "opt in", "consentimento"],
+  consentSource: ["origem da autorizacao", "origem do opt in", "origem do consentimento", "canal da autorizacao"],
+  consentEvidence: ["evidencia da autorizacao", "evidencia do opt in", "evidencia", "protocolo da autorizacao", "comprovante da autorizacao"],
+  consentAt: ["data da autorizacao", "data e hora da autorizacao", "data do opt in", "data do consentimento", "autorizado em"],
 };
 
 function cleanHeader(value: unknown) {
@@ -153,8 +159,34 @@ export type MappedOutreachRow = {
   address: string | null;
   website: string | null;
   consentValue: string | null;
+  consentSource: string | null;
+  consentEvidence: string | null;
+  consentDateValue: string | null;
+  consentAt: Date | null;
+  consentIssue: string | null;
+  consentDenied: boolean;
   issue: string | null;
 };
+
+/** Datas sem fuso na planilha são interpretadas no horário de Brasília. */
+export function parseOutreachConsentDate(raw: string): Date | null {
+  const value = raw.trim();
+  const br = /^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  const localIso = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  const zonedIso = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/i.exec(value);
+  if (!br && !localIso && !zonedIso) return null;
+  const parts = br
+    ? { year: +br[3], month: +br[2], day: +br[1], hour: +br[4], minute: +br[5], second: +(br[6] ?? 0) }
+    : { year: +(localIso ?? zonedIso)![1], month: +(localIso ?? zonedIso)![2], day: +(localIso ?? zonedIso)![3],
+        hour: +(localIso ?? zonedIso)![4], minute: +(localIso ?? zonedIso)![5], second: +((localIso ?? zonedIso)![6] ?? 0) };
+  const calendar = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+  if (calendar.getUTCFullYear() !== parts.year || calendar.getUTCMonth() !== parts.month - 1
+    || calendar.getUTCDate() !== parts.day || parts.hour > 23 || parts.minute > 59 || parts.second > 59) return null;
+  const normalized = zonedIso ? value : `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`
+    + `T${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}-03:00`;
+  const date = new Date(normalized);
+  return Number.isFinite(date.getTime()) && date <= new Date() ? date : null;
+}
 
 export function mapOutreachRows(sheet: OutreachSheet, mapping: OutreachMapping): MappedOutreachRow[] {
   if (!validateOutreachMapping(mapping, sheet.headers)) throw new Error("Mapeamento inválido: selecione nome e telefone sem repetir colunas.");
@@ -166,6 +198,18 @@ export function mapOutreachRows(sheet: OutreachSheet, mapping: OutreachMapping):
     const phoneRaw = value("phone");
     const phone = phoneRaw ? normalizarTelefoneBrasileiro(phoneRaw) : null;
     const name = value("name")?.slice(0, 120) ?? null;
+    const consentSource = value("consentSource");
+    const consentEvidence = value("consentEvidence");
+    const consentDateValue = value("consentAt");
+    const consentDenied = /^(?:n[aã]o|negad[oa]|recusad[oa]|revogad[oa]|n[aã]o contatar|pare|stop|opt[ -]?out)$/i.test(value("consent") ?? "");
+    const suppliedConsent = Boolean(consentSource || consentEvidence || consentDateValue);
+    const consentAt = consentDateValue ? parseOutreachConsentDate(consentDateValue) : null;
+    const consentIssue = consentDenied ? "planilha indica não contatar"
+      : !suppliedConsent ? null
+      : !consentSource || !consentEvidence || !consentDateValue ? "autorização incompleta: informe origem, evidência e data/hora"
+        : consentSource.length < 3 || consentSource.length > 191 ? "origem da autorização deve ter de 3 a 191 caracteres"
+          : consentEvidence.length < 12 || consentEvidence.length > 1000 ? "evidência deve ter de 12 a 1.000 caracteres"
+            : !consentAt ? "data da autorização inválida ou futura; use dd/mm/aaaa HH:mm (Brasília) ou ISO com fuso" : null;
     const issue = !name ? "nome do estabelecimento ausente"
       : !phone ? "telefone brasileiro inválido ou ausente"
         : pareceTelefoneFixo(phone) ? "telefone fixo: WhatsApp não confirmado" : null;
@@ -177,6 +221,8 @@ export function mapOutreachRows(sheet: OutreachSheet, mapping: OutreachMapping):
       address: value("address")?.slice(0, 500) ?? null,
       website: value("website")?.slice(0, 500) ?? null,
       consentValue: value("consent")?.slice(0, 120) ?? null,
+      consentSource, consentEvidence, consentDateValue, consentAt: consentIssue ? null : consentAt,
+      consentIssue, consentDenied,
       issue,
     };
   });
