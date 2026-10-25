@@ -83,16 +83,19 @@ describe("importação XLSX de prospecção", () => {
     expect(rows[2].consentIssue).toMatch(/incompleta/);
     expect(rows[3].consentIssue).toMatch(/data.*inválida/);
     expect(parseOutreachConsentDate("2024-08-01T17:30:00Z")?.toISOString()).toBe("2024-08-01T17:30:00.000Z");
+    expect(parseOutreachConsentDate("25/10/2026")?.toISOString()).toBe("2026-10-25T03:00:00.000Z");
     expect(parseOutreachConsentDate("01/01/2999 10:00")).toBeNull();
+    expect(suggestOutreachMapping(["Nome", "Telefone", "Categoria", "Origem da autorização", "Evidência", "Data"]).consentAt).toBe(5);
+    expect(suggestOutreachMapping(["Nome", "Telefone", "Data de cadastro"]).consentAt).toBeUndefined();
   });
 
   it("mostra a autorização na prévia e a persiste somente nas linhas completas", async () => {
     const buffer = xlsx([
-      ["Nome", "Telefone", "Categoria", "Origem da autorização", "Evidência da autorização", "Data da autorização", "Permissão para WhatsApp"],
-      ["Pizzaria Sol", "62 99999-8888", "Pizzaria", "Formulário do site", "protocolo-123456", "01/08/2024 14:30", "Sim"],
-      ["Pizzaria Lua", "62 99999-8887", "Pizzaria", "Formulário do site", "", "01/08/2024 14:30", "Sim"],
+      ["Nome", "Telefone", "Categoria", "Origem da autorização", "Evidência da autorização", "Data", "Permissão para WhatsApp"],
+      ["Pizzaria Sol", "62 99999-8888", "Pizzaria", "Formulário do site", "protocolo-123456", "01/08/2024", "Sim"],
+      ["Pizzaria Lua", "62 99999-8887", "Pizzaria", "Formulário do site", "", "01/08/2024", "Sim"],
       ["Pizzaria Mar", "62 99999-8886", "Pizzaria", "", "", "", ""],
-      ["Pizzaria Não", "62 99999-8885", "Pizzaria", "Formulário do site", "protocolo-123456", "01/08/2024 14:30", "Não"],
+      ["Pizzaria Não", "62 99999-8885", "Pizzaria", "Formulário do site", "protocolo-123456", "01/08/2024", "Não"],
     ]);
     const targets: any[] = [];
     const importRows: any[] = [];
@@ -117,7 +120,7 @@ describe("importação XLSX de prospecção", () => {
       mapping: preview.mapping, name: "Campanha de teste" }, "admin-1");
     expect(result).toMatchObject({ authorizationReady: 1, authorizationPending: 2, excludedRows: 1 });
     expect(targets[0]).toMatchObject({ consentStatus: "CONFIRMADO", consentSource: "Formulário do site", consentEvidence: "protocolo-123456" });
-    expect(targets[0].consentAt.toISOString()).toBe("2024-08-01T17:30:00.000Z");
+    expect(targets[0].consentAt.toISOString()).toBe("2024-08-01T03:00:00.000Z");
     expect(targets[1].consentStatus).toBe("NAO_VERIFICADO");
     expect(targets[1].consentSource).toBe("Formulário do site");
     expect(targets[1].consentAt).toBeNull();

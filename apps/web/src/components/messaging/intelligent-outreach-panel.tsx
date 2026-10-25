@@ -17,7 +17,7 @@ const FIELDS: Array<{ key: Field; label: string }> = [
   { key: "website", label: "Website" }, { key: "consent", label: "Permissão (informativa)" },
   { key: "consentSource", label: "Origem da autorização" },
   { key: "consentEvidence", label: "Evidência da autorização" },
-  { key: "consentAt", label: "Data e hora da autorização" },
+  { key: "consentAt", label: "Data da autorização (ou Data)" },
 ];
 type Mapping = Partial<Record<Field, number>>;
 type Preview = {
@@ -230,7 +230,7 @@ export function IntelligentOutreachPanel() {
 
     <Card><CardContent className="space-y-4 p-5">
       <div><h3 className="text-lg font-bold text-slate-950 dark:text-slate-100">1. Importar planilha</h3>
-        <p className="text-sm text-slate-600 dark:text-slate-300">O arquivo é lido no servidor. A IA vê apenas cabeçalhos ambíguos. Origem, evidência e data/hora completas e válidas são importadas como autorização; uma coluna isolada de “permissão” não basta.</p></div>
+        <p className="text-sm text-slate-600 dark:text-slate-300">O arquivo é lido no servidor. A IA vê apenas cabeçalhos ambíguos. Origem, evidência e data completas e válidas são importadas automaticamente como autorização; uma coluna isolada de “permissão” não basta. Se houver só a data, o sistema registra 00:00 no horário de Brasília como convenção técnica, não como hora comprovada.</p></div>
       <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
         <FormField label="Arquivo XLSX"><Input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => {
           setFile(event.target.files?.[0] ?? null); setPreview(null); setMapping({}); setMappingDirty(false);
@@ -265,7 +265,7 @@ export function IntelligentOutreachPanel() {
         <div className="max-h-64 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
           <table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"><tr>
             <th className="p-2">Linha</th><th className="p-2">Estabelecimento</th><th className="p-2">Telefone</th><th className="p-2">Segmento</th>
-            <th className="p-2">Origem</th><th className="p-2">Evidência</th><th className="p-2">Data/hora</th><th className="p-2">Validação</th>
+            <th className="p-2">Origem</th><th className="p-2">Evidência</th><th className="p-2">Data</th><th className="p-2">Validação</th>
           </tr></thead><tbody>{preview.samples.map((row) => <tr key={row.rowNumber} className="border-t border-slate-100 dark:border-slate-800">
             <td className="p-2">{row.rowNumber}</td><td className="p-2">{row.name || "—"}</td><td className="p-2">{row.phone || "—"}</td>
             <td className="p-2">{row.segment || "—"}</td><td className="p-2">{row.consentSource || "—"}</td>
@@ -347,12 +347,13 @@ export function IntelligentOutreachPanel() {
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
                   <p className="font-semibold text-amber-900 dark:text-amber-200">Autorização para contato</p>
                   <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">As três colunas completas da planilha são preenchidas automaticamente. Confira se a origem e a evidência correspondem a uma autorização real; não registre por suposição.</p>
+                  {target.consentStatus === "CONFIRMADO" && <p className="mb-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">Autorização já salva na importação. Não é necessário registrar novamente.</p>}
                   <div className="grid gap-2 sm:grid-cols-3">
                     <Input aria-label="Origem da autorização" placeholder="Origem da autorização" value={consentDraft[target.id]?.source ?? target.consentSource ?? ""} onChange={(event) => updateConsentDraft(target, "source", event.target.value)} />
                     <Input aria-label="Evidência da autorização" placeholder="Evidência (protocolo/link/registro)" value={consentDraft[target.id]?.evidence ?? target.consentEvidence ?? ""} onChange={(event) => updateConsentDraft(target, "evidence", event.target.value)} />
                     <Input aria-label="Data e hora da autorização" type="datetime-local" value={consentDraft[target.id]?.at ?? localDateTime(target.consentAt)} onChange={(event) => updateConsentDraft(target, "at", event.target.value)} />
                   </div>
-                  <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy} onClick={() => void targetAction(target.id, "consent", consentPayload(target))}>{target.consentStatus === "CONFIRMADO" ? "Atualizar autorização" : "Registrar opt-in"}</Button>
+                  <div className="mt-2 flex gap-2"><Button size="sm" disabled={busy || (target.consentStatus === "CONFIRMADO" && !consentDraft[target.id])} onClick={() => void targetAction(target.id, "consent", consentPayload(target))}>{target.consentStatus === "CONFIRMADO" ? "Salvar alteração da autorização" : "Registrar opt-in"}</Button>
                     <Button size="sm" variant="outline" disabled={busy} onClick={() => void targetAction(target.id, "consent", { status: "NEGADO" })}>Não contatar</Button></div>
                 </div>
               </div>}

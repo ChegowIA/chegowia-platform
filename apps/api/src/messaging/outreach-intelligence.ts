@@ -62,7 +62,7 @@ const ALIASES: Record<OutreachField, string[]> = {
   consent: ["permissao para whatsapp", "permissao whatsapp", "permissao_whatsapp", "autorizacao", "opt in", "consentimento"],
   consentSource: ["origem da autorizacao", "origem do opt in", "origem do consentimento", "canal da autorizacao"],
   consentEvidence: ["evidencia da autorizacao", "evidencia do opt in", "evidencia", "protocolo da autorizacao", "comprovante da autorizacao"],
-  consentAt: ["data da autorizacao", "data e hora da autorizacao", "data do opt in", "data do consentimento", "autorizado em"],
+  consentAt: ["data da autorizacao", "data e hora da autorizacao", "data do opt in", "data do consentimento", "autorizado em", "data"],
 };
 
 function cleanHeader(value: unknown) {
@@ -81,7 +81,7 @@ export function suggestOutreachMapping(headers: string[]): OutreachMapping {
       if (!cleaned || /^link whatsapp|^status|^proximo|^ultimo/.test(cleaned)) return;
       const aliases = ALIASES[field];
       const exact = aliases.findIndex((alias) => cleanHeader(alias) === cleaned);
-      const partial = aliases.some((alias) => cleaned.startsWith(`${cleanHeader(alias)} `));
+      const partial = aliases.some((alias) => cleanHeader(alias) !== "data" && cleaned.startsWith(`${cleanHeader(alias)} `));
       const score = exact >= 0 ? 100 - exact : partial ? 30 : 0;
       if (score > (best?.score ?? 0)) best = { index, score };
     });
@@ -168,17 +168,17 @@ export type MappedOutreachRow = {
   issue: string | null;
 };
 
-/** Datas sem fuso na planilha são interpretadas no horário de Brasília. */
+/** Datas sem fuso na planilha são interpretadas no horário de Brasília; sem hora, usa-se 00:00. */
 export function parseOutreachConsentDate(raw: string): Date | null {
   const value = raw.trim();
-  const br = /^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value);
-  const localIso = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  const br = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(value);
+  const localIso = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(value);
   const zonedIso = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/i.exec(value);
   if (!br && !localIso && !zonedIso) return null;
   const parts = br
-    ? { year: +br[3], month: +br[2], day: +br[1], hour: +br[4], minute: +br[5], second: +(br[6] ?? 0) }
+    ? { year: +br[3], month: +br[2], day: +br[1], hour: +(br[4] ?? 0), minute: +(br[5] ?? 0), second: +(br[6] ?? 0) }
     : { year: +(localIso ?? zonedIso)![1], month: +(localIso ?? zonedIso)![2], day: +(localIso ?? zonedIso)![3],
-        hour: +(localIso ?? zonedIso)![4], minute: +(localIso ?? zonedIso)![5], second: +((localIso ?? zonedIso)![6] ?? 0) };
+        hour: +((localIso ?? zonedIso)![4] ?? 0), minute: +((localIso ?? zonedIso)![5] ?? 0), second: +((localIso ?? zonedIso)![6] ?? 0) };
   const calendar = new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
   if (calendar.getUTCFullYear() !== parts.year || calendar.getUTCMonth() !== parts.month - 1
     || calendar.getUTCDate() !== parts.day || parts.hour > 23 || parts.minute > 59 || parts.second > 59) return null;
@@ -206,10 +206,10 @@ export function mapOutreachRows(sheet: OutreachSheet, mapping: OutreachMapping):
     const consentAt = consentDateValue ? parseOutreachConsentDate(consentDateValue) : null;
     const consentIssue = consentDenied ? "planilha indica não contatar"
       : !suppliedConsent ? null
-      : !consentSource || !consentEvidence || !consentDateValue ? "autorização incompleta: informe origem, evidência e data/hora"
+      : !consentSource || !consentEvidence || !consentDateValue ? "autorização incompleta: informe origem, evidência e data"
         : consentSource.length < 3 || consentSource.length > 191 ? "origem da autorização deve ter de 3 a 191 caracteres"
           : consentEvidence.length < 12 || consentEvidence.length > 1000 ? "evidência deve ter de 12 a 1.000 caracteres"
-            : !consentAt ? "data da autorização inválida ou futura; use dd/mm/aaaa HH:mm (Brasília) ou ISO com fuso" : null;
+            : !consentAt ? "data da autorização inválida ou futura; use dd/mm/aaaa, dd/mm/aaaa HH:mm ou ISO com fuso" : null;
     const issue = !name ? "nome do estabelecimento ausente"
       : !phone ? "telefone brasileiro inválido ou ausente"
         : pareceTelefoneFixo(phone) ? "telefone fixo: WhatsApp não confirmado" : null;
