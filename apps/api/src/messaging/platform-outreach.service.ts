@@ -81,7 +81,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
-    private readonly realtime: RealtimeGateway,
+    @Optional() private readonly realtime: RealtimeGateway,
     @Optional() private readonly intelligence?: OutreachIntelligenceService,
     @Optional() private readonly sender?: BaileysOutreachSenderService,
   ) {}
@@ -94,9 +94,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     this.timer = setInterval(() => void this.processarDisparos(), INTERVALO_DO_WORKER_MS);
-    this.timer.unref();
     this.intelligenceTimer = setInterval(() => void this.processarInteligencia(), INTERVALO_DO_WORKER_MS);
-    this.intelligenceTimer.unref();
     void this.processarDisparos();
     void this.processarInteligencia();
   }
@@ -379,7 +377,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         nextSendAt: new Date(),
       },
     });
-    this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
+    this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
     return this.resumoComFila(atualizada);
   }
 
@@ -389,7 +387,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       where: { id },
       data: { status: OutreachCampaignStatus.PAUSADA, pausedReason: motivo, nextSendAt: null },
     });
-    this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
+    this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
     return this.resumoComFila(campanha);
   }
 
@@ -411,7 +409,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         },
       });
     });
-    this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
+    this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
     return this.resumoComFila(campanha);
   }
 
@@ -600,7 +598,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
           completedAt: new Date(),
         },
       });
-      this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
+      this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
       this.logger.log(`Disparo "${campanha.name}" concluído.`);
       return false;
     }
@@ -608,7 +606,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     const attemptId = await this.reservarEnvio(campanha, alvo);
     if (!attemptId) return false;
     await this.enviarParaAlvo(campanha, alvo, attemptId);
-    this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
+    this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
     return true;
   }
 

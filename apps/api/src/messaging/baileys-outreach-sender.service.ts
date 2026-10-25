@@ -37,7 +37,6 @@ export class BaileysOutreachSenderService implements OnModuleInit, OnModuleDestr
     await this.db().platformOutreachConnectionState.updateMany({ where: { id: "primary", status: "CONECTADO" },
       data: { status: "RECONECTANDO", qrCode: null, qrExpiresAt: null } });
     this.timer = setInterval(() => void this.tick().catch(() => this.logger.error("Falha ao atualizar conexão de prospecção.")), 3_000);
-    this.timer.unref();
     void this.tick().catch(() => this.logger.error("Falha ao iniciar conexão de prospecção."));
   }
 

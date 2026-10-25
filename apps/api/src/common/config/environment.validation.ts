@@ -19,6 +19,9 @@ function looksLikePlaceholder(value: string) {
 
 export function validateEnvironment(config: Record<string, unknown>) {
   const env = { ...config } as Record<string, string | undefined>;
+  if (env.APP_ROLE === "outreach-worker") {
+    throw new Error("APP_ROLE=outreach-worker deve usar o processo dedicado, não a API completa.");
+  }
   const production = env.NODE_ENV === "production";
   const gupshupEnabled = env.GUPSHUP_ENABLED === "true";
   // Provedor que atende contratações novas. Assinatura já criada no Stripe segue
@@ -68,9 +71,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
         "GUPSHUP_WEBHOOK_TOKEN",
         "WHATSAPP_TOKEN_ENCRYPTION_KEY",
       );
-    }
-    if (env.APP_ROLE === "outreach-worker") {
-      required.push("OUTREACH_SESSION_ENCRYPTION_KEY");
     }
   }
 
@@ -131,10 +131,6 @@ export function validateEnvironment(config: Record<string, unknown>) {
     const placeholders = secretKeys.filter((key) => looksLikePlaceholder(env[key] ?? ""));
     if (placeholders.length) {
       throw new Error(`Segredos de produção ainda contêm placeholders: ${placeholders.join(", ")}`);
-    }
-    if (env.APP_ROLE === "outreach-worker") {
-      if (!/^[a-f\d]{64}$/i.test(env.OUTREACH_SESSION_ENCRYPTION_KEY ?? ""))
-        throw new Error("OUTREACH_SESSION_ENCRYPTION_KEY deve conter 64 caracteres hexadecimais.");
     }
 
     if (asaasBilling) {

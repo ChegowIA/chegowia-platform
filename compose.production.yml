@@ -154,41 +154,19 @@ services:
     restart: unless-stopped
     deploy:
       replicas: 1
-    env_file:
-      - ${PRODUCTION_ENV_FILE:-.env.production}
-      - ${OUTREACH_ENV_FILE:-.env.outreach}
+    env_file: ${OUTREACH_ENV_FILE:-.env.outreach}
     environment:
       NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 3001
       APP_ROLE: outreach-worker
-      UPLOAD_ROOT: /data/uploads
-      PRIVATE_UPLOAD_ROOT: /data/private_uploads
-      CLAMAV_SCAN_ENABLED: "true"
-      CLAMAV_CONFIG_PATH: /etc/clamav/clamd-client.conf
-    volumes:
-      - ${DATA_ROOT:-/srv/chegowia/data}/uploads:/data/uploads
-      - ${DATA_ROOT:-/srv/chegowia/data}/private_uploads:/data/private_uploads
-      - ./infra/clamd-client.conf:/etc/clamav/clamd-client.conf:ro
     depends_on:
-      storage-init:
-        condition: service_completed_successfully
       mysql:
         condition: service_healthy
-      clamav:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 20s
-      timeout: 5s
-      retries: 6
-      start_period: 45s
     init: true
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
-    # A rede frontend fornece saída para DeepSeek/Meta; nenhuma porta é publicada
-    # nem roteada pelo Caddy para este serviço.
+    # A rede frontend fornece saída para DeepSeek/WhatsApp; o processo não abre
+    # HTTP nem publica portas.
     networks: [backend, frontend]
     logging: *default-logging
 

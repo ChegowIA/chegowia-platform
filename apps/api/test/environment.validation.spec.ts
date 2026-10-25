@@ -76,13 +76,9 @@ describe("validateEnvironment", () => {
     expect(() => validateEnvironment({ ...validProduction, API_REPLICAS: "1" })).not.toThrow();
   });
 
-  it("exige chave exclusiva válida para o worker QR, não para a API", () => {
+  it("não permite iniciar a API completa como worker de prospecção", () => {
     expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker" }))
-      .toThrow("OUTREACH_SESSION_ENCRYPTION_KEY");
-    expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker",
-      OUTREACH_SESSION_ENCRYPTION_KEY: "curta" })).toThrow("64 caracteres hexadecimais");
-    expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker",
-      OUTREACH_SESSION_ENCRYPTION_KEY: "ab".repeat(32) })).not.toThrow();
+      .toThrow("processo dedicado");
   });
 
   it("recusa contagem de réplicas inválida", () => {
