@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   BadRequestException,
   Inject,
@@ -6,17 +7,20 @@ import {
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from "@nestjs/common";
 import {
   OutreachCampaignStatus,
   OutreachTargetStatus,
   WhatsAppConversationMode,
 } from "@prisma/client";
-import { runsBackgroundJobs } from "../common/config/app-role";
+import { runsOutreachJobs } from "../common/config/app-role";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
-import { PlatformWhatsAppService } from "./platform-whatsapp.service";
+import { OutreachIntelligenceService } from "./outreach-intelligence.service";
+import { BaileysOutreachSenderService } from "./baileys-outreach-sender.service";
+import { OUTREACH_CHANNEL_KEY, OUTREACH_MIN_INTERVAL_MS } from "./outreach-intelligence";
 import { CreateOutreachCampaignDto } from "./dto/create-outreach-campaign.dto";
 import { BlockOutreachPhoneDto } from "./dto/block-outreach-phone.dto";
 import {
@@ -44,11 +48,8 @@ const INTERVALO_DO_WORKER_MS = 10_000;
 const ESPERA_APOS_TETO_MS = 15 * 60 * 1000;
 
 /**
- * Janela em que uma abordagem comercial é aceitável.
- *
- * Mensagem de venda às 3h da manhã é o caminho mais curto para ser denunciado, e
- * denúncia derruba a qualidade do número institucional — que é o mesmo do
- * suporte. Domingo fica de fora pelo mesmo motivo.
+ * Janela em que uma abordagem comercial autorizada é aceitável.
+ * Domingo fica de fora para evitar contato fora do expediente.
  */
 const HORA_INICIAL_PADRAO = 9;
 const HORA_FINAL_PADRAO = 20;
@@ -56,60 +57,64 @@ const HORA_FINAL_PADRAO = 20;
 /**
  * Teto de conversas iniciadas por nós em 24h, somando todos os disparos.
  *
- * A Meta limita conversa iniciada pela empresa por faixas — um número novo
- * começa em 250 por 24h e sobe conforme a qualidade. Passar do teto faz o
- * provedor recusar, e recusa em série derruba a reputação. O limite por disparo
- * não protege disso: três disparos de 200 somam 600 no mesmo número.
+ * Limite operacional conservador, independente dos limites do WhatsApp.
+ * O limite por campanha não protege o remetente: três campanhas somam volume.
  */
 function tetoDiarioDoNumero() {
   const configurado = Number(process.env.WHATSAPP_OUTREACH_DAILY_CAP ?? "");
   return Number.isFinite(configurado) && configurado > 0 ? Math.floor(configurado) : 250;
 }
 
-/** Acima disso o disparo para sozinho: erro em série é configuração errada. */
-const FALHAS_SEGUIDAS_PARA_PAUSAR = 5;
-const PROPORCAO_DE_FALHA_PARA_PAUSAR = 0.3;
-const TENTATIVAS_MINIMAS_PARA_AVALIAR = 10;
-
 type Contato = { phone: string; name: string | null; city: string | null };
 
 /**
- * Prospecção ativa pelo número institucional.
- *
- * O disparo é deliberadamente lento. O que se protege aqui não é a mensagem, é o
- * número: se ele for restringido pela Meta por denúncia de spam, cai junto o
- * atendimento de quem já é cliente, porque é o mesmo número. Por isso o envio sai
- * um por vez, com intervalo, dentro do horário comercial, e para sozinho quando
- * começa a falhar.
+ * Fila de prospecção pelo número QR isolado da Gupshup operacional.
+ * Envio apenas após consentimento, revisão e aprovação individual.
  */
 @Injectable()
 export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PlatformOutreachService.name);
   private timer?: NodeJS.Timeout;
+  private intelligenceTimer?: NodeJS.Timeout;
   private processando = false;
+  private preparando = false;
 
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
-    private readonly platform: PlatformWhatsAppService,
     private readonly realtime: RealtimeGateway,
+    @Optional() private readonly intelligence?: OutreachIntelligenceService,
+    @Optional() private readonly sender?: BaileysOutreachSenderService,
   ) {}
 
   onModuleInit() {
-    // Réplica de HTTP puro não dispara. Sem isto, cada réplica de API rodaria o
-    // mesmo worker: o intervalo entre mensagens ficaria dividido pelo número de
-    // réplicas e a mesma pessoa poderia receber duas abordagens. Ver
-    // common/config/app-role.ts.
-    if (!runsBackgroundJobs()) {
-      this.logger.log("Processo em papel de API: prospecção não dispara aqui.");
+    // A fila só roda no serviço privado outreach-worker. A trava persistente
+    // ainda protege contra instâncias acidentalmente duplicadas.
+    if (!runsOutreachJobs()) {
+      this.logger.log("Prospecção desativada neste processo; exige APP_ROLE=outreach-worker.");
       return;
     }
     this.timer = setInterval(() => void this.processarDisparos(), INTERVALO_DO_WORKER_MS);
     this.timer.unref();
+    this.intelligenceTimer = setInterval(() => void this.processarInteligencia(), INTERVALO_DO_WORKER_MS);
+    this.intelligenceTimer.unref();
     void this.processarDisparos();
+    void this.processarInteligencia();
   }
 
   onModuleDestroy() {
     if (this.timer) clearInterval(this.timer);
+    if (this.intelligenceTimer) clearInterval(this.intelligenceTimer);
+  }
+
+  private async processarInteligencia() {
+    if (this.preparando || !this.intelligence) return;
+    this.preparando = true;
+    try {
+      await this.intelligence.prepareNext();
+      await this.intelligence.classifyNext();
+    } catch (error) {
+      this.logger.error(`Fila de inteligência: ${error instanceof Error ? error.message : String(error)}`);
+    } finally { this.preparando = false; }
   }
 
   private db() {
@@ -137,8 +142,8 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
        * Como os primeiros contatos foram entendidos.
        *
        * Nenhuma heurística acerta todo rótulo: "liguei pro 62999998888 ontem"
-       * deixa a frase no lugar do nome, e essa frase entraria no {{1}} do modelo
-       * aprovado. Mostrar a leitura antes do disparo resolve o que adivinhar não
+       * deixa a frase no lugar do nome e pode contaminar a mensagem gerada.
+       * Mostrar a leitura antes do disparo resolve o que adivinhar não
        * resolve — quem colou reconhece o absurdo em um olhar.
        */
       amostra: aptos.slice(0, 10).map((contato) => ({
@@ -231,70 +236,9 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   // Campanhas
   // ---------------------------------------------------------------------------
 
-  async criarCampanha(userId: string, dto: CreateOutreachCampaignDto) {
-    const channel = await this.db().platformWhatsAppChannel.findFirst();
-    if (!channel) throw new BadRequestException("Configure o WhatsApp institucional antes de prospectar.");
-
-    const leitura = lerListaDeContatos(dto.contacts);
-    if (!leitura.contatos.length) {
-      throw new BadRequestException(
-        "Nenhum telefone válido na lista. Cada linha precisa de DDD e número, como (62) 99999-8888.",
-      );
-    }
-    const descartes = await this.classificarDescartes(leitura.contatos);
-    const aptos = leitura.contatos.filter((contato) => !descartes.has(contato.phone));
-    if (!aptos.length) {
-      throw new BadRequestException(
-        "Todos os números da lista já foram abordados, já são clientes ou pediram para não receber.",
-      );
-    }
-
-    const user = await this.db().user.findUnique({ where: { id: userId }, select: { id: true, name: true } });
-    // O piso é o giro do worker: pedir 5 segundos não faria a mensagem sair em
-    // 5, e um intervalo que a configuração aceita mas o sistema não cumpre é
-    // pior do que um limite declarado.
-    const minimo = Math.max(dto.minIntervalSeconds ?? 15, INTERVALO_DO_WORKER_MS / 1000);
-    const campanha = await this.db().platformOutreachCampaign.create({
-      data: {
-        channelId: channel.id,
-        name: dto.name.trim(),
-        fallbackName: dto.fallbackName?.trim() || "tudo bem",
-        dailyLimit: Math.min(Math.max(dto.dailyLimit ?? 200, 1), 1000),
-        minIntervalSeconds: minimo,
-        // Intervalo máximo menor que o mínimo faria o sorteio devolver NaN e o
-        // disparo parar sem explicação.
-        maxIntervalSeconds: Math.max(dto.maxIntervalSeconds ?? 30, minimo),
-        respectBusinessHours: dto.respectBusinessHours ?? true,
-        createdByUserId: user?.id ?? null,
-        createdByName: user?.name ?? null,
-        totalTargets: aptos.length,
-        targets: {
-          create: [
-            ...aptos.map((contato) => ({
-              phone: contato.phone,
-              name: contato.name,
-              city: contato.city,
-            })),
-            // Os descartados ficam registrados para o relatório do disparo
-            // fechar com o que foi colado. Apagados, ninguém entenderia por que
-            // 400 números viraram 120 envios.
-            ...[...descartes.entries()].map(([phone, motivo]) => ({
-              phone,
-              status: OutreachTargetStatus.DESCARTADO,
-              discardReason: motivo,
-            })),
-          ],
-        },
-      },
-      include: { _count: { select: { targets: true } } },
-    });
-
-    this.logger.log(
-      `Disparo "${campanha.name}" criado com ${aptos.length} contato(s) aptos e ${descartes.size} descartado(s).`,
-    );
-    return this.detalharCampanha(campanha.id);
+  async criarCampanha(_userId: string, _dto: CreateOutreachCampaignDto) {
+    throw new BadRequestException("Use a importação XLSX da Central de Prospecção. Listas coladas não comprovam autorização para contato.");
   }
-
   async listarCampanhas() {
     const campanhas = await this.db().platformOutreachCampaign.findMany({
       orderBy: { createdAt: "desc" },
@@ -394,6 +338,10 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       respectBusinessHours: campanha.respectBusinessHours,
       nextSendAt: campanha.nextSendAt,
       pausedReason: campanha.pausedReason,
+      sourceType: campanha.sourceType,
+      approvedAt: campanha.approvedAt,
+      preparationRequestedAt: campanha.preparationRequestedAt,
+      promptVersion: campanha.promptVersion,
       createdByName: campanha.createdByName,
       startedAt: campanha.startedAt,
       completedAt: campanha.completedAt,
@@ -406,12 +354,21 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     if (campanha.status === OutreachCampaignStatus.CONCLUIDA || campanha.status === OutreachCampaignStatus.CANCELADA) {
       throw new BadRequestException("Este disparo já foi encerrado. Crie um novo com a lista que falta.");
     }
-    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { id: campanha.channelId } });
-    if (!channel?.outreachTemplateId && !channel?.outreachTemplateName) {
-      throw new BadRequestException(
-        "Cadastre o modelo aprovado na Meta antes de começar. Número que nunca escreveu só recebe modelo.",
-      );
+    if (campanha.sourceType !== "XLSX" || !campanha.approvedAt || campanha.preparationRequestedAt) {
+      throw new BadRequestException("Importe a planilha e aprove a campanha, as mensagens e as autorizações antes de iniciar.");
     }
+    const impedidos = await this.db().platformOutreachTarget.count({ where: {
+      campaignId: id, status: OutreachTargetStatus.PENDENTE,
+      OR: [
+        { consentStatus: { not: "CONFIRMADO" } }, { generationStatus: { not: "PRONTO" } },
+        { approvalStatus: { not: "APROVADO" } }, { messageText: null },
+      ],
+    } });
+    if (impedidos) throw new BadRequestException(`${impedidos} lead(s) ainda não estão autorizados, validados e aprovados.`);
+    if (!(await this.sender?.status())?.configured)
+      throw new BadRequestException("Conecte o WhatsApp de Prospecção pelo QR Code antes de iniciar.");
+    const state = await this.db().platformOutreachSenderState.findUnique({ where: { channelId: campanha.channelId } });
+    if (state?.inFlightTargetId) throw new BadRequestException("Existe uma tentativa de envio sem conclusão. Faça a conciliação antes de retomar.");
     const atualizada = await this.db().platformOutreachCampaign.update({
       where: { id },
       data: {
@@ -464,6 +421,43 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     return campanha;
   }
 
+  async senderStatus() {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: OUTREACH_CHANNEL_KEY } });
+    const state = channel ? await this.db().platformOutreachSenderState.findUnique({ where: { channelId: channel.id } }) : null;
+    return { ...(await this.sender?.status()), nextAllowedAt: state?.nextAllowedAt ?? null,
+      inFlightTargetId: state?.inFlightTargetId ?? null, inFlightAt: state?.inFlightAt ?? null };
+  }
+
+  /** Nunca reenvia uma tentativa ambígua; só libera os próximos leads após reconhecimento humano. */
+  async reconcileSender(targetId: string, userId: string) {
+    if (!targetId) throw new BadRequestException("Informe a tentativa a conciliar.");
+    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: OUTREACH_CHANNEL_KEY } });
+    if (!channel) throw new NotFoundException("Remetente não encontrado.");
+    return this.db().$transaction(async (tx: any) => {
+      await tx.$queryRaw`SELECT channelId FROM PlatformOutreachSenderState WHERE channelId = ${channel.id} FOR UPDATE`;
+      const state = await tx.platformOutreachSenderState.findUnique({ where: { channelId: channel.id } });
+      if (state?.inFlightTargetId !== targetId) throw new BadRequestException("Esta não é a tentativa pendente do remetente.");
+      const target = await tx.platformOutreachTarget.findUnique({ where: { id: targetId } });
+      if (!target) throw new NotFoundException("Lead da tentativa não encontrado.");
+      if (target.status === OutreachTargetStatus.RESERVADO) {
+        await tx.platformOutreachTarget.update({ where: { id: targetId }, data: {
+          status: OutreachTargetStatus.FALHOU, errorMessage: "Resultado incerto; conciliação manual necessária no provedor.",
+        } });
+        await tx.platformOutreachCampaign.update({ where: { id: target.campaignId }, data: {
+          status: OutreachCampaignStatus.PAUSADA, nextSendAt: null,
+          failedCount: { increment: 1 }, pausedReason: "Tentativa incerta conciliada; não reenviar este lead.",
+        } });
+      }
+      await tx.platformOutreachAttempt.updateMany({ where: { targetId, status: "INICIADA" }, data: {
+        status: "INCERTA", errorMessage: `Liberada manualmente por ${userId}; não reenviar.`, finishedAt: new Date(),
+      } });
+      await tx.platformOutreachSenderState.update({ where: { channelId: channel.id }, data: {
+        inFlightTargetId: null, inFlightAt: null,
+      } });
+      return { reconciled: true, targetId, resendAllowed: false };
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Lista de não contatar
   // ---------------------------------------------------------------------------
@@ -513,8 +507,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   /**
    * Um envio por giro, por campanha.
    *
-   * Enviar em lote seria mais rápido e é exatamente o que faz a Meta tratar o
-   * número como robô. O ritmo fica no registro da campanha, então reiniciar o
+   * O ritmo fica no registro da campanha e do remetente, então reiniciar o
    * processo não atropela a fila nem reenvia o que já saiu.
    */
   async processarDisparos(agora = new Date()) {
@@ -535,32 +528,31 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async girar(agora: Date) {
+    // Sem conexão, a fila permanece íntegra e retoma quando o QR for autenticado.
+    if (!(await this.sender?.status())?.configured) return;
     const campanhas = await this.db().platformOutreachCampaign.findMany({
-      where: { status: OutreachCampaignStatus.ENVIANDO },
+      where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: OUTREACH_CHANNEL_KEY } },
       orderBy: { nextSendAt: "asc" },
       include: { channel: true },
     });
     if (!campanhas.length) return;
 
     const enviadosNoNumero = await this.db().platformOutreachTarget.count({
-      where: { sentAt: { gte: inicioDaJanelaRolante(agora) } },
+      where: { campaign: { channel: { key: OUTREACH_CHANNEL_KEY } }, sentAt: { gte: inicioDaJanelaRolante(agora) } },
     });
     if (enviadosNoNumero >= tetoDiarioDoNumero()) {
       // Reagenda em vez de girar a cada 10 segundos consultando o banco.
       await this.db().platformOutreachCampaign.updateMany({
-        where: { status: OutreachCampaignStatus.ENVIANDO },
+        where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: OUTREACH_CHANNEL_KEY } },
         data: { nextSendAt: new Date(agora.getTime() + ESPERA_APOS_TETO_MS) },
       });
-      this.logger.warn(
-        `Teto de ${tetoDiarioDoNumero()} conversas iniciadas em 24h alcançado no número institucional. Disparos reagendados.`,
-      );
+      this.logger.warn(`Teto operacional de ${tetoDiarioDoNumero()} tentativas em 24h alcançado no remetente de prospecção. Campanhas reagendadas.`);
       return;
     }
 
     for (const campanha of campanhas) {
       try {
-        // Um envio por giro no total, não por campanha: o que a Meta observa é
-        // o número, e ele é o mesmo para todos os disparos.
+        // Um envio por giro no total: o mesmo número atende todas as campanhas.
         if (await this.avancarCampanha(campanha, agora)) break;
       } catch (error) {
         // Uma campanha com problema não pode parar as outras.
@@ -573,10 +565,14 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
 
   /** Devolve true quando um envio saiu, para o giro parar aí. */
   private async avancarCampanha(campanha: any, agora: Date): Promise<boolean> {
+    if (campanha.sourceType !== "XLSX" || !campanha.approvedAt) {
+      await this.pausar(campanha.id, "Campanha sem aprovação comprovada; envio bloqueado.");
+      return false;
+    }
     if (campanha.nextSendAt && new Date(campanha.nextSendAt).getTime() > agora.getTime()) return false;
     if (campanha.respectBusinessHours && !dentroDoHorarioComercial(agora)) return false;
 
-    // Janela rolante de 24h, e não "hoje": é assim que a Meta conta, e evita a
+    // Janela rolante de 24h, e não "hoje": evita a
     // virada de dia do fuso do servidor liberar o dobro de envios de uma vez.
     const enviadosNaJanela = await this.db().platformOutreachTarget.count({
       where: { campaignId: campanha.id, sentAt: { gte: inicioDaJanelaRolante(agora) } },
@@ -609,116 +605,126 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
-    /**
-     * Reserva o contato antes de enviar.
-     *
-     * O incremento condicionado ao número de tentativas que acabamos de ler é
-     * uma trava otimista: se outro processo tomou o mesmo contato entre a busca
-     * e aqui, a contagem volta zero e este giro desiste em vez de mandar a
-     * segunda mensagem para a mesma pessoa. Vale também para o giro que demora
-     * mais que o intervalo do worker.
-     */
-    const tentativasAntes = alvo.attempts ?? 0;
-    const tentativa = tentativasAntes + 1;
-    const reserva = await this.db().platformOutreachTarget.updateMany({
-      where: { id: alvo.id, status: OutreachTargetStatus.PENDENTE, attempts: tentativasAntes },
-      data: { attempts: tentativa },
-    });
-    if (reserva.count !== 1) return false;
-
-    await this.enviarParaAlvo(campanha, { ...alvo, attempts: tentativa });
-    await this.db().platformOutreachCampaign.update({
-      where: { id: campanha.id },
-      data: { nextSendAt: new Date(agora.getTime() + sorteioDeIntervaloMs(campanha)) },
-    });
+    const attemptId = await this.reservarEnvio(campanha, alvo);
+    if (!attemptId) return false;
+    await this.enviarParaAlvo(campanha, alvo, attemptId);
     this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
     return true;
   }
 
-  private async enviarParaAlvo(campanha: any, alvo: any) {
+  /** Trava transacional persistente do número: vale entre campanhas e réplicas. */
+  private async reservarEnvio(campanha: any, alvo: any): Promise<string | null> {
+    return this.db().$transaction(async (tx: any) => {
+      await tx.platformOutreachSenderState.upsert({
+        where: { channelId: campanha.channelId },
+        create: { channelId: campanha.channelId }, update: {},
+      });
+      await tx.$queryRaw`SELECT channelId FROM PlatformOutreachSenderState WHERE channelId = ${campanha.channelId} FOR UPDATE`;
+      const state = await tx.platformOutreachSenderState.findUnique({ where: { channelId: campanha.channelId } });
+      const startedAt = new Date();
+      if (state.inFlightTargetId || (state.nextAllowedAt && new Date(state.nextAllowedAt) > startedAt)) return null;
+      const currentCampaign = await tx.platformOutreachCampaign.findUnique({ where: { id: campanha.id } });
+      const currentTarget = await tx.platformOutreachTarget.findUnique({ where: { id: alvo.id } });
+      if (currentCampaign?.status !== OutreachCampaignStatus.ENVIANDO || !currentCampaign.approvedAt
+        || currentTarget?.status !== OutreachTargetStatus.PENDENTE || currentTarget.attempts > 0
+        || currentTarget.consentStatus !== "CONFIRMADO" || currentTarget.approvalStatus !== "APROVADO"
+        || currentTarget.generationStatus !== "PRONTO" || !currentTarget.proposal || !currentTarget.messageText) return null;
+      const [blocked, previousAttempt] = await Promise.all([
+        tx.platformOutreachBlock.findUnique({ where: { phone: alvo.phone } }),
+        tx.platformOutreachTarget.findFirst({ where: { phone: alvo.phone, id: { not: alvo.id }, attempts: { gt: 0 } }, select: { id: true } }),
+      ]);
+      if (blocked || previousAttempt) {
+        await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
+          status: OutreachTargetStatus.DESCARTADO,
+          discardReason: blocked ? "pediu para não receber" : "já houve tentativa para este número",
+        } });
+        return null;
+      }
+      const attemptId = randomUUID();
+      await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
+        status: OutreachTargetStatus.RESERVADO, attempts: { increment: 1 },
+      } });
+      await tx.platformOutreachAttempt.create({ data: {
+        id: attemptId, targetId: alvo.id, campaignId: campanha.id, channelId: campanha.channelId, startedAt,
+      } });
+      const nextAllowedAt = new Date(startedAt.getTime() + OUTREACH_MIN_INTERVAL_MS);
+      await tx.platformOutreachSenderState.update({ where: { channelId: campanha.channelId }, data: {
+        inFlightTargetId: alvo.id, inFlightAt: startedAt, nextAllowedAt,
+      } });
+      await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: { nextSendAt: nextAllowedAt } });
+      return attemptId;
+    }, { timeout: 10_000 });
+  }
+
+  private async enviarParaAlvo(campanha: any, alvo: any, attemptId: string) {
     try {
-      const { conversation } = await this.platform.openConversationWith({
-        phone: alvo.phone,
-        name: alvo.name,
-        city: alvo.city,
-        fallbackName: campanha.fallbackName,
-        // Conversa de prospecção nasce com o assistente: a resposta pode chegar
-        // de madrugada, e deixar a pessoa sem resposta depois de ela responder a
-        // uma abordagem nossa é pior do que não ter abordado.
-        mode: WhatsAppConversationMode.VIRTUAL,
-      });
-      await this.db().platformOutreachTarget.update({
-        where: { id: alvo.id },
-        data: {
-          status: OutreachTargetStatus.ENVIADO,
-          conversationId: conversation.id,
-          sentAt: new Date(),
-          errorMessage: null,
-        },
-      });
-      await this.db().platformOutreachCampaign.update({
-        where: { id: campanha.id },
-        data: { sentCount: { increment: 1 } },
+      const latest = await this.db().platformOutreachTarget.findUnique({ where: { id: alvo.id } });
+      const currentCampaign = await this.db().platformOutreachCampaign.findUnique({ where: { id: campanha.id } });
+      const blocked = await this.db().platformOutreachBlock.findUnique({ where: { phone: alvo.phone } });
+      const messageText = String(latest?.messageText ?? "").trim();
+      if (blocked || currentCampaign?.status !== OutreachCampaignStatus.ENVIANDO
+        || latest?.consentStatus !== "CONFIRMADO" || latest?.status !== OutreachTargetStatus.RESERVADO
+        || !messageText || messageText.length > 500 || latest.approvalStatus !== "APROVADO") {
+        // Nada foi entregue ao socket; registrar como não enviado (não INCERTO)
+        // e liberar a trava. Não ressuscitar alvo cancelado ou sem consentimento.
+        await this.db().$transaction(async (tx: any) => {
+          await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
+            status: OutreachTargetStatus.DESCARTADO,
+            discardReason: "Envio abortado antes do socket: campanha pausada/cancelada, autorização ou copy inválida.",
+          } });
+          await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
+            status: "NAO_ENVIADA", finishedAt: new Date(), errorMessage: "Abordagem abortada antes da chamada ao WhatsApp.",
+          } });
+          await tx.platformOutreachSenderState.updateMany({ where: { channelId: campanha.channelId, inFlightTargetId: alvo.id },
+            data: { inFlightTargetId: null, inFlightAt: null } });
+        });
+        return;
+      }
+      const sent = await this.sender!.sendText({ to: latest.phone, text: messageText, attemptId });
+      await this.db().$transaction(async (tx: any) => {
+        const conversation = await tx.platformWhatsAppConversation.upsert({
+          where: { channelId_customerPhone: { channelId: campanha.channelId, customerPhone: latest.phone } },
+          create: { channelId: campanha.channelId, customerPhone: latest.phone,
+            customerName: latest.name, mode: WhatsAppConversationMode.HUMANO,
+            lastMessageText: messageText, lastMessageAt: new Date() },
+          update: { mode: WhatsAppConversationMode.HUMANO, lastMessageText: messageText, lastMessageAt: new Date() },
+        });
+        await tx.platformWhatsAppMessage.create({ data: {
+          channelId: campanha.channelId, conversationId: conversation.id,
+          providerMessageId: sent.messageId, direction: "ENVIADA", status: "ENVIADA",
+          type: "text", body: messageText,
+        } });
+        await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
+          status: OutreachTargetStatus.ENVIADO, conversationId: conversation.id, sentAt: new Date(), errorMessage: null,
+        } });
+        await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
+          status: "ENVIADA", providerMessageId: sent.messageId, finishedAt: new Date(),
+        } });
+        await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: { sentCount: { increment: 1 } } });
+        await tx.platformOutreachSenderState.updateMany({ where: {
+          channelId: campanha.channelId, inFlightTargetId: alvo.id,
+        }, data: { inFlightTargetId: null, inFlightAt: null } });
       });
     } catch (error) {
       const mensagem = error instanceof Error ? error.message : String(error);
-      /**
-       * Uma tentativa por contato, e o erro fica registrado.
-       *
-       * A retentativa automática parecia cuidado e era risco: quando a falha é
-       * ambígua — tempo esgotado, resposta ilegível — o provedor pode ter
-       * entregado a mensagem, e insistir manda a mesma abordagem duas vezes para
-       * um desconhecido. Recolar o número numa lista nova continua funcionando, e
-       * aí a decisão de repetir é de quem leu o erro.
-       */
-      await this.db().platformOutreachTarget.update({
-        where: { id: alvo.id },
-        data: { status: OutreachTargetStatus.FALHOU, errorMessage: mensagem.slice(0, 500) },
+      await this.db().$transaction(async (tx: any) => {
+        await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
+          status: OutreachTargetStatus.FALHOU, errorMessage: mensagem.slice(0, 500),
+        } });
+        await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
+          status: "INCERTA", errorMessage: mensagem.slice(0, 500), finishedAt: new Date(),
+        } });
+        await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: {
+          failedCount: { increment: 1 }, status: OutreachCampaignStatus.PAUSADA, nextSendAt: null,
+          pausedReason: "Envio incerto ou recusado. Conferir o provedor e conciliar a tentativa antes de continuar.",
+        } });
+        // A trava fica ocupada intencionalmente: timeout pode ter enviado.
       });
-      const atualizada = await this.db().platformOutreachCampaign.update({
-        where: { id: campanha.id },
-        data: { failedCount: { increment: 1 } },
-      });
-      await this.pausarSeEstiverFalhandoDemais(atualizada, mensagem);
-      this.logger.warn(`Falha ao abordar ${alvo.phone} no disparo ${campanha.id}: ${mensagem}`);
+      this.logger.warn(`Tentativa ${attemptId} da campanha ${campanha.id} precisa de conciliação: ${mensagem}`);
     }
   }
 
-  /**
-   * Para o disparo quando o padrão é falha.
-   *
-   * O caso que isto pega é modelo recusado pela Meta: sem a pausa, uma lista de
-   * 300 números viraria 300 tentativas idênticas, todas negadas, cada uma
-   * registrada pelo provedor contra o número.
-   */
-  private async pausarSeEstiverFalhandoDemais(campanha: any, ultimoErro: string) {
-    const tentativas = campanha.sentCount + campanha.failedCount;
-    const nadaFuncionou = campanha.sentCount === 0 && campanha.failedCount >= FALHAS_SEGUIDAS_PARA_PAUSAR;
-    const falhaDemais = tentativas >= TENTATIVAS_MINIMAS_PARA_AVALIAR
-      && campanha.failedCount / tentativas > PROPORCAO_DE_FALHA_PARA_PAUSAR;
-    if (!nadaFuncionou && !falhaDemais) return;
-    await this.db().platformOutreachCampaign.update({
-      where: { id: campanha.id },
-      data: {
-        status: OutreachCampaignStatus.PAUSADA,
-        nextSendAt: null,
-        pausedReason: `Pausado automaticamente: ${campanha.failedCount} de ${tentativas} envios falharam. Último erro: ${ultimoErro.slice(0, 200)}`,
-      },
-    });
-    this.logger.error(`Disparo "${campanha.name}" pausado automaticamente por falhas em série.`);
-    this.realtime.emitToSuperAdmins("platform.outreach.updated", { campaignId: campanha.id });
-  }
 }
-
-/** Intervalo sorteado entre dois envios, em milissegundos. */
-function sorteioDeIntervaloMs(campanha: { minIntervalSeconds: number; maxIntervalSeconds: number }) {
-  const minimo = Math.max(campanha.minIntervalSeconds, 1);
-  const maximo = Math.max(campanha.maxIntervalSeconds, minimo);
-  // Intervalo sorteado, e não fixo: cadência de metrônomo é o que denuncia
-  // envio automático.
-  return (minimo + Math.random() * (maximo - minimo)) * 1000;
-}
-
 function partesNoFusoComercial(momento: Date) {
   const timeZone = process.env.BUSINESS_TIMEZONE ?? "America/Sao_Paulo";
   const partes = new Intl.DateTimeFormat("pt-BR", {
@@ -745,7 +751,7 @@ export function dentroDoHorarioComercial(momento = new Date()) {
 /**
  * Início da janela de 24h que conta para os limites.
  *
- * Rolante, e não "desde a meia-noite": é como a Meta conta, e a meia-noite do
+ * Rolante, e não "desde a meia-noite": a meia-noite do
  * fuso do servidor liberaria o limite inteiro de uma vez no meio da tarde
  * brasileira.
  */

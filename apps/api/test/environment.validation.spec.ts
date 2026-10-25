@@ -39,7 +39,8 @@ describe("exemplo de ambiente de produção", () => {
     const bloco = validacao.slice(validacao.indexOf("const required ="), validacao.indexOf("const missing ="));
     const exigidas = [...bloco.matchAll(/"([A-Z0-9_]+)"/g)].map((m) => m[1]);
 
-    const exemplo = readFileSync(join(raiz, ".env.production.example"), "utf8");
+    const exemplo = readFileSync(join(raiz, ".env.production.example"), "utf8")
+      + readFileSync(join(raiz, ".env.outreach.example"), "utf8");
     const declaradas = new Set(
       [...exemplo.matchAll(/^([A-Z0-9_]+)=/gm)].map((m) => m[1]),
     );
@@ -73,6 +74,15 @@ describe("validateEnvironment", () => {
 
   it("aceita uma réplica explícita", () => {
     expect(() => validateEnvironment({ ...validProduction, API_REPLICAS: "1" })).not.toThrow();
+  });
+
+  it("exige chave exclusiva válida para o worker QR, não para a API", () => {
+    expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker" }))
+      .toThrow("OUTREACH_SESSION_ENCRYPTION_KEY");
+    expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker",
+      OUTREACH_SESSION_ENCRYPTION_KEY: "curta" })).toThrow("64 caracteres hexadecimais");
+    expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker",
+      OUTREACH_SESSION_ENCRYPTION_KEY: "ab".repeat(32) })).not.toThrow();
   });
 
   it("recusa contagem de réplicas inválida", () => {

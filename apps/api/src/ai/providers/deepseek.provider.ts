@@ -61,15 +61,24 @@ export class DeepSeekProvider implements AIProvider {
       body.temperature = options.temperature;
     }
 
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST", signal: controller.signal,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      this.logger.warn(`Consulta à DeepSeek indisponível: ${error instanceof Error ? error.name : "falha de rede"}`);
+      throw new ServiceUnavailableException("A IA está indisponível ou excedeu o tempo limite.");
+    } finally { clearTimeout(timeout); }
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      this.logger.error(`DeepSeek API respondeu ${response.status}: ${errorText}`);
+      // O corpo de erro do provedor pode repetir parte do prompt ou dados do
+      // lead. Registrar apenas o status evita vazamento de dados pessoais.
+      this.logger.error(`DeepSeek API respondeu HTTP ${response.status}.`);
       throw new ServiceUnavailableException("Falha ao consultar o agente de IA. Tente novamente.");
     }
 

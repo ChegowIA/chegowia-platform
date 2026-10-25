@@ -20,7 +20,7 @@ import { FormField, Input, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { PlatformGupshupLink } from "@/components/messaging/platform-gupshup-link";
 import { WhatsAppProfileSettings } from "@/components/messaging/whatsapp-profile-settings";
-import { PlatformOutreachPanel } from "@/components/messaging/platform-outreach-panel";
+import { IntelligentOutreachPanel } from "@/components/messaging/intelligent-outreach-panel";
 
 type PlatformChannel = {
   id: string | null;
@@ -382,7 +382,7 @@ export default function SuperAdminAtendimentoPage() {
         </div>
       </section>
 
-      <PlatformOutreachPanel />
+      <IntelligentOutreachPanel />
 
       <Modal open={novaConversaAberta} onClose={() => !startConversation.isPending && setNovaConversaAberta(false)} title="Começar uma conversa">
         <div className="space-y-4">

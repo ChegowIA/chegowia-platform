@@ -69,6 +69,9 @@ export function validateEnvironment(config: Record<string, unknown>) {
         "WHATSAPP_TOKEN_ENCRYPTION_KEY",
       );
     }
+    if (env.APP_ROLE === "outreach-worker") {
+      required.push("OUTREACH_SESSION_ENCRYPTION_KEY");
+    }
   }
 
   const missing = required.filter((key) => !env[key]?.trim());
@@ -128,6 +131,10 @@ export function validateEnvironment(config: Record<string, unknown>) {
     const placeholders = secretKeys.filter((key) => looksLikePlaceholder(env[key] ?? ""));
     if (placeholders.length) {
       throw new Error(`Segredos de produção ainda contêm placeholders: ${placeholders.join(", ")}`);
+    }
+    if (env.APP_ROLE === "outreach-worker") {
+      if (!/^[a-f\d]{64}$/i.test(env.OUTREACH_SESSION_ENCRYPTION_KEY ?? ""))
+        throw new Error("OUTREACH_SESSION_ENCRYPTION_KEY deve conter 64 caracteres hexadecimais.");
     }
 
     if (asaasBilling) {

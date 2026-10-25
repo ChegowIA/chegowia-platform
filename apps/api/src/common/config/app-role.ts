@@ -16,16 +16,23 @@
  * - `worker` — só jobs. Deve ter exatamente uma réplica. Continua servindo HTTP
  *   na rede interna porque o health check do compose depende disso; ele apenas
  *   não é publicado pelo proxy.
+ * - `outreach-worker` — somente a fila de prospecção, em serviço privado
+ *   separado do worker operacional e da API pública.
  */
-export type AppRole = "all" | "api" | "worker";
+export type AppRole = "all" | "api" | "worker" | "outreach-worker";
 
 export function appRole(): AppRole {
   const value = process.env.APP_ROLE?.trim().toLowerCase();
-  if (value === "api" || value === "worker") return value;
+  if (value === "api" || value === "worker" || value === "outreach-worker") return value;
   return "all";
 }
 
 /** Se este processo é responsável por rodar os jobs em segundo plano. */
 export function runsBackgroundJobs() {
-  return appRole() !== "api";
+  return appRole() === "all" || appRole() === "worker";
+}
+
+/** Prospecção executa somente em serviço próprio, nunca na API/Gupshup. */
+export function runsOutreachJobs() {
+  return appRole() === "outreach-worker";
 }

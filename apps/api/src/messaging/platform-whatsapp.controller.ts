@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
@@ -17,6 +17,9 @@ import { AnalyzeOutreachListDto } from "./dto/analyze-outreach-list.dto";
 import { BlockOutreachPhoneDto } from "./dto/block-outreach-phone.dto";
 import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 import { PlatformOutreachService } from "./platform-outreach.service";
+import { OutreachIntelligenceService } from "./outreach-intelligence.service";
+import { OutreachMapping } from "./outreach-intelligence";
+import { BaileysOutreachSenderService } from "./baileys-outreach-sender.service";
 
 /**
  * Canal institucional da ChegowIA.
@@ -32,6 +35,8 @@ export class PlatformWhatsAppController {
   constructor(
     private readonly platformWhatsApp: PlatformWhatsAppService,
     private readonly outreach: PlatformOutreachService,
+    private readonly intelligence: OutreachIntelligenceService,
+    private readonly qrSender: BaileysOutreachSenderService,
   ) {}
 
   @Get("channel")
@@ -153,9 +158,63 @@ export class PlatformWhatsAppController {
     return this.outreach.analisarLista(dto.contacts);
   }
 
+  @Post("outreach/import/preview")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
+  previewImport(@UploadedFile() file: any, @Body("sheet") sheet?: string, @Body("mapping") rawMapping?: string) {
+    if (!file?.buffer) throw new BadRequestException("Envie um arquivo XLSX.");
+    let mapping: OutreachMapping | undefined;
+    if (rawMapping) {
+      try { mapping = JSON.parse(rawMapping); }
+      catch { throw new BadRequestException("Mapeamento inválido."); }
+    }
+    return this.intelligence.preview(file.buffer, sheet, mapping);
+  }
+
+  @Post("outreach/import/confirm")
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
+  confirmImport(@CurrentUser("sub") userId: string, @UploadedFile() file: any, @Body() body: Record<string, string>) {
+    if (!file?.buffer) throw new BadRequestException("Envie o mesmo arquivo da prévia.");
+    let mapping: OutreachMapping;
+    try { mapping = JSON.parse(body.mapping ?? ""); }
+    catch { throw new BadRequestException("Mapeamento da planilha inválido."); }
+    return this.intelligence.confirmImport(file.buffer, {
+      hash: body.hash, previewFingerprint: body.previewFingerprint,
+      sheet: body.sheet, name: body.name, mapping,
+    }, userId);
+  }
+
+  @Get("outreach/prompt")
+  outreachPrompt() { return this.intelligence.prompt(); }
+
+  @Post("outreach/sender/connect")
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  connectOutreachSender() { return this.qrSender.requestConnect(); }
+
+  @Post("outreach/sender/disconnect")
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  disconnectOutreachSender() { return this.qrSender.requestDisconnect(); }
+
+  @Put("outreach/prompt")
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  updateOutreachPrompt(@CurrentUser("sub") userId: string, @Body("systemPrompt") content: string) {
+    return this.intelligence.updatePrompt(content, userId);
+  }
+
   @Get("outreach/campaigns")
   campaigns() {
     return this.outreach.listarCampanhas();
+  }
+
+  @Get("outreach/sender")
+  senderStatus() { return this.outreach.senderStatus(); }
+
+  @Post("outreach/sender/reconcile")
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  reconcileSender(@Body("targetId") targetId: string, @CurrentUser("sub") userId: string) {
+    return this.outreach.reconcileSender(targetId, userId);
   }
 
   @Post("outreach/campaigns")
@@ -168,6 +227,57 @@ export class PlatformWhatsAppController {
   campaign(@Param("id") id: string) {
     return this.outreach.detalharCampanha(id);
   }
+
+  @Get("outreach/campaigns/:id/targets")
+  targets(@Param("id") id: string, @Query("page") page?: string) {
+    return this.intelligence.listTargets(id, Number(page ?? 1));
+  }
+
+  @Get("outreach/campaigns/:id/import-issues")
+  importIssues(@Param("id") id: string, @Query("page") page?: string) {
+    return this.intelligence.listImportRows(id, Number(page ?? 1));
+  }
+
+  @Post("outreach/campaigns/:id/prepare")
+  prepareCampaign(@Param("id") id: string) { return this.intelligence.requestGeneration(id); }
+
+  @Post("outreach/campaigns/:id/simulate")
+  @HttpCode(HttpStatus.OK)
+  simulateCampaign(@Param("id") id: string) { return this.intelligence.simulate(id); }
+
+  @Post("outreach/campaigns/:id/approve-messages")
+  @HttpCode(HttpStatus.OK)
+  approveMessages(@Param("id") id: string, @CurrentUser("sub") userId: string, @Body("ids") ids: string[]) {
+    return this.intelligence.approveBatch(id, ids, userId);
+  }
+
+  @Post("outreach/campaigns/:id/approve")
+  @HttpCode(HttpStatus.OK)
+  approveCampaign(@Param("id") id: string, @CurrentUser("sub") userId: string) {
+    return this.intelligence.approveCampaign(id, userId);
+  }
+
+  @Patch("outreach/targets/:id/consent")
+  consent(@Param("id") id: string, @Body() body: { status: string; source?: string; evidence?: string; at?: string }) {
+    return this.intelligence.updateConsent(id, body);
+  }
+
+  @Patch("outreach/targets/:id/proposal")
+  proposal(@Param("id") id: string, @Body("proposal") proposal: string) {
+    return this.intelligence.editProposal(id, proposal);
+  }
+
+  @Post("outreach/targets/:id/regenerate")
+  regenerate(@Param("id") id: string) { return this.intelligence.regenerate(id); }
+
+  @Post("outreach/targets/:id/review")
+  review(@Param("id") id: string, @Body("approved") approved: boolean, @CurrentUser("sub") userId: string) {
+    if (typeof approved !== "boolean") throw new BadRequestException("Informe a decisão de revisão.");
+    return this.intelligence.reviewTarget(id, approved, userId);
+  }
+
+  @Delete("outreach/targets/:id")
+  excludeTarget(@Param("id") id: string) { return this.intelligence.excludeTarget(id); }
 
   @Post("outreach/campaigns/:id/start")
   startCampaign(@Param("id") id: string) {

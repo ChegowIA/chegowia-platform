@@ -1,0 +1,31 @@
+# Central de Prospecção Inteligente
+
+Disponível em `/super-admin/atendimento`, exclusivamente para `SUPER_ADMIN`. O canal `chegowia-prospeccao-qr` é separado do canal institucional e dos canais dos clientes na Gupshup. Não reutiliza webhooks, credenciais, sessões nem filas operacionais.
+
+## Remetente e riscos
+
+O remetente usa `@whiskeysockets/baileys@6.7.24` com um número dedicado, conectado por QR Code. A biblioteca não oficial dispensa Meta Developers, Cloud API e modelos Meta, mas **não garante estabilidade nem proteção contra restrição ou bloqueio da conta**. Não há técnicas de evasão, rotação de números, simulação humana ou envio sem opt-in. As regras e limites do WhatsApp continuam aplicáveis. `whatsapp-web.js` exigiria Chromium/Puppeteer e mais recursos; Baileys foi escolhida por conectar diretamente ao protocolo web e permitir auth store próprio. A escolha não torna campanhas comerciais automaticamente permitidas pela plataforma.
+
+## Implantação
+
+1. Aplique a migração `20261025130000_intelligent_outreach`. Ela pausa campanhas legadas ativas, acrescenta dados de auditoria e as tabelas da sessão QR. Não retome campanhas antigas sem revisão.
+2. Copie `.env.outreach.example` para `.env.outreach`, gere uma chave exclusiva com `openssl rand -hex 32` e configure `OUTREACH_SESSION_ENCRYPTION_KEY` **somente ali**. Faça backup seguro da chave fora do banco. Sem ela, a sessão cifrada não pode ser recuperada. Não reutilize chaves do Gupshup, JWT ou fiscal.
+3. Execute o serviço privado `outreach-worker` com `APP_ROLE=outreach-worker`, uma única réplica, acesso ao MySQL e sem exposição pública. No Docker Compose: `docker compose --profile outreach -f compose.production.yml up -d outreach-worker`. Os processos `api`, `worker` e `all` não conectam o socket nem consomem a fila de prospecção.
+4. Acesse **WhatsApp de Prospecção**, clique **Conectar WhatsApp** e escaneie o QR Code no WhatsApp do número dedicado. Acompanhe status e número conectado. O QR expira e é renovado pelo worker; o navegador pode ser fechado depois de conectar. **Essa etapa requer validação manual com um número real; não foi executada nos testes automatizados.**
+
+A sessão Signal fica cifrada por AES-256-GCM no banco (`PlatformOutreachAuthState`). O worker guarda a chave apenas em memória. A API pode ler estado e QR temporário para o SUPER_ADMIN, mas nunca chaves da sessão. Não registre o QR, auth ou conteúdo de mensagens em logs de infraestrutura. Desconectar faz logout e apaga a sessão cifrada; reconectar exige novo QR. Faça backups do banco e da chave em locais separados.
+
+## Fluxo comercial
+
+1. Importe XLSX até 5 MB. O parser local preserva linhas originais; regras mapeiam colunas conhecidas e a DeepSeek recebe apenas cabeçalhos ambíguos. A prévia exige confirmação de hash, aba e mapeamento.
+2. Telefones brasileiros são validados por código e deduplicados. A planilha **não** prova autorização. Cada lead precisa de origem, data e evidência verificável de opt-in antes de ser elegível.
+3. A DeepSeek, usando a integração existente, gera uma **mensagem completa individualizada** por lead. O administrador pode regenerar, editar, aprovar, rejeitar ou excluir. JSON inválido e copy reprovada têm no máximo duas tentativas; depois ficam para revisão manual. O prompt versionado e os tokens consumidos são registrados.
+4. Simule a campanha sem enviar. A aprovação da campanha não envia nada. Inicie somente com número conectado, mensagens aprovadas e consentimento comprovado. Pause, retome ou cancele na mesma tela.
+5. O `outreach-worker` consome a fila persistida no MySQL. Uma trava transacional em `PlatformOutreachSenderState` reserva **60 segundos entre os inícios** de tentativas para destinatários diferentes, globalmente entre campanhas e instâncias. Há no máximo uma tentativa por lead/telefone, horário comercial e teto diário operacional. Reinício não limpa os intervalos.
+6. Se uma tentativa tiver resultado incerto, a campanha pausa e a trava permanece até conciliação humana. **Nunca** é reenviada automaticamente. A confirmação de `sendMessage` significa que a biblioteca retornou um identificador; não prova entrega/leitura. Confirmações posteriores de entrega/leitura, quando recebidas, atualizam o registro da mensagem. Respostas recebidas pelo socket são registradas e classificadas pela DeepSeek para revisão humana. Descadastro bloqueia contatos futuros imediatamente.
+
+A fila atual é transacional no MySQL, não BullMQ/Redis: o projeto já possuía estado persistente de campanhas, tentativa única e trava global no banco. Redis não é necessário para cumprir essas garantias e não foi introduzido como nova dependência operacional.
+
+## Validação segura
+
+`npm run prisma:generate --workspace apps/api`, `npm run typecheck --workspace apps/api`, `npm run typecheck --workspace apps/web`, `npm test --workspace apps/api -- --runInBand`. Os testes usam socket simulado, sem escanear QR nem enviar mensagens reais. Antes de produção, valide manualmente QR, reconexão, uma resposta e um envio apenas para um número com autorização documentada. Não armazene a planilha real no repositório nem a envie integralmente à DeepSeek.

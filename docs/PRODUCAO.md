@@ -296,6 +296,9 @@ Consequências práticas:
   `docker compose -f compose.production.yml ps worker`.
 - Sem `APP_ROLE` definido, o processo faz as duas coisas — é o padrão de
   desenvolvimento e o comportamento anterior.
+- A Central de Prospecção requer um **terceiro** serviço privado com
+  `APP_ROLE=outreach-worker`. Ele não executa jobs operacionais; `api`, `worker`
+  e `all` não executam a fila de prospecção. Veja [CENTRAL_PROSPECCAO.md](CENTRAL_PROSPECCAO.md).
 
 ### Fiscal
 

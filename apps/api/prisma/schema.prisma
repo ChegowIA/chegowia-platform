@@ -115,6 +115,8 @@ enum MessagingChannelStatus {
 // exija migrar dado histórico.
 enum WhatsAppProvider {
   GUPSHUP
+  META_CLOUD
+  BAILEYS
 }
 
 enum WhatsAppConversationMode {
@@ -158,6 +160,7 @@ enum OutreachCampaignStatus {
 // e fica registrado em vez de ser apagado para o relatório do disparo fechar.
 enum OutreachTargetStatus {
   PENDENTE
+  RESERVADO
   ENVIADO
   RESPONDEU
   FALHOU
@@ -2332,6 +2335,14 @@ model PlatformOutreachCampaign {
   channelId String
   name      String
   status    OutreachCampaignStatus @default(RASCUNHO)
+  sourceType String @default("LEGACY")
+  importFileHash String?
+  importSheet String?
+  importMapping Json?
+  promptVersion Int?
+  preparationRequestedAt DateTime?
+  approvedAt DateTime?
+  approvedByUserId String?
 
   // Como o contato é chamado quando a lista não trouxe nome. Modelo aprovado com
   // variável não aceita parâmetro vazio: a Meta recusa o envio inteiro.
@@ -2363,6 +2374,7 @@ model PlatformOutreachCampaign {
 
   channel PlatformWhatsAppChannel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
   targets PlatformOutreachTarget[]
+  importRows PlatformOutreachImportRow[]
 
   @@index([status, nextSendAt])
 }
@@ -2374,6 +2386,33 @@ model PlatformOutreachTarget {
   name       String?
   company    String?
   city       String?
+  segment    String?
+  address    String? @db.Text
+  website    String? @db.Text
+  sourceRowNumber Int?
+  consentStatus String @default("NAO_VERIFICADO")
+  consentSource String?
+  consentEvidence String? @db.Text
+  consentAt DateTime?
+  generationStatus String @default("NAO_PREPARADO")
+  generationAttempts Int @default(0)
+  generationStartedAt DateTime?
+  proposal String? @db.Text
+  messageText String? @db.Text
+  mainBenefit String?
+  aiDataUsed Json?
+  aiAlerts Json?
+  aiRequestId String?
+  aiInputTokens Int @default(0)
+  aiOutputTokens Int @default(0)
+  approvalStatus String @default("PENDENTE")
+  approvedAt DateTime?
+  approvedByUserId String?
+  responseCategory String?
+  responseSuggestion String? @db.Text
+  responseText String? @db.Text
+  responseClassifiedAt DateTime?
+  classificationAttempts Int @default(0)
   status     OutreachTargetStatus @default(PENDENTE)
 
   conversationId String?
@@ -2387,12 +2426,85 @@ model PlatformOutreachTarget {
 
   campaign     PlatformOutreachCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   conversation PlatformWhatsAppConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  importRows PlatformOutreachImportRow[]
+  attempt PlatformOutreachAttempt?
 
   // O mesmo número não recebe duas vezes o mesmo disparo, nem quando a lista
   // colada vem com repetição.
   @@unique([campaignId, phone])
   @@index([status, campaignId])
   @@index([phone])
+}
+
+model PlatformOutreachImportRow {
+  id String @id @default(cuid())
+  campaignId String
+  targetId String?
+  sheet String
+  rowNumber Int
+  originalData Json
+  mappedData Json?
+  status String
+  reason String?
+  createdAt DateTime @default(now())
+
+  campaign PlatformOutreachCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  target PlatformOutreachTarget? @relation(fields: [targetId], references: [id], onDelete: SetNull)
+  @@unique([campaignId, sheet, rowNumber])
+  @@index([targetId])
+}
+
+model PlatformOutreachPrompt {
+  id String @id @default(cuid())
+  version Int @unique
+  systemPrompt String @db.Text
+  createdByUserId String?
+  createdAt DateTime @default(now())
+}
+
+model PlatformOutreachSenderState {
+  channelId String @id
+  nextAllowedAt DateTime?
+  inFlightTargetId String?
+  inFlightAt DateTime?
+  updatedAt DateTime @updatedAt
+}
+
+// Sessão exclusiva do número de prospecção. Conteúdo cifrado com AES-256-GCM;
+// a chave fica apenas no processo outreach-worker, nunca na API pública.
+model PlatformOutreachAuthState {
+  key String @id
+  ciphertext Bytes @db.LongBlob
+  nonce Bytes @db.VarBinary(12)
+  tag Bytes @db.VarBinary(16)
+  updatedAt DateTime @updatedAt
+}
+
+model PlatformOutreachConnectionState {
+  id String @id @default("primary")
+  desiredConnected Boolean @default(false)
+  status String @default("DESCONECTADO")
+  phone String?
+  qrCode String? @db.Text
+  qrExpiresAt DateTime?
+  lastHeartbeatAt DateTime?
+  lastError String? @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+model PlatformOutreachAttempt {
+  id String @id @default(cuid())
+  targetId String @unique
+  campaignId String
+  channelId String
+  status String @default("INICIADA")
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  providerMessageId String?
+  errorMessage String? @db.Text
+  target PlatformOutreachTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  @@index([channelId, startedAt])
+  @@index([campaignId, startedAt])
 }
 
 // Quem pediu para não receber mais. Vale para todos os disparos e também para a
