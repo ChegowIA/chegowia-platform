@@ -158,7 +158,6 @@ export function PlatformOutreachPanel() {
   const [limiteDiario, setLimiteDiario] = useState(200);
   const [intervaloMinimo, setIntervaloMinimo] = useState(15);
   const [intervaloMaximo, setIntervaloMaximo] = useState(30);
-  const [respeitarHorario, setRespeitarHorario] = useState(true);
   const [conferencia, setConferencia] = useState<Conferencia | null>(null);
 
   const conferir = useMutation({
@@ -178,7 +177,6 @@ export function PlatformOutreachPanel() {
       dailyLimit: limiteDiario,
       minIntervalSeconds: intervaloMinimo,
       maxIntervalSeconds: intervaloMaximo,
-      respectBusinessHours: respeitarHorario,
     })).data,
     onSuccess: () => {
       setErro(null);
@@ -373,16 +371,6 @@ export function PlatformOutreachPanel() {
               <Input type="number" min={10} value={intervaloMaximo} onChange={(evento) => setIntervaloMaximo(Number(evento.target.value))} />
             </FormField>
           </div>
-          <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50">
-            <input type="checkbox" className="mt-0.5 h-4 w-4 accent-brand-600" checked={respeitarHorario} onChange={(evento) => setRespeitarHorario(evento.target.checked)} />
-            <span>
-              <span className="block text-sm font-black text-slate-900 dark:text-slate-100">Só enviar de segunda a sábado, das 9h às 20h</span>
-              <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">
-                Mensagem comercial de madrugada é o que mais rende denúncia, e denúncia derruba o número que também
-                atende o suporte. Fora da janela o disparo fica parado e retoma sozinho.
-              </span>
-            </span>
-          </label>
 
           {conferencia && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -468,7 +456,6 @@ export function PlatformOutreachPanel() {
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     {campanha.createdByName ? `${campanha.createdByName} · ` : ""}{formatDateTime(campanha.createdAt)}
                     {" · "}até {campanha.dailyLimit}/dia, {campanha.minIntervalSeconds}–{campanha.maxIntervalSeconds}s entre envios
-                    {campanha.respectBusinessHours ? ", em horário comercial" : ", sem restrição de horário"}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">

@@ -48,13 +48,6 @@ const INTERVALO_DO_WORKER_MS = 10_000;
 const ESPERA_APOS_TETO_MS = 15 * 60 * 1000;
 
 /**
- * Janela diária em que uma abordagem comercial autorizada é aceitável,
- * inclusive aos domingos.
- */
-const HORA_INICIAL_PADRAO = 9;
-const HORA_FINAL_PADRAO = 20;
-
-/**
  * Teto de conversas iniciadas por nós em 24h, somando todos os disparos.
  *
  * Limite operacional conservador, independente dos limites do WhatsApp.
@@ -239,6 +232,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   }
   async listarCampanhas() {
     const campanhas = await this.db().platformOutreachCampaign.findMany({
+      where: { deletedAt: null },
       orderBy: { createdAt: "desc" },
       take: 50,
     });
@@ -413,9 +407,50 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     return this.resumoComFila(campanha);
   }
 
+  /**
+   * Tira o disparo da tela sem apagar o histórico.
+   *
+   * Apagar de verdade levaria em cascata leads e tentativas: quem já recebeu
+   * poderia ser abordado de novo numa próxima planilha, e o teto de 24h do
+   * número deixaria de contar esses envios.
+   */
+  async excluir(id: string) {
+    const campanha = await this.buscarCampanha(id);
+    if (campanha.status === OutreachCampaignStatus.ENVIANDO) {
+      throw new BadRequestException("Pause ou cancele o disparo antes de apagar.");
+    }
+    const state = await this.db().platformOutreachSenderState.findUnique({ where: { channelId: campanha.channelId } });
+    if (state?.inFlightTargetId) {
+      const alvo = await this.db().platformOutreachTarget.findUnique({ where: { id: state.inFlightTargetId } });
+      if (alvo?.campaignId === id) {
+        throw new BadRequestException("Este disparo tem uma tentativa sem conclusão. Faça a conciliação antes de apagar.");
+      }
+    }
+    await this.db().$transaction(async (tx: any) => {
+      await tx.platformOutreachTarget.updateMany({
+        where: { campaignId: id, status: OutreachTargetStatus.PENDENTE },
+        data: { status: OutreachTargetStatus.DESCARTADO, discardReason: "disparo apagado" },
+      });
+      await tx.platformOutreachCampaign.update({
+        where: { id },
+        data: {
+          deletedAt: new Date(),
+          // Encerrado impede retomar e para a geração de mensagens pela IA.
+          status: campanha.status === OutreachCampaignStatus.CONCLUIDA
+            ? OutreachCampaignStatus.CONCLUIDA : OutreachCampaignStatus.CANCELADA,
+          nextSendAt: null,
+          preparationRequestedAt: null,
+          completedAt: campanha.completedAt ?? new Date(),
+        },
+      });
+    });
+    this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
+    return { id, deleted: true };
+  }
+
   private async buscarCampanha(id: string) {
     const campanha = await this.db().platformOutreachCampaign.findUnique({ where: { id } });
-    if (!campanha) throw new NotFoundException("Disparo não encontrado.");
+    if (!campanha || campanha.deletedAt) throw new NotFoundException("Disparo não encontrado.");
     return campanha;
   }
 
@@ -568,7 +603,6 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
     if (campanha.nextSendAt && new Date(campanha.nextSendAt).getTime() > agora.getTime()) return false;
-    if (campanha.respectBusinessHours && !dentroDoHorarioComercial(agora)) return false;
 
     // Janela rolante de 24h, e não "hoje": evita a
     // virada de dia do fuso do servidor liberar o dobro de envios de uma vez.
@@ -723,28 +757,6 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   }
 
 }
-function partesNoFusoComercial(momento: Date) {
-  const timeZone = process.env.BUSINESS_TIMEZONE ?? "America/Sao_Paulo";
-  const partes = new Intl.DateTimeFormat("pt-BR", {
-    timeZone,
-    weekday: "short",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(momento);
-  return {
-    hora: Number(partes.find((parte) => parte.type === "hour")?.value ?? 0),
-    diaDaSemana: (partes.find((parte) => parte.type === "weekday")?.value ?? "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase(),
-  };
-}
-
-export function dentroDoHorarioComercial(momento = new Date()) {
-  const { hora } = partesNoFusoComercial(momento);
-  return hora >= HORA_INICIAL_PADRAO && hora < HORA_FINAL_PADRAO;
-}
-
 /**
  * Início da janela de 24h que conta para os limites.
  *

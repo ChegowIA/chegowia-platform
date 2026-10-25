@@ -247,7 +247,7 @@ export class OutreachIntelligenceService {
 
   private async requireCampaign(id: string) {
     const campaign = await this.db().platformOutreachCampaign.findUnique({ where: { id } });
-    if (!campaign) throw new NotFoundException("Campanha não encontrada.");
+    if (!campaign || campaign.deletedAt) throw new NotFoundException("Campanha não encontrada.");
     return campaign;
   }
 

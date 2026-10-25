@@ -699,9 +699,9 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.6.13 | Começar com modelo | Vira `ENVIANDO`; primeiro envio no próximo giro do worker |
 | 10.6.14 | Acompanhar dois envios seguidos | Intervalo entre eles cai na faixa configurada, e varia |
 | 10.6.15 | Limite diário alcançado | Fica parado e reagenda para o dia seguinte, sem consultar o banco em laço |
-| 10.6.16 | Disparo com horário comercial e teste às 3h | Nada sai; retoma sozinho às 9h |
-| 10.6.17 | Domingo | Nada sai, mesmo dentro do horário |
-| 10.6.18 | Desligar o respeito ao horário | Envia na hora, independente do relógio |
+| 10.6.16 | Disparo às 3h | Envia normalmente: não há janela de horário |
+| 10.6.17 | Domingo | Envia normalmente |
+| 10.6.18 | Formulário do disparo | Não há opção de horário comercial |
 | 10.6.19 | Pausar no meio | Para na hora; a fila continua registrada |
 | 10.6.20 | Retomar | Segue de onde parou, sem reenviar quem já recebeu |
 | 10.6.21 | Cancelar | Pendentes viram `DESCARTADO`; enviados permanecem no relatório |
@@ -718,6 +718,8 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.6.32 | Réplica com `APP_ROLE=api` | Não dispara: só o processo de worker envia |
 | 10.6.33 | Banco fora do ar durante um giro | Erro registrado no log; o processo não cai |
 | 10.6.34 | Lista de 2 mil números | Criada em menos de 1s; conferência devolve 50 exemplos com o total ao lado |
+| 10.6.35 | Apagar campanha cancelada pela lixeira | Some da lista; reimportar um número já enviado continua descartado |
+| 10.6.36 | Lixeira em campanha enviando | Não aparece; é preciso pausar ou cancelar antes |
 
 ### 10.6.1 Leitura da lista: casos que já falharam
 

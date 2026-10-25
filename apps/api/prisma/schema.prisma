@@ -2369,6 +2369,9 @@ model PlatformOutreachCampaign {
   createdByName   String?
   startedAt       DateTime?
   completedAt     DateTime?
+  // Apagada pela equipe: some da tela, mas leads e tentativas ficam no banco
+  // para que ninguém já abordado volte a ser abordado e o teto continue certo.
+  deletedAt       DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

@@ -1,4 +1,4 @@
-import { PlatformOutreachService, dentroDoHorarioComercial } from "../src/messaging/platform-outreach.service";
+import { PlatformOutreachService } from "../src/messaging/platform-outreach.service";
 
 function fixture(overrides: Record<string, unknown> = {}) {
   const campaign: any = {
@@ -154,10 +154,28 @@ describe("fila segura de prospecção", () => {
     expect(db.platformOutreachSenderState.updateMany).toHaveBeenCalled();
   });
 
-  it("respeita a janela diária em Brasília, inclusive domingo", () => {
-    expect(dentroDoHorarioComercial(new Date("2026-08-20T12:00:00Z"))).toBe(true);
-    expect(dentroDoHorarioComercial(new Date("2026-08-20T02:00:00Z"))).toBe(false);
-    expect(dentroDoHorarioComercial(new Date("2026-08-23T15:00:00Z"))).toBe(true);
-    expect(dentroDoHorarioComercial(new Date("2026-08-24T02:00:00Z"))).toBe(false);
+  it("avança a fila de madrugada e no domingo, sem janela de horário", async () => {
+    const { service, db, campaign } = fixture({ status: "ENVIANDO", respectBusinessHours: true, dailyLimit: 200 });
+    await service.avancarCampanha(campaign, new Date("2026-10-25T06:00:00Z"));
+    expect(db.platformOutreachTarget.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ status: "PENDENTE" }),
+    }));
+  });
+
+  it("apagar esconde o disparo sem perder o histórico de envios", async () => {
+    const { service, db } = fixture({ status: "CANCELADA" });
+    db.platformOutreachTarget.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    await service.excluir("c1");
+    expect(db.platformOutreachCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ deletedAt: expect.any(Date), status: "CANCELADA" }),
+    }));
+    expect(db.platformOutreachCampaign.delete).toBeUndefined();
+    await expect(service.iniciar("c1")).rejects.toThrow(/não encontrado/);
+  });
+
+  it("não apaga disparo enviando", async () => {
+    const { service, db } = fixture({ status: "ENVIANDO" });
+    await expect(service.excluir("c1")).rejects.toThrow(/Pause ou cancele/);
+    expect(db.platformOutreachCampaign.update).not.toHaveBeenCalled();
   });
 });

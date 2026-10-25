@@ -294,6 +294,12 @@ export class PlatformWhatsAppController {
     return this.outreach.cancelar(id);
   }
 
+  @Post("outreach/campaigns/:id/delete")
+  @HttpCode(HttpStatus.OK)
+  deleteCampaign(@Param("id") id: string) {
+    return this.outreach.excluir(id);
+  }
+
   @Get("outreach/blocks")
   blocks() {
     return this.outreach.listarBloqueios();

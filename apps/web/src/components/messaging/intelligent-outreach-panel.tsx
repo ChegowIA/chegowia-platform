@@ -286,12 +286,27 @@ export function IntelligentOutreachPanel() {
     <Card><CardContent className="space-y-4 p-5">
       <h3 className="text-lg font-bold text-slate-950 dark:text-slate-100">2. Campanhas e aprovação</h3>
       {!campaigns.data?.length && <p className="text-sm text-slate-500">Nenhuma campanha importada.</p>}
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{campaigns.data?.map((campaign) => <button key={campaign.id} type="button"
-        onClick={() => { setSelectedCampaign(campaign.id); setPage(1); setIssuePage(1); setSimulation(null); setSelectedIds([]); }}
-        className={`rounded-xl border p-3 text-left text-sm transition ${selectedCampaign === campaign.id ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-slate-200 dark:border-slate-700"}`}>
-        <span className="font-bold text-slate-900 dark:text-slate-100">{campaign.name}</span><span className="ml-2 text-xs text-slate-500 dark:text-slate-400">{statusLabel[campaign.status] || campaign.status}</span>
-        <span className="mt-1 block text-xs text-slate-600 dark:text-slate-300">{campaign.totalTargets} leads · {campaign.sentCount} tentativas confirmadas · {campaign.repliedCount} respostas · {formatDateTime(campaign.createdAt)}</span>
-      </button>)}</div>
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">{campaigns.data?.map((campaign) => <div key={campaign.id} className="relative">
+        <button type="button"
+          onClick={() => { setSelectedCampaign(campaign.id); setPage(1); setIssuePage(1); setSimulation(null); setSelectedIds([]); }}
+          className={`h-full w-full rounded-xl border p-3 pr-11 text-left text-sm transition ${selectedCampaign === campaign.id ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-slate-200 dark:border-slate-700"}`}>
+          <span className="font-bold text-slate-900 dark:text-slate-100">{campaign.name}</span><span className="ml-2 text-xs text-slate-500 dark:text-slate-400">{statusLabel[campaign.status] || campaign.status}</span>
+          <span className="mt-1 block text-xs text-slate-600 dark:text-slate-300">{campaign.totalTargets} leads · {campaign.sentCount} tentativas confirmadas · {campaign.repliedCount} respostas · {formatDateTime(campaign.createdAt)}</span>
+        </button>
+        {campaign.status !== "ENVIANDO" && <button type="button" disabled={busy} aria-label={`Apagar campanha ${campaign.name}`} title="Apagar campanha"
+          className="absolute right-2 top-2 rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/40"
+          onClick={() => {
+            if (!window.confirm(`Apagar a campanha "${campaign.name}"? Ela some da lista e os leads não enviados são descartados.`)) return;
+            void run(async () => {
+              await api.post(`${API}/campaigns/${campaign.id}/delete`);
+              if (selectedCampaign === campaign.id) { setSelectedCampaign(null); setSimulation(null); setSelectedIds([]); }
+            });
+          }}>
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
+          </svg>
+        </button>}
+      </div>)}</div>
       {activeCampaign && <div className="space-y-4">
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={busy || activeCampaign.status !== "RASCUNHO"} onClick={() => void performCampaign("prepare")}>Gerar mensagens com IA</Button>
