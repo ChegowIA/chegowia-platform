@@ -24,6 +24,18 @@ Priorize uma única proposta de valor relevante, uma apresentação breve e uma 
 Evite mensagens longas. A linguagem deve parecer escrita por um consultor comercial experiente, e não por um robô.
 Escreva a mensagem completa para revisão humana, com saudação breve, uma proposta de valor e uma pergunta final simples. Responda JSON rigoroso com beneficioPrincipal, proposta (mensagem completa), dadosUtilizados e alertas.`;
 
+/** Contrato técnico da resposta: protege a revisão sem modificar a copy gerada. */
+export const OUTREACH_OUTPUT_CONTRACT = `Formato obrigatório: responda somente um objeto JSON com as chaves beneficioPrincipal, proposta, dadosUtilizados e alertas.
+beneficioPrincipal deve ser um rótulo curto de 4 a 80 caracteres, como "Organização de pedidos"; nunca um parágrafo.
+proposta deve conter a mensagem COMPLETA entre 50 e 450 caracteres, com saudação breve, uma única proposta de valor real e uma pergunta final simples.
+Não inclua assinatura, nome fictício do consultor, colchetes, chaves, variáveis, placeholders ou qualquer trecho para preencher depois.
+Se o nome do estabelecimento for longo ou parecer texto de busca, não o repita na mensagem; use apenas o segmento disponível sem inventar um nome curto.
+Não diga que visitou, pesquisou ou conhece o negócio. Não atribua problemas, volume de pedidos ou resultados ao estabelecimento.
+Apresente-se como ChegowIA, sem fingir ser uma pessoa específica ou um consultor humano.
+dadosUtilizados deve ser um array somente com campos realmente usados na mensagem, dentre nome, segmento e cidade, e nunca incluir um campo ausente.
+alertas deve ser [] quando não houver inconsistência concreta nos dados; não inclua autoavaliação da mensagem.
+Antes de responder, revise o JSON, os limites de tamanho e a ausência de placeholders. Não escreva Markdown nem texto fora do JSON.`;
+
 /** A base do produto é revisada no código; o modelo não pode criar capacidades novas. */
 export const OUTREACH_PRODUCT_FACTS = [
   "Gestão de pedidos de delivery e retirada no local",

@@ -7,7 +7,7 @@ import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { formatarTelefoneParaExibicao } from "./outreach-contacts";
 import {
   GeneratedOutreachCopy, mapOutreachRows, OUTREACH_CHANNEL_KEY, OUTREACH_FIELDS,
-  OUTREACH_MIN_INTERVAL_MS, OUTREACH_PRODUCT_FACTS, OUTREACH_PROMPT_V1,
+  OUTREACH_MIN_INTERVAL_MS, OUTREACH_OUTPUT_CONTRACT, OUTREACH_PRODUCT_FACTS, OUTREACH_PROMPT_V1,
   OutreachMapping, outreachPreviewFingerprint, parseOutreachWorkbook, suggestOutreachMapping, validateOutreachCopy,
   validateOutreachMapping,
 } from "./outreach-intelligence";
@@ -246,7 +246,8 @@ export class OutreachIntelligenceService {
     await this.db().platformOutreachTarget.updateMany({ where: {
       campaignId, status: OutreachTargetStatus.PENDENTE,
       generationStatus: { in: ["NAO_PREPARADO", "REVISAO"] },
-    }, data: { generationStatus: "PENDENTE", generationAttempts: 0, approvalStatus: "PENDENTE" } });
+    }, data: { generationStatus: "PENDENTE", generationAttempts: 0,
+      approvalStatus: "PENDENTE", errorMessage: null } });
     await this.db().platformOutreachCampaign.update({ where: { id: campaignId }, data: {
       promptVersion: prompt.version, preparationRequestedAt: new Date(), approvedAt: null,
     } });
@@ -280,19 +281,35 @@ export class OutreachIntelligenceService {
       id: target.id, generationStatus: "PENDENTE", generationAttempts: target.generationAttempts,
     }, data: { generationStatus: "EM_PREPARO", generationStartedAt: new Date(), generationAttempts: { increment: 1 } } });
     if (claim.count !== 1) return;
+    let requestId: string | null = null;
+    let inputTokens = 0;
+    let outputTokens = 0;
     try {
       const version = campaign.promptVersion ?? 1;
       const prompt = version === 1 ? OUTREACH_PROMPT_V1
         : (await this.db().platformOutreachPrompt.findUnique({ where: { version } }))?.systemPrompt;
       if (!prompt) throw new Error("Versão do prompt não encontrada.");
+      const availableFields = [
+        ...(target.name ? ["nome"] : []),
+        ...(target.segment ? ["segmento"] : []),
+        ...(target.city ? ["cidade"] : []),
+      ];
+      const retryInstruction = target.generationAttempts > 0
+        ? "A resposta anterior não passou na validação. Esta é a última tentativa: confira especialmente o tamanho do benefício, o tamanho da proposta, os campos usados e a ausência de placeholders."
+        : "";
       // Custo da plataforma: copy comercial gerada pelo SUPER_ADMIN. Tokens
       // ficam registrados no alvo para auditoria e controle de despesas.
       const result = await this.ai.chat([
-        { role: "system", content: `${prompt}\nRegras inalteráveis: só use fatos recebidos; não prometa resultados. Produza a mensagem completa, sem placeholders. JSON puro.` },
+        { role: "system", content: `${prompt}\n${OUTREACH_OUTPUT_CONTRACT}${retryInstruction ? `\n${retryInstruction}` : ""}` },
         { role: "user", content: JSON.stringify({ leadId: target.id, estabelecimento: target.name,
           segmento: target.segment, cidade: target.city, funcionalidadesComprovadas: OUTREACH_PRODUCT_FACTS,
-          formato: { beneficioPrincipal: "string", proposta: "mensagem completa", dadosUtilizados: ["nome", "segmento", "cidade"], alertas: [] } }) },
-      ], undefined, { responseFormat: "json_object", thinking: false, temperature: 0.55, maxTokens: 450 });
+          camposDisponiveis: availableFields,
+          formato: { beneficioPrincipal: "rótulo curto, 4-80 caracteres", proposta: "mensagem completa, 50-450 caracteres, sem placeholders",
+            dadosUtilizados: "array dos campos disponíveis realmente usados", alertas: [] } }) },
+      ], undefined, { responseFormat: "json_object", thinking: false, temperature: 0.35, maxTokens: 450 });
+      requestId = result.requestId ?? null;
+      inputTokens = result.usage?.inputTokens ?? 0;
+      outputTokens = result.usage?.outputTokens ?? 0;
       const copy = validateOutreachCopy(parseJsonObject(result.content), {
         name: target.name ?? "", segment: target.segment, city: target.city,
       });
@@ -300,14 +317,18 @@ export class OutreachIntelligenceService {
       await this.db().platformOutreachTarget.update({ where: { id: target.id }, data: {
         generationStatus: "PRONTO", proposal: copy.proposta, messageText,
         mainBenefit: copy.beneficioPrincipal, aiDataUsed: copy.dadosUtilizados, aiAlerts: copy.alertas,
-        aiRequestId: result.requestId, aiInputTokens: result.usage?.inputTokens ?? 0,
-        aiOutputTokens: result.usage?.outputTokens ?? 0, approvalStatus: "PENDENTE",
+        aiRequestId: requestId, aiInputTokens: (target.aiInputTokens ?? 0) + inputTokens,
+        aiOutputTokens: (target.aiOutputTokens ?? 0) + outputTokens,
+        approvalStatus: "PENDENTE", errorMessage: null,
       } });
     } catch (error) {
       const attempts = target.generationAttempts + 1;
       await this.db().platformOutreachTarget.update({ where: { id: target.id }, data: {
         generationStatus: attempts >= 2 ? "REVISAO" : "PENDENTE",
         errorMessage: `Preparação da mensagem: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500),
+        ...(requestId ? { aiRequestId: requestId } : {}),
+        aiInputTokens: (target.aiInputTokens ?? 0) + inputTokens,
+        aiOutputTokens: (target.aiOutputTokens ?? 0) + outputTokens,
       } });
       this.logger.warn(`Mensagem do alvo ${target.id} exige ${attempts >= 2 ? "revisão" : "nova tentativa"}.`);
     }
@@ -320,6 +341,7 @@ export class OutreachIntelligenceService {
     await this.db().platformOutreachTarget.update({ where: { id: targetId }, data: {
       generationStatus: "PENDENTE", generationAttempts: 0, approvalStatus: "PENDENTE",
       approvedAt: null, approvedByUserId: null, messageText: null, proposal: null,
+      mainBenefit: null, errorMessage: null,
     } });
     await this.db().platformOutreachCampaign.update({ where: { id: target.campaignId }, data: {
       preparationRequestedAt: new Date(), approvedAt: null,

@@ -112,4 +112,49 @@ describe("falha da DeepSeek na fila persistente", () => {
     expect(updates.at(-1)?.generationStatus).toBe("REVISAO");
     expect(ai.chat).toHaveBeenCalledTimes(2);
   });
+
+  it("usa contrato de saída e instrução corretiva para deixar a segunda tentativa pronta", async () => {
+    const campaign = { id: "c1", status: "RASCUNHO", preparationRequestedAt: new Date(), promptVersion: 1 };
+    const target = { id: "t1", campaignId: "c1", status: "PENDENTE", generationStatus: "PENDENTE",
+      generationAttempts: 0, aiInputTokens: 0, aiOutputTokens: 0,
+      name: "Pizzaria Sol", segment: "Pizzaria", city: null };
+    const updates: Array<Record<string, unknown>> = [];
+    const db: any = {
+      platformOutreachCampaign: { findFirst: jest.fn().mockResolvedValue(campaign) },
+      platformOutreachTarget: {
+        findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(target),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockImplementation(({ data }: any) => { updates.push(data); return Promise.resolve({ ...target, ...data }); }),
+      },
+    };
+    const ai = { chat: jest.fn()
+      .mockResolvedValueOnce({ content: JSON.stringify({ beneficioPrincipal: "A".repeat(138),
+        proposta: "Olá, podemos conversar sobre pedidos pelo WhatsApp e delivery?", dadosUtilizados: ["segmento"], alertas: [] }),
+        usage: { inputTokens: 80, outputTokens: 35 }, requestId: "request-failed" })
+      .mockResolvedValueOnce({ content: JSON.stringify({ beneficioPrincipal: "Organização de pedidos",
+        proposta: "Olá, equipe da Pizzaria Sol! O ChegowIA ajuda a organizar pedidos e entregas. Faz sentido conversar sobre isso?",
+        dadosUtilizados: ["nome", "segmento"], alertas: [] }), usage: { inputTokens: 100, outputTokens: 40 } }) };
+    const service = new OutreachIntelligenceService(db, ai as never);
+
+    await service.prepareNext();
+    expect(updates.at(-1)?.generationStatus).toBe("PENDENTE");
+    expect(updates.at(-1)?.errorMessage).toContain("Benefício principal inválido");
+    expect(updates.at(-1)?.aiInputTokens).toBe(80);
+    expect(updates.at(-1)?.aiOutputTokens).toBe(35);
+    target.generationAttempts = 1;
+    target.aiInputTokens = 80;
+    target.aiOutputTokens = 35;
+    await service.prepareNext();
+
+    expect(updates.at(-1)?.generationStatus).toBe("PRONTO");
+    expect(updates.at(-1)?.messageText).toContain("Pizzaria Sol");
+    expect(updates.at(-1)?.approvalStatus).toBe("PENDENTE");
+    expect(updates.at(-1)?.aiInputTokens).toBe(180);
+    expect(updates.at(-1)?.aiOutputTokens).toBe(75);
+    const [messages, , options] = ai.chat.mock.calls[1];
+    expect(messages[0].content).toContain("última tentativa");
+    expect(messages[0].content).toContain("4 a 80 caracteres");
+    expect(JSON.parse(messages[1].content).camposDisponiveis).toEqual(["nome", "segmento"]);
+    expect(options.temperature).toBe(0.35);
+  });
 });
