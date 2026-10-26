@@ -5,6 +5,7 @@ import { QueryProvider } from "@/lib/query-provider";
 import { SessionBootstrap } from "@/components/auth/session-bootstrap";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { ToastViewport } from "@/components/ui/toast-viewport";
+import { ConfirmViewport } from "@/components/ui/confirm-viewport";
 import { JsonLd } from "@/components/seo/json-ld";
 import { platformSchema } from "@/lib/seo/schema";
 import { siteOrigin } from "@/lib/seo/site";
@@ -112,6 +113,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <SessionBootstrap>
               {children}
               <ToastViewport />
+              <ConfirmViewport />
             </SessionBootstrap>
           </ThemeProvider>
         </QueryProvider>

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiErrorMessage } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/format";
+import { confirmar } from "@/lib/confirm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FormField, Input, Textarea } from "@/components/ui/input";
@@ -221,9 +222,13 @@ export function IntelligentOutreachPanel() {
       </Button>}
       {sender.data?.inFlightTargetId && <div className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
         Tentativa sem conclusão: {sender.data.inFlightTargetId}. Confira no painel de conversas se a mensagem saiu antes de liberar os próximos leads.
-        <Button size="sm" variant="outline" disabled={busy} className="ml-2" onClick={() => {
-          if (window.confirm("Você verificou a tentativa no painel de conversas? Este lead nunca será reenviado automaticamente."))
-            void run(() => api.post(`${API}/sender/reconcile`, { targetId: sender.data!.inFlightTargetId }));
+        <Button size="sm" variant="outline" disabled={busy} className="ml-2" onClick={async () => {
+          const targetId = sender.data!.inFlightTargetId;
+          if (await confirmar({
+            title: "Conciliar a tentativa?", tone: "warning", icon: "alert",
+            message: "Confira no painel de conversas se a mensagem saiu. Este lead nunca será reenviado automaticamente.",
+            confirmLabel: "Já conferi, conciliar",
+          })) void run(() => api.post(`${API}/sender/reconcile`, { targetId }));
         }}>Conciliar sem reenviar</Button>
       </div>}
       {sender.data?.nextAllowedAt && <p className="text-xs text-slate-500 dark:text-slate-400">Próxima tentativa a partir de {formatDateTime(sender.data.nextAllowedAt)}. Intervalo global mínimo: 60 segundos.</p>}
@@ -308,8 +313,12 @@ export function IntelligentOutreachPanel() {
         </button>
         {campaign.status !== "ENVIANDO" && <button type="button" disabled={busy} aria-label={`Apagar campanha ${campaign.name}`} title="Apagar campanha"
           className="absolute right-2 top-2 rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/40"
-          onClick={() => {
-            if (!window.confirm(`Apagar a campanha "${campaign.name}"? Ela some da lista e os leads não enviados são descartados.`)) return;
+          onClick={async () => {
+            if (!await confirmar({
+              title: "Apagar campanha?", subject: campaign.name, tone: "danger", icon: "trash",
+              message: "Ela some da lista e os leads não enviados são descartados. Quem já recebeu continua bloqueado para novas abordagens.",
+              confirmLabel: "Apagar campanha",
+            })) return;
             void run(async () => {
               await api.post(`${API}/campaigns/${campaign.id}/delete`);
               if (selectedCampaign === campaign.id) { setSelectedCampaign(null); setSimulation(null); setSelectedIds([]); }
@@ -328,8 +337,12 @@ export function IntelligentOutreachPanel() {
           {activeCampaign.status === "ENVIANDO"
             ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void performCampaign("pause")}>Pausar</Button>
             : <Button size="sm" disabled={busy || !activeCampaign.approvedAt || !sender.data?.configured} onClick={() => void performCampaign("start")}>Iniciar / retomar envios</Button>}
-          <Button size="sm" variant="outline" disabled={busy || activeCampaign.status === "CANCELADA"} onClick={() => {
-            if (window.confirm("Cancelar a campanha? Os leads não enviados serão descartados.")) void performCampaign("cancel");
+          <Button size="sm" variant="outline" disabled={busy || activeCampaign.status === "CANCELADA"} onClick={async () => {
+            if (await confirmar({
+              title: "Cancelar campanha?", subject: activeCampaign.name, tone: "danger", icon: "stop",
+              message: "Os envios param e os leads não enviados são descartados. Uma campanha cancelada não pode ser retomada.",
+              confirmLabel: "Cancelar campanha", cancelLabel: "Manter campanha",
+            })) void performCampaign("cancel");
           }}>Cancelar</Button>
         </div>
         {activeCampaign.preparationRequestedAt && <p className="text-sm text-sky-700 dark:text-sky-300">A IA está preparando mensagens no servidor. Pode fechar esta página; a fila continua.</p>}

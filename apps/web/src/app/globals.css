@@ -263,6 +263,56 @@ body {
   animation: order-confetti-fall 2.2s linear infinite;
 }
 
+/* Balão de confirmação (components/ui/confirm-viewport.tsx). */
+@keyframes confirm-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes confirm-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+
+@keyframes confirm-card-in {
+  0% { opacity: 0; transform: translateY(28px) scale(.92); filter: blur(4px); }
+  60% { opacity: 1; transform: translateY(-4px) scale(1.015); filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes confirm-card-out {
+  to { opacity: 0; transform: translateY(14px) scale(.96); filter: blur(2px); }
+}
+
+@keyframes confirm-icon-pop {
+  0% { opacity: 0; transform: scale(.4) rotate(-14deg); }
+  65% { opacity: 1; transform: scale(1.12) rotate(4deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+@keyframes confirm-ring {
+  0% { opacity: .7; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.75); }
+}
+
+@keyframes confirm-bar {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes confirm-shine {
+  from { transform: translateX(0) skewX(-20deg); }
+  to { transform: translateX(420%) skewX(-20deg); }
+}
+
+.confirm-backdrop-in { animation: confirm-backdrop-in .2s ease-out both; }
+.confirm-backdrop-out { animation: confirm-backdrop-out .18s ease-in both; }
+.confirm-card-in { animation: confirm-card-in .42s cubic-bezier(.2, .9, .25, 1.15) both; }
+.confirm-card-out { animation: confirm-card-out .18s ease-in both; }
+.confirm-icon { animation: confirm-icon-pop .55s .08s cubic-bezier(.2, .9, .3, 1.3) both; }
+.confirm-ring { animation: confirm-ring 2.2s .4s ease-out infinite; }
+.confirm-ring-late { animation-delay: 1.5s; }
+.confirm-bar { transform-origin: left; animation: confirm-bar .6s .1s cubic-bezier(.2, .8, .2, 1) both; }
+.confirm-shine { opacity: 0; }
+.confirm-accept:hover .confirm-shine,
+.confirm-accept:focus-visible .confirm-shine { opacity: 1; animation: confirm-shine .75s ease-out; }
+.confirm-lid { transform-box: fill-box; transform-origin: 85% 100%; transition: transform .25s cubic-bezier(.2, .9, .3, 1.4); }
+.confirm-card:has(.confirm-accept:hover) .confirm-lid,
+.confirm-card:has(.confirm-accept:focus-visible) .confirm-lid { transform: translateY(-2px) rotate(-22deg); }
+
 @media (prefers-reduced-motion: reduce) {
   .auth-step-enter,
   .auth-journey-line,
@@ -271,8 +321,20 @@ body {
   .order-tracker-enter,
   .order-current-step,
   .order-progress-shine,
-  .order-confetti {
+  .order-confetti,
+  .confirm-backdrop-in,
+  .confirm-backdrop-out,
+  .confirm-card-in,
+  .confirm-card-out,
+  .confirm-icon,
+  .confirm-ring,
+  .confirm-bar,
+  .confirm-accept .confirm-shine {
     animation: none;
+  }
+
+  .confirm-lid {
+    transition: none;
   }
 
 }
