@@ -276,12 +276,12 @@ describe("resposta de quem foi abordado", () => {
  * histórico, o que parecia falha do sistema em vez de regra do WhatsApp.
  */
 describe("responder pelo inbox", () => {
-  function construirEnvio(lastInboundAt: Date | null) {
+  function construirEnvio(lastInboundAt: Date | null, channelKey = "chegowia-institucional") {
     const conversation = {
       id: "conv-1",
       customerPhone: "5562999998888",
       lastInboundAt,
-      channel: { id: "canal-1", status: "ATIVO", automationEnabled: true },
+      channel: { id: "canal-1", key: channelKey, status: "ATIVO", automationEnabled: true },
       messages: [],
     };
     const prisma: any = {
@@ -310,8 +310,26 @@ describe("responder pelo inbox", () => {
       realtime: { emitToSuperAdmins: jest.fn() },
     }) as any;
     service.gupshupAppTokenFor = jest.fn().mockResolvedValue("token");
-    return { service, gupshup };
+    return { service, gupshup, prisma };
   }
+
+  it("conversa do número de prospecção não responde pelo institucional", async () => {
+    const { service, gupshup } = construirEnvio(new Date(), "chegowia-prospeccao-qr");
+
+    await expect(service.sendHumanMessage("u-1", "conv-1", "oi")).rejects.toThrow(/não encontrada/);
+    expect(gupshup.sendText).not.toHaveBeenCalled();
+  });
+
+  it("a caixa lista só conversas do número institucional", async () => {
+    const { service, prisma } = construirEnvio(null);
+    prisma.platformWhatsAppConversation.findMany = jest.fn().mockResolvedValue([]);
+
+    await service.listConversations();
+
+    expect(prisma.platformWhatsAppConversation.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { channel: { key: "chegowia-institucional" } },
+    }));
+  });
 
   it("fora da janela recusa antes de chamar o provedor", async () => {
     const { service, gupshup } = construirEnvio(new Date(Date.now() - 30 * 60 * 60 * 1000));

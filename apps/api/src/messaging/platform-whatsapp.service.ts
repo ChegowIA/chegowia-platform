@@ -461,8 +461,13 @@ export class PlatformWhatsAppService {
     });
   }
 
+  /**
+   * Só o número institucional. A prospecção sai por outro número (QR) e
+   * responder por aqui mandaria a mensagem pelo canal errado.
+   */
   async listConversations() {
     return this.db().platformWhatsAppConversation.findMany({
+      where: { channel: { key: PLATFORM_CHANNEL_KEY } },
       orderBy: { lastMessageAt: "desc" },
       include: {
         channel: {
@@ -484,6 +489,7 @@ export class PlatformWhatsAppService {
         channel: {
           select: {
             id: true,
+            key: true,
             status: true,
             automationEnabled: true,
           },
@@ -491,7 +497,9 @@ export class PlatformWhatsAppService {
         messages: { orderBy: { createdAt: "asc" }, take: 300 },
       },
     });
-    if (!conversation) throw new NotFoundException("Conversa institucional não encontrada.");
+    if (!conversation || conversation.channel?.key !== PLATFORM_CHANNEL_KEY) {
+      throw new NotFoundException("Conversa institucional não encontrada.");
+    }
     // A janela de texto livre sai calculada daqui: é a mesma conta que barra o
     // envio, e deixar a tela recalculá-la abriria espaço para a regra divergir
     // entre o que a interface mostra e o que o servidor aceita.
