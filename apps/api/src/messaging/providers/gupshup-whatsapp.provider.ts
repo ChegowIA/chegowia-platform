@@ -25,6 +25,8 @@ export type GupshupTemplate = {
   category: string;
   status: string;
   content: string | null;
+  /** Motivo informado pela Meta quando o modelo é rejeitado. */
+  reason?: string | null;
 };
 
 /**
@@ -239,6 +241,7 @@ export class GupshupWhatsAppProvider {
       category: readString(row?.category) ?? "",
       status: readString(row?.status) ?? "",
       content: readString(row?.content) ?? readString(row?.data),
+      reason: readString(row?.reason) ?? readString(row?.rejectedReason) ?? null,
     }));
   }
 
@@ -251,6 +254,28 @@ export class GupshupWhatsAppProvider {
     content: string;
     example: string;
   }): Promise<GupshupTemplate> {
+    return this.createTemplate({ ...params, category: "UTILITY", vertical: "Atualizacao de pedido", purpose: "criar modelo de pedido" });
+  }
+
+  /**
+   * Submete um modelo de texto à revisão da Meta.
+   *
+   * Botões de resposta rápida chegam de volta como mensagem do tipo `button`
+   * com o próprio texto, então o webhook trata o toque como uma resposta escrita.
+   */
+  async createTemplate(params: {
+    appId: string;
+    appToken: string;
+    name: string;
+    languageCode: string;
+    content: string;
+    example: string;
+    category: "UTILITY" | "MARKETING";
+    vertical: string;
+    footer?: string;
+    quickReplies?: readonly string[];
+    purpose?: string;
+  }): Promise<GupshupTemplate> {
     const path = `/app/${encodeURIComponent(params.appId)}/${this.mode() === "SELF_SERVE" ? "template" : "templates"}`;
     const result = await this.appRequest(path, {
       method: "POST",
@@ -259,13 +284,17 @@ export class GupshupWhatsAppProvider {
         elementName: params.name,
         languageCode: params.languageCode,
         content: params.content,
-        category: "UTILITY",
-        vertical: "Atualizacao de pedido",
+        category: params.category,
+        vertical: params.vertical,
         templateType: "TEXT",
         example: params.example,
+        ...(params.footer ? { footer: params.footer } : {}),
+        ...(params.quickReplies?.length
+          ? { buttons: JSON.stringify(params.quickReplies.map((text) => ({ type: "QUICK_REPLY", text }))) }
+          : {}),
       },
     });
-    this.assertGupshupAccepted(result, "criar modelo de pedido");
+    this.assertGupshupAccepted(result, params.purpose ?? "criar modelo");
     const template = result?.template ?? result;
     const id = readString(template?.id);
     if (!id) throw new BadGatewayException("O Gupshup não devolveu o ID do modelo criado.");
@@ -273,7 +302,7 @@ export class GupshupWhatsAppProvider {
       id,
       name: readString(template?.elementName) ?? params.name,
       languageCode: readString(template?.languageCode) ?? params.languageCode,
-      category: readString(template?.category) ?? "UTILITY",
+      category: readString(template?.category) ?? params.category,
       status: readString(template?.status) ?? "PENDING",
       content: readString(template?.content) ?? params.content,
     };

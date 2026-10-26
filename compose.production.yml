@@ -143,33 +143,6 @@ services:
     networks: [backend]
     logging: *default-logging
 
-  # Remetente da Central de Prospecção: isolado da API e dos jobs normais.
-  # Número dedicado via QR; auth cifrada no MySQL, sem volume de sessão no container.
-  # Ative somente depois de configurar OUTREACH_SESSION_ENCRYPTION_KEY.
-  outreach-worker:
-    profiles: [outreach]
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-    restart: unless-stopped
-    deploy:
-      replicas: 1
-    env_file: ${OUTREACH_ENV_FILE:-.env.outreach}
-    environment:
-      NODE_ENV: production
-      APP_ROLE: outreach-worker
-    depends_on:
-      mysql:
-        condition: service_healthy
-    init: true
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    # A rede frontend fornece saída para DeepSeek/WhatsApp; o processo não abre
-    # HTTP nem publica portas.
-    networks: [backend, frontend]
-    logging: *default-logging
-
   web:
     build:
       context: .

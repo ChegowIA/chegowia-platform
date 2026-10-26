@@ -708,7 +708,7 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.6.22 | Fila esvaziada | Vira `CONCLUIDA` sozinho |
 | 10.6.23 | Reiniciar o processo da API no meio do disparo | Retoma sem reenviar nem atropelar o intervalo |
 | 10.6.24 | Falha no envio | Uma tentativa por contato: marca `FALHOU` com o erro, sem repetir sozinho |
-| 10.6.25 | Modelo recusado pela Meta (erro em série) | Pausa automática após 5 falhas sem nenhum envio, com o motivo e o último erro |
+| 10.6.25 | Modelo recusado pela Meta / erro do Gupshup | Pausa na primeira recusa, com o motivo na tela; o lead fica `FALHOU` e não é reenviado |
 | 10.6.26 | Recolar um número que falhou | Aceito: falha não torna o contato inalcançável |
 | 10.6.27 | Recolar um número que recebeu de verdade | Descartado: "já existe conversa com este número" |
 | 10.6.28 | Conferir o consumo depois de um disparo | Mensagens contam como `WHATSAPP_TEMPLATE_MARKETING` no consumo da plataforma |
@@ -720,6 +720,12 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.6.34 | Lista de 2 mil números | Criada em menos de 1s; conferência devolve 50 exemplos com o total ao lado |
 | 10.6.35 | Apagar campanha cancelada pela lixeira | Some da lista; reimportar um número já enviado continua descartado |
 | 10.6.36 | Lixeira em campanha enviando | Não aparece; é preciso pausar ou cancelar antes |
+| 10.6.37 | Enviar modelo para aprovação da Meta | Aparece "Em análise na Meta"; criar de novo só consulta, não duplica |
+| 10.6.38 | Modelo aprovado e "Atualizar situação" | "Aprovado pela Meta"; botão some e o início fica liberado |
+| 10.6.39 | Gerar mensagens com IA | Cada lead mostra nome curto, atividade e cidade; prévia igual ao modelo |
+| 10.6.40 | Lead toca "Quero ver como funciona" | Conversa no painel em modo IA; assistente responde na hora |
+| 10.6.41 | Lead toca "Não quero receber" | Número bloqueado, confirmação enviada, conversa encerrada |
+| 10.6.42 | Serviço com `APP_ROLE=outreach-worker` | Não sobe: mensagem pedindo para excluir o serviço |
 
 ### 10.6.1 Leitura da lista: casos que já falharam
 

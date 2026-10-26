@@ -20,7 +20,7 @@ function looksLikePlaceholder(value: string) {
 export function validateEnvironment(config: Record<string, unknown>) {
   const env = { ...config } as Record<string, string | undefined>;
   if (env.APP_ROLE === "outreach-worker") {
-    throw new Error("APP_ROLE=outreach-worker deve usar o processo dedicado, não a API completa.");
+    throw new Error("APP_ROLE=outreach-worker foi desativado: a prospecção roda no worker principal. Exclua este serviço.");
   }
   const production = env.NODE_ENV === "production";
   const gupshupEnabled = env.GUPSHUP_ENABLED === "true";

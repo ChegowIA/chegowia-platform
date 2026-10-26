@@ -2123,6 +2123,10 @@ model PlatformWhatsAppChannel {
   outreachTemplateBody     String?                @db.Text
   // Quais campos do contato preenchem {{1}}, {{2}}… na ordem do modelo.
   outreachTemplateParams   Json?
+  // Situação do modelo de prospecção na Meta (PENDING, APPROVED, REJECTED…),
+  // conferida no Gupshup; só APPROVED libera a fila.
+  outreachTemplateStatus   String?
+  outreachTemplateError    String?                @db.Text
   connectedAt              DateTime?
   lastWebhookAt            DateTime?
   lastError                String?                @db.Text
@@ -2402,6 +2406,8 @@ model PlatformOutreachTarget {
   generationStartedAt DateTime?
   proposal String? @db.Text
   messageText String? @db.Text
+  // Valores de {{1}}, {{2}}… do modelo aprovado; messageText é a prévia renderizada.
+  templateVariables Json?
   mainBenefit String?
   aiDataUsed Json?
   aiAlerts Json?

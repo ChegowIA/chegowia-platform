@@ -1,7 +1,7 @@
 import * as XLSX from "@e965/xlsx";
 import {
   mapOutreachRows, outreachPreviewFingerprint, parseOutreachConsentDate, parseOutreachWorkbook,
-  suggestOutreachMapping, validateOutreachCopy, validateOutreachMapping,
+  suggestOutreachMapping, validateOutreachMapping, validateOutreachVariables,
 } from "../src/messaging/outreach-intelligence";
 import { OutreachIntelligenceService } from "../src/messaging/outreach-intelligence.service";
 
@@ -100,7 +100,7 @@ describe("importação XLSX de prospecção", () => {
     const targets: any[] = [];
     const importRows: any[] = [];
     const db: any = {
-      platformWhatsAppChannel: { upsert: jest.fn().mockResolvedValue({ id: "channel-1" }) },
+      platformWhatsAppChannel: { findUnique: jest.fn().mockResolvedValue({ id: "channel-1" }) },
       user: { findUnique: jest.fn().mockResolvedValue({ name: "Admin" }) },
       platformOutreachBlock: { findMany: jest.fn().mockResolvedValue([]) },
       platformOutreachTarget: { findMany: jest.fn().mockResolvedValue([]),
@@ -130,23 +130,22 @@ describe("importação XLSX de prospecção", () => {
   });
 });
 
-describe("validação de copy da DeepSeek", () => {
-  const facts = { name: "Pizzaria Sol", segment: "Pizzaria", city: "Goiânia" };
-  const valid = {
-    beneficioPrincipal: "Organização de pedidos",
-    proposta: "organizar pedidos e acompanhar entregas de pizzas",
-    dadosUtilizados: ["segmento"], alertas: [],
-  };
-  it("aceita proposta curta contextualizada e estruturada", () => {
-    expect(validateOutreachCopy(valid, facts).proposta).toBe(valid.proposta);
+describe("variáveis do modelo preenchidas pela DeepSeek", () => {
+  it("encaixa nome e atividade no modelo e completa a cidade pelos dados", () => {
+    const { variables } = validateOutreachVariables(
+      { nomeCurto: "Schimidt Alimentos", atividade: "Pães para hamburguerias", alertas: [] }, { city: "Goiânia" });
+    expect(variables).toEqual(["Schimidt Alimentos", "pães para hamburguerias", "Goiânia"]);
+    expect(validateOutreachVariables({ nomeCurto: "Bar do Zé", atividade: "petiscos" }, { city: null }).variables[2])
+      .toBe("sua região");
   });
-  it("rejeita JSON incompleto, placeholders e promessas garantidas", () => {
-    expect(() => validateOutreachCopy({ ...valid, dadosUtilizados: undefined }, facts)).toThrow();
-    expect(() => validateOutreachCopy({ ...valid, proposta: "organizar {{cliente}} e pedidos" }, facts)).toThrow();
-    expect(() => validateOutreachCopy({ ...valid, proposta: "dobrar suas vendas em 30 dias" }, facts)).toThrow();
-  });
-  it("não admite personalização por campo ausente", () => {
-    expect(() => validateOutreachCopy(valid, { ...facts, segment: null })).toThrow();
+  it("rejeita o que a Meta recusaria ou o que estraga a frase", () => {
+    const ok = { nomeCurto: "Pizzaria Sol", atividade: "pizzas", alertas: [] };
+    expect(() => validateOutreachVariables({ ...ok, nomeCurto: "Pizzaria\nSol" }, { city: null })).toThrow();
+    expect(() => validateOutreachVariables({ ...ok, nomeCurto: "#pizza Goiânia" }, { city: null })).toThrow();
+    expect(() => validateOutreachVariables({ ...ok, atividade: "pizzas com 50% de desconto" }, { city: null })).toThrow();
+    expect(() => validateOutreachVariables({ ...ok, atividade: "pizzas 🍕" }, { city: null })).toThrow();
+    expect(() => validateOutreachVariables({ ...ok, nomeCurto: "A".repeat(41) }, { city: null })).toThrow();
+    expect(() => validateOutreachVariables({ ...ok, atividade: undefined }, { city: null })).toThrow();
   });
 });
 
@@ -215,17 +214,16 @@ describe("falha da DeepSeek na fila persistente", () => {
       },
     };
     const ai = { chat: jest.fn()
-      .mockResolvedValueOnce({ content: JSON.stringify({ beneficioPrincipal: "A".repeat(138),
-        proposta: "Olá, podemos conversar sobre pedidos pelo WhatsApp e delivery?", dadosUtilizados: ["segmento"], alertas: [] }),
+      .mockResolvedValueOnce({ content: JSON.stringify({ nomeCurto: "Pizzaria Sol - a melhor pizza de Goiânia #delivery",
+        atividade: "pizzas", alertas: [] }),
         usage: { inputTokens: 80, outputTokens: 35 }, requestId: "request-failed" })
-      .mockResolvedValueOnce({ content: JSON.stringify({ beneficioPrincipal: "Organização de pedidos",
-        proposta: "Olá, equipe da Pizzaria Sol! O ChegowIA ajuda a organizar pedidos e entregas. Faz sentido conversar sobre isso?",
-        dadosUtilizados: ["nome", "segmento"], alertas: [] }), usage: { inputTokens: 100, outputTokens: 40 } }) };
+      .mockResolvedValueOnce({ content: JSON.stringify({ nomeCurto: "Pizzaria Sol", atividade: "pizzas e delivery", alertas: [] }),
+        usage: { inputTokens: 100, outputTokens: 40 } }) };
     const service = new OutreachIntelligenceService(db, ai as never);
 
     await service.prepareNext();
     expect(updates.at(-1)?.generationStatus).toBe("PENDENTE");
-    expect(updates.at(-1)?.errorMessage).toContain("Benefício principal inválido");
+    expect(updates.at(-1)?.errorMessage).toContain("nomeCurto");
     expect(updates.at(-1)?.aiInputTokens).toBe(80);
     expect(updates.at(-1)?.aiOutputTokens).toBe(35);
     target.generationAttempts = 1;
@@ -234,14 +232,15 @@ describe("falha da DeepSeek na fila persistente", () => {
     await service.prepareNext();
 
     expect(updates.at(-1)?.generationStatus).toBe("PRONTO");
-    expect(updates.at(-1)?.messageText).toContain("Pizzaria Sol");
+    expect(updates.at(-1)?.templateVariables).toEqual(["Pizzaria Sol", "pizzas e delivery", "sua região"]);
+    expect(updates.at(-1)?.messageText).toContain("Oi, Pizzaria Sol! Tudo bem?");
+    expect(updates.at(-1)?.messageText).toContain("trabalham com pizzas e delivery em sua região");
     expect(updates.at(-1)?.approvalStatus).toBe("PENDENTE");
     expect(updates.at(-1)?.aiInputTokens).toBe(180);
     expect(updates.at(-1)?.aiOutputTokens).toBe(75);
     const [messages, , options] = ai.chat.mock.calls[1];
     expect(messages[0].content).toContain("última tentativa");
-    expect(messages[0].content).toContain("4 a 80 caracteres");
-    expect(JSON.parse(messages[1].content).camposDisponiveis).toEqual(["nome", "segmento"]);
-    expect(options.temperature).toBe(0.35);
+    expect(messages[0].content).toContain("2 a 40 caracteres");
+    expect(options.temperature).toBe(0.2);
   });
 });

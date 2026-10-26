@@ -7,7 +7,6 @@ import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FormField, Input, Textarea } from "@/components/ui/input";
-import { QRCodeSVG } from "qrcode.react";
 
 type Field = "name" | "phone" | "segment" | "city" | "state" | "address" | "website" | "consent" | "consentSource" | "consentEvidence" | "consentAt";
 const FIELDS: Array<{ key: Field; label: string }> = [
@@ -42,6 +41,7 @@ type Target = {
   segment: string | null; city: string | null; status: string; consentStatus: string;
   consentSource: string | null; consentEvidence: string | null; consentAt: string | null; generationStatus: string;
   proposal: string | null; messageText: string | null; mainBenefit: string | null;
+  templateVariables: string[] | null;
   approvalStatus: string; responseCategory: string | null; responseSuggestion: string | null;
   responseText: string | null;
   discardReason: string | null; errorMessage: string | null; attempt: Attempt | null;
@@ -52,8 +52,9 @@ type IssuePage = { total: number; page: number; pageSize: number;
     originalData: { headers: string[]; values: string[] } }> };
 type Simulation = { ready: number; total: number; pendingConsent: number; pendingCopy: number;
   pendingApproval: number; aiInputTokens: number; aiOutputTokens: number; sent: 0 };
-type Sender = { configured: boolean; status: string; phone: string | null; qrCode: string | null;
-  workerOnline: boolean; lastHeartbeatAt: string | null; lastError: string | null;
+type Template = { name: string; body: string; footer: string; buttons: string[]; example: string;
+  status: string | null; error: string | null; approved: boolean };
+type Sender = { configured: boolean; connected: boolean; phone: string | null; template: Template | null;
   queued: number; sent: number; failed: number; activeCampaign: { id: string; name: string } | null;
   inFlightTargetId: string | null; nextAllowedAt: string | null };
 type Prompt = { version: number; systemPrompt: string };
@@ -65,6 +66,11 @@ function localDateTime(value: string | null) {
   return Number.isFinite(date.getTime())
     ? new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : "";
 }
+const templateStatusLabel: Record<string, string> = {
+  APPROVED: "Aprovado pela Meta", PENDING: "Em análise na Meta", SUBMITTED: "Em análise na Meta",
+  REJECTED: "Rejeitado pela Meta", PAUSED: "Pausado pela Meta", DISABLED: "Desativado pela Meta",
+  INVALID: "Conflito com modelo existente", ERROR: "Falha ao enviar",
+};
 const statusLabel: Record<string, string> = {
   RASCUNHO: "Rascunho", ENVIANDO: "Enviando", PAUSADA: "Pausada", CONCLUIDA: "Concluída", CANCELADA: "Cancelada",
   PENDENTE: "Pendente", RESERVADO: "Tentativa em andamento", ENVIADO: "Aceito pela API", RESPONDEU: "Respondeu",
@@ -89,7 +95,7 @@ export function IntelligentOutreachPanel() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [simulation, setSimulation] = useState<Simulation | null>(null);
   const [promptDraft, setPromptDraft] = useState<string | null>(null);
-  const [proposalDraft, setProposalDraft] = useState<Record<string, string>>({});
+  const [variableDraft, setVariableDraft] = useState<Record<string, { nomeCurto: string; atividade: string }>>({});
   const [consentDraft, setConsentDraft] = useState<Record<string, { source: string; evidence: string; at: string }>>({});
 
   function updateConsentDraft(target: Target, field: "source" | "evidence" | "at", value: string) {
@@ -97,6 +103,13 @@ export function IntelligentOutreachPanel() {
       source: current[target.id]?.source ?? target.consentSource ?? "",
       evidence: current[target.id]?.evidence ?? target.consentEvidence ?? "",
       at: current[target.id]?.at ?? localDateTime(target.consentAt), [field]: value,
+    } }));
+  }
+
+  function updateVariableDraft(target: Target, field: "nomeCurto" | "atividade", value: string) {
+    setVariableDraft((current) => ({ ...current, [target.id]: {
+      nomeCurto: current[target.id]?.nomeCurto ?? target.templateVariables?.[0] ?? "",
+      atividade: current[target.id]?.atividade ?? target.templateVariables?.[1] ?? "", [field]: value,
     } }));
   }
 
@@ -112,7 +125,7 @@ export function IntelligentOutreachPanel() {
     queryFn: async () => (await api.get<Campaign[]>(`${API}/campaigns`)).data,
     refetchInterval: 15_000 });
   const sender = useQuery({ queryKey: ["intelligent-outreach-sender"],
-    queryFn: async () => (await api.get<Sender>(`${API}/sender`)).data, refetchInterval: 3_000 });
+    queryFn: async () => (await api.get<Sender>(`${API}/sender`)).data, refetchInterval: 15_000 });
   const prompt = useQuery({ queryKey: ["intelligent-outreach-prompt"],
     queryFn: async () => (await api.get<Prompt>(`${API}/prompt`)).data });
   const targets = useQuery({ queryKey: ["intelligent-outreach-targets", selectedCampaign, page],
@@ -177,39 +190,39 @@ export function IntelligentOutreachPanel() {
       <p className="text-xs font-black uppercase tracking-[0.14em] text-orange-600 dark:text-orange-300">Acesso exclusivo do superadministrador</p>
       <h2 className="mt-1 text-2xl font-black text-slate-950 dark:text-slate-100">Central de Prospecção Inteligente</h2>
       <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-        Importe, revise e aprove cada abordagem. A DeepSeek prepara uma mensagem individualizada; o número dedicado é conectado por QR Code.
+        Importe, revise e aprove cada abordagem. A primeira mensagem é o modelo aprovado pela Meta, enviado pelo WhatsApp oficial;
+        a DeepSeek adapta o nome e a atividade de cada lead. Quando o lead responde, a IA do atendimento assume a conversa no painel.
         Sem autorização comprovada, não há envio.
       </p>
     </div>
     {error && <p role="alert" className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">{error}</p>}
 
     <Card><CardContent className="space-y-3 p-5">
-      <h3 className="text-lg font-bold text-slate-950 dark:text-slate-100">WhatsApp de Prospecção</h3>
-      <p className="text-sm text-slate-600 dark:text-slate-300">Número exclusivo, conectado por QR Code no worker independente. A Gupshup operacional permanece separada.</p>
+      <h3 className="text-lg font-bold text-slate-950 dark:text-slate-100">WhatsApp oficial e modelo da Meta</h3>
+      <p className="text-sm text-slate-600 dark:text-slate-300">A prospecção sai pelo número institucional, conectado pelo Gupshup. As conversas aparecem no painel de mensagens acima.</p>
       <div className="flex flex-wrap gap-3 text-sm text-slate-800 dark:text-slate-200">
-        <span>Conexão: <strong>{sender.data?.status ?? "carregando"}</strong></span>
-        <span>Número: <strong>{sender.data?.phone || "não conectado"}</strong></span>
-        <span>Worker: <strong>{sender.data?.workerOnline ? "online" : "offline"}</strong></span>
+        <span>Número: <strong>{sender.data?.connected ? sender.data.phone || "conectado" : "desconectado"}</strong></span>
+        <span>Modelo: <strong>{sender.data?.template?.status ? templateStatusLabel[sender.data.template.status] ?? sender.data.template.status : "ainda não enviado"}</strong></span>
       </div>
       <div className="flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
         <span>Na fila: {sender.data?.queued ?? 0}</span><span>Enviadas: {sender.data?.sent ?? 0}</span>
         <span>Falhas: {sender.data?.failed ?? 0}</span><span>Campanha ativa: {sender.data?.activeCampaign?.name ?? "nenhuma"}</span>
       </div>
-      {sender.data?.lastError && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{sender.data.lastError}</p>}
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || !sender.data?.workerOnline || sender.data?.configured} onClick={() => void run(() => api.post(`${API}/sender/connect`))}>Conectar WhatsApp</Button>
-        <Button variant="outline" disabled={busy || !sender.data?.workerOnline || sender.data?.status === "DESCONECTADO"} onClick={() => {
-          if (window.confirm("Desconectar o número de prospecção? As campanhas em andamento deixarão de enviar.")) void run(() => api.post(`${API}/sender/disconnect`));
-        }}>Desconectar</Button>
-      </div>
-      {sender.data?.qrCode && <div className="inline-flex flex-col items-center gap-2 rounded-xl border border-slate-200 bg-white p-4 text-center text-sm text-slate-700 dark:border-slate-600 dark:bg-white dark:text-slate-700">
-        <QRCodeSVG value={sender.data.qrCode} size={220} marginSize={2} />
-        <span>Escaneie no WhatsApp do número dedicado. O QR Code expira e é atualizado automaticamente.</span>
+      {sender.data && !sender.data.connected && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">Conecte o WhatsApp institucional pelo Gupshup para enviar o modelo e iniciar campanhas.</p>}
+      {sender.data?.template?.error && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">{sender.data.template.error}</p>}
+      {sender.data?.template && <div className="max-w-xl space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-slate-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-slate-100">
+        <p className="text-xs font-bold uppercase tracking-wide text-emerald-800 dark:text-emerald-300">{sender.data.template.name} · exemplo</p>
+        <p className="whitespace-pre-wrap">{sender.data.template.example}</p>
+        <p className="text-xs text-slate-600 dark:text-slate-400">{sender.data.template.footer}</p>
+        <div className="flex flex-wrap gap-2">{sender.data.template.buttons.map((button) => <span key={button} className="rounded-full border border-emerald-300 bg-white px-3 py-1 text-xs font-semibold text-emerald-800 dark:border-emerald-800 dark:bg-slate-900 dark:text-emerald-300">{button}</span>)}</div>
       </div>}
+      {!sender.data?.template?.approved && <Button disabled={busy || !sender.data?.connected} onClick={() => void run(() => api.post(`${API}/template/sync`))}>
+        {sender.data?.template?.status && sender.data.template.status !== "ERROR" ? "Atualizar situação do modelo" : "Enviar modelo para aprovação da Meta"}
+      </Button>}
       {sender.data?.inFlightTargetId && <div className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-        Tentativa sem conclusão: {sender.data.inFlightTargetId}. Confira no WhatsApp do número dedicado antes de liberar os próximos leads.
+        Tentativa sem conclusão: {sender.data.inFlightTargetId}. Confira no painel de conversas se a mensagem saiu antes de liberar os próximos leads.
         <Button size="sm" variant="outline" disabled={busy} className="ml-2" onClick={() => {
-          if (window.confirm("Você verificou a tentativa no WhatsApp? Este lead nunca será reenviado automaticamente."))
+          if (window.confirm("Você verificou a tentativa no painel de conversas? Este lead nunca será reenviado automaticamente."))
             void run(() => api.post(`${API}/sender/reconcile`, { targetId: sender.data!.inFlightTargetId }));
         }}>Conciliar sem reenviar</Button>
       </div>}
@@ -217,9 +230,9 @@ export function IntelligentOutreachPanel() {
     </CardContent></Card>
 
     <details className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-      <summary className="cursor-pointer text-base font-bold text-slate-950 dark:text-slate-100">Prompt de copywriting</summary>
+      <summary className="cursor-pointer text-base font-bold text-slate-950 dark:text-slate-100">Prompt da personalização</summary>
       <div className="mt-4 max-w-3xl space-y-3">
-          <p className="text-sm text-slate-600 dark:text-slate-300">Prompt interno versionado · versão {prompt.data?.version ?? "…"}. Não há limite fixo de caracteres no editor; alterar cria uma versão nova e campanhas preparadas conservam a anterior. A requisição, o modelo de IA e a mensagem gerada ainda têm limites técnicos próprios.</p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">Orienta a DeepSeek a preencher o nome ({"{{1}}"}) e a atividade ({"{{2}}"}) de cada lead no modelo aprovado. Prompt versionado · versão {prompt.data?.version ?? "…"}; alterar cria uma versão nova e campanhas preparadas conservam a anterior. O formato da resposta e os limites das variáveis são fixos no sistema.</p>
           <Textarea rows={12} value={promptDraft ?? prompt.data?.systemPrompt ?? ""} onChange={(event) => setPromptDraft(event.target.value)} />
           <Button variant="outline" disabled={busy || !promptDraft?.trim()} onClick={() => void run(async () => {
             await api.put(`${API}/prompt`, { systemPrompt: promptDraft }); setPromptDraft(null);
@@ -323,7 +336,7 @@ export function IntelligentOutreachPanel() {
         {activeCampaign.pausedReason && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">{activeCampaign.pausedReason}</p>}
         {simulation && <p className="rounded-lg border border-sky-300 bg-sky-50 p-3 text-sm text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
           Simulação: {simulation.ready} de {simulation.total} aptos; {simulation.pendingConsent} sem opt-in comprovado,
-          {" "}{simulation.pendingCopy} sem copy validada, {simulation.pendingApproval} sem aprovação.
+          {" "}{simulation.pendingCopy} sem variáveis validadas, {simulation.pendingApproval} sem aprovação.
           Nenhuma mensagem enviada. Tokens IA: {simulation.aiInputTokens} entrada / {simulation.aiOutputTokens} saída.
         </p>}
         {targets.data && <div className="space-y-3">
@@ -347,13 +360,17 @@ export function IntelligentOutreachPanel() {
             </div>
             {expanded === target.id && <div className="mt-3 space-y-3 border-t border-slate-200 pt-3 text-sm dark:border-slate-700">
               <p className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-slate-900 dark:bg-slate-950 dark:text-slate-100">{target.messageText || "Mensagem ainda não preparada."}</p>
-              <p className="text-xs text-slate-600 dark:text-slate-300">Benefício: {target.mainBenefit || "—"}. Origem: linha {target.sourceRowNumber ?? "—"}. {target.errorMessage || target.discardReason || ""}</p>
+              <p className="text-xs text-slate-600 dark:text-slate-300">Variáveis: {target.templateVariables?.join(" · ") || "—"}. Origem: linha {target.sourceRowNumber ?? "—"}. {target.errorMessage || target.discardReason || ""}</p>
               {target.responseText && <p className="whitespace-pre-wrap rounded-lg bg-sky-50 p-3 text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">Resposta recebida: {target.responseText}<br />Classificação: {target.responseCategory || "pendente"}. Sugestão para revisão humana: {target.responseSuggestion || "—"}</p>}
               {target.attempt && <p className="text-xs text-slate-600 dark:text-slate-300">Tentativa {target.attempt.status} em {formatDateTime(target.attempt.startedAt)} · {target.attempt.errorMessage || "sem erro"}</p>}
               {target.status === "PENDENTE" && activeCampaign.status === "RASCUNHO" && <div className="space-y-3">
-                <FormField label="Editar mensagem completa"><Textarea rows={5} value={proposalDraft[target.id] ?? target.messageText ?? ""} onChange={(event) => setProposalDraft((current) => ({ ...current, [target.id]: event.target.value }))} /></FormField>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <FormField label="Nome do negócio ({{1}})"><Input maxLength={40} value={variableDraft[target.id]?.nomeCurto ?? target.templateVariables?.[0] ?? ""} onChange={(event) => updateVariableDraft(target, "nomeCurto", event.target.value)} /></FormField>
+                  <FormField label="Atividade ({{2}})"><Input maxLength={60} value={variableDraft[target.id]?.atividade ?? target.templateVariables?.[1] ?? ""} onChange={(event) => updateVariableDraft(target, "atividade", event.target.value)} /></FormField>
+                  <FormField label="Cidade ({{3}})"><Input disabled value={target.templateVariables?.[2] ?? target.city ?? "sua região"} /></FormField>
+                </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" disabled={busy} onClick={() => void targetAction(target.id, "proposal", { proposal: proposalDraft[target.id] ?? target.proposal })}>Salvar edição</Button>
+                  <Button size="sm" variant="outline" disabled={busy || !variableDraft[target.id]} onClick={() => void targetAction(target.id, "variables", variableDraft[target.id])}>Salvar edição</Button>
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => void targetAction(target.id, "regenerate")}>Regenerar pela IA</Button>
                   <Button size="sm" disabled={busy || target.generationStatus !== "PRONTO"} onClick={() => void targetAction(target.id, "review", { approved: true })}>Aprovar mensagem</Button>
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => void targetAction(target.id, "review", { approved: false })}>Rejeitar</Button>

@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import * as XLSX from "@e965/xlsx";
 import { normalizarTelefoneBrasileiro, pareceTelefoneFixo } from "./outreach-contacts";
+import { outreachVariables } from "./outreach-template";
 
 export const OUTREACH_MAX_FILE_BYTES = 5 * 1024 * 1024;
-export const OUTREACH_CHANNEL_KEY = "chegowia-prospeccao-qr";
 export const OUTREACH_MAX_ROWS = 10_000;
 export const OUTREACH_MAX_COLUMNS = 80;
-export const OUTREACH_MAX_MESSAGE_CHARS = 500;
 export const OUTREACH_MIN_INTERVAL_MS = 60_000;
 
 export const OUTREACH_FIELDS = [
@@ -16,28 +15,26 @@ export const OUTREACH_FIELDS = [
 export type OutreachField = typeof OUTREACH_FIELDS[number];
 export type OutreachMapping = Partial<Record<OutreachField, number>>;
 
-export const OUTREACH_PROMPT_V1 = `Você é um especialista sênior em prospecção comercial B2B, marketing digital, copywriting e vendas de softwares SaaS para estabelecimentos alimentícios.
-Sua missão é criar uma primeira mensagem de apresentação do ChegowIA para um estabelecimento comercial que autorizou esse tipo de contato.
-Analise cuidadosamente os dados fornecidos, especialmente nome e segmento.
-Utilize somente fatos comprovados sobre o estabelecimento e funcionalidades reais do ChegowIA.
-Crie uma mensagem natural, profissional, objetiva e contextualizada, demonstrando de forma breve como a plataforma pode ser relevante para aquele tipo de negócio.
-Não invente problemas enfrentados pelo estabelecimento, nomes de proprietários, faturamento, quantidade de pedidos ou informações ausentes.
-Não utilize clichês comerciais exagerados, falsa intimidade, pressão psicológica ou promessas garantidas.
-Priorize uma única proposta de valor relevante, uma apresentação breve e uma pergunta final simples que facilite o início de uma conversa comercial.
-Evite mensagens longas. A linguagem deve parecer escrita por um consultor comercial experiente, e não por um robô.
-Escreva a mensagem completa para revisão humana, com saudação breve, uma proposta de valor e uma pergunta final simples. Responda JSON rigoroso com beneficioPrincipal, proposta (mensagem completa), dadosUtilizados e alertas.`;
+/**
+ * Prompt padrão: preencher as variáveis do modelo aprovado, não escrever a mensagem.
+ *
+ * A primeira mensagem para quem nunca escreveu só pode ser modelo aprovado pela
+ * Meta. O texto fixo já vende; o que a IA faz é o que um vendedor faria ao
+ * olhar a lista: chamar o negócio pelo nome que o dono usa e dizer, com as
+ * palavras do cliente, o que ele vende.
+ */
+export const OUTREACH_PROMPT_V1 = `Você é um especialista sênior em prospecção comercial para negócios de alimentação. A mensagem de abertura já está escrita e aprovada pela Meta; sua tarefa é preencher, para um estabelecimento, as duas lacunas que tornam a mensagem pessoal.
+Mensagem fixa: "Oi, {{1}}! Tudo bem? Aqui é da ChegowIA. Vi que vocês trabalham com {{2}} em {{3}} e lembrei de vocês: ..."
+nomeCurto ({{1}}) é o nome do estabelecimento como o próprio dono falaria. Listas do Google Maps trazem nomes como "Schimidt Alimentos - Fábrica de pães - #pão para hambúrguer, fornecedor de pão Goiânia": nesse caso o nome é "Schimidt Alimentos". Remova slogans, hashtags, palavras de busca, cidade, telefone e descrições. Mantenha a grafia original da marca. Se não houver nome de marca reconhecível, use "pessoal".
+atividade ({{2}}) é o que o negócio vende, em linguagem natural e minúscula, para completar "Vi que vocês trabalham com ___": por exemplo "pizzas e delivery", "hambúrgueres artesanais", "pães para hamburguerias", "açaí e sorvetes", "marmitas". Use somente o que o nome e o segmento mostram; na dúvida, prefira algo mais geral e verdadeiro, como "lanches" ou "alimentação".
+Não invente produtos, especialidades, prêmios, tempo de mercado ou qualquer fato ausente nos dados. Não use emoji, adjetivos de elogio ("melhor", "incrível"), preço ou promessa.`;
 
-/** Contrato técnico da resposta: protege a revisão sem modificar a copy gerada. */
-export const OUTREACH_OUTPUT_CONTRACT = `Formato obrigatório: responda somente um objeto JSON com as chaves beneficioPrincipal, proposta, dadosUtilizados e alertas.
-beneficioPrincipal deve ser um rótulo curto de 4 a 80 caracteres, como "Organização de pedidos"; nunca um parágrafo.
-proposta deve conter a mensagem COMPLETA entre 50 e 450 caracteres, com saudação breve, uma única proposta de valor real e uma pergunta final simples.
-Não inclua assinatura, nome fictício do consultor, colchetes, chaves, variáveis, placeholders ou qualquer trecho para preencher depois.
-Se o nome do estabelecimento for longo ou parecer texto de busca, não o repita na mensagem; use apenas o segmento disponível sem inventar um nome curto.
-Não diga que visitou, pesquisou ou conhece o negócio. Não atribua problemas, volume de pedidos ou resultados ao estabelecimento.
-Apresente-se como ChegowIA, sem fingir ser uma pessoa específica ou um consultor humano.
-dadosUtilizados deve ser um array somente com campos realmente usados na mensagem, dentre nome, segmento e cidade, e nunca incluir um campo ausente.
-alertas deve ser [] quando não houver inconsistência concreta nos dados; não inclua autoavaliação da mensagem.
-Antes de responder, revise o JSON, os limites de tamanho e a ausência de placeholders. Não escreva Markdown nem texto fora do JSON.`;
+/** Contrato técnico da resposta: protege o modelo aprovado de valores que a Meta recusa. */
+export const OUTREACH_OUTPUT_CONTRACT = `Formato obrigatório: responda somente um objeto JSON com as chaves nomeCurto, atividade e alertas.
+nomeCurto: 2 a 40 caracteres, sem quebra de linha, hashtag, link, telefone ou emoji.
+atividade: 3 a 60 caracteres, começando em minúscula, sem quebra de linha, link, emoji, preço ou promessa.
+alertas: array de frases curtas somente quando houver inconsistência concreta nos dados (por exemplo, nome que parece de outra cidade ou de outro ramo); caso contrário [].
+Não escreva Markdown nem texto fora do JSON.`;
 
 /** A base do produto é revisada no código; o modelo não pode criar capacidades novas. */
 export const OUTREACH_PRODUCT_FACTS = [
@@ -228,27 +225,16 @@ export function mapOutreachRows(sheet: OutreachSheet, mapping: OutreachMapping):
   });
 }
 
-export type GeneratedOutreachCopy = { beneficioPrincipal: string; proposta: string; dadosUtilizados: string[]; alertas: string[] };
-const BAD_CLAIMS = /\b(garantid[oa]|dobr(ar|e)|triplic(ar|e)|seu (neg[oó]cio|estabelecimento) (perde|sofre|tem problema)|faturamento|vendas em \d+|\d+%|R\$)\b/i;
+export type GeneratedOutreachVariables = { variables: string[]; alertas: string[] };
 
-export function validateOutreachCopy(raw: unknown, facts: { name: string; segment: string | null; city: string | null }): GeneratedOutreachCopy {
+export function validateOutreachVariables(raw: unknown, facts: { city: string | null }): GeneratedOutreachVariables {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("A IA não retornou um objeto JSON.");
   const obj = raw as Record<string, unknown>;
-  if (typeof obj.beneficioPrincipal !== "string" || obj.beneficioPrincipal.trim().length < 4 || obj.beneficioPrincipal.length > 100)
-    throw new Error("Benefício principal inválido.");
-  if (typeof obj.proposta !== "string" || obj.proposta.trim().length < 30 || obj.proposta.length > OUTREACH_MAX_MESSAGE_CHARS)
-    throw new Error("Mensagem comercial inválida.");
-  const proposal = obj.proposta.trim();
-  if (/[{}<>]/.test(proposal) || /\{\{|\}\}|\[[^\]]+\]/.test(proposal) || BAD_CLAIMS.test(proposal))
-    throw new Error("A proposta contém variável não resolvida ou promessa não permitida.");
-  if (!Array.isArray(obj.dadosUtilizados) || !obj.dadosUtilizados.every((item) => ["nome", "segmento", "cidade"].includes(item)))
-    throw new Error("Fontes da personalização inválidas.");
-  if (obj.dadosUtilizados.includes("segmento") && !facts.segment) throw new Error("Segmento não disponível na origem.");
-  if (obj.dadosUtilizados.includes("cidade") && !facts.city) throw new Error("Cidade não disponível na origem.");
-  if (!Array.isArray(obj.alertas) || !obj.alertas.every((item) => typeof item === "string" && item.length <= 180))
+  const alertas = obj.alertas ?? [];
+  if (!Array.isArray(alertas) || !alertas.every((item) => typeof item === "string" && item.length <= 180))
     throw new Error("Alertas inválidos.");
   return {
-    beneficioPrincipal: obj.beneficioPrincipal.trim(), proposta: proposal,
-    dadosUtilizados: [...new Set(obj.dadosUtilizados as string[])], alertas: obj.alertas as string[],
+    variables: outreachVariables({ nomeCurto: obj.nomeCurto, atividade: obj.atividade, cidade: facts.city }),
+    alertas: alertas as string[],
   };
 }

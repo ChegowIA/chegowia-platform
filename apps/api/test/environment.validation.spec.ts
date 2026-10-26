@@ -39,8 +39,7 @@ describe("exemplo de ambiente de produção", () => {
     const bloco = validacao.slice(validacao.indexOf("const required ="), validacao.indexOf("const missing ="));
     const exigidas = [...bloco.matchAll(/"([A-Z0-9_]+)"/g)].map((m) => m[1]);
 
-    const exemplo = readFileSync(join(raiz, ".env.production.example"), "utf8")
-      + readFileSync(join(raiz, ".env.outreach.example"), "utf8");
+    const exemplo = readFileSync(join(raiz, ".env.production.example"), "utf8");
     const declaradas = new Set(
       [...exemplo.matchAll(/^([A-Z0-9_]+)=/gm)].map((m) => m[1]),
     );
@@ -76,9 +75,9 @@ describe("validateEnvironment", () => {
     expect(() => validateEnvironment({ ...validProduction, API_REPLICAS: "1" })).not.toThrow();
   });
 
-  it("não permite iniciar a API completa como worker de prospecção", () => {
+  it("não sobe a API completa com o papel aposentado do worker de prospecção", () => {
     expect(() => validateEnvironment({ ...validProduction, APP_ROLE: "outreach-worker" }))
-      .toThrow("processo dedicado");
+      .toThrow("desativado");
   });
 
   it("recusa contagem de réplicas inválida", () => {

@@ -6,11 +6,12 @@ import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { formatarTelefoneParaExibicao } from "./outreach-contacts";
 import {
-  GeneratedOutreachCopy, mapOutreachRows, OUTREACH_CHANNEL_KEY, OUTREACH_FIELDS,
-  OUTREACH_MIN_INTERVAL_MS, OUTREACH_OUTPUT_CONTRACT, OUTREACH_PRODUCT_FACTS, OUTREACH_PROMPT_V1,
-  OutreachMapping, outreachPreviewFingerprint, parseOutreachWorkbook, suggestOutreachMapping, validateOutreachCopy,
-  validateOutreachMapping,
+  mapOutreachRows, OUTREACH_FIELDS,
+  OUTREACH_MIN_INTERVAL_MS, OUTREACH_OUTPUT_CONTRACT, OUTREACH_PROMPT_V1,
+  OutreachMapping, outreachPreviewFingerprint, parseOutreachWorkbook, suggestOutreachMapping,
+  validateOutreachMapping, validateOutreachVariables,
 } from "./outreach-intelligence";
+import { outreachVariables, PLATFORM_CHANNEL_KEY, renderOutreachTemplate } from "./outreach-template";
 
 const REPLY_CATEGORIES = [
   "INTERESSE", "MAIS_INFORMACOES", "DEMONSTRACAO", "DUVIDA", "OBJECAO",
@@ -116,11 +117,8 @@ export class OutreachIntelligenceService {
     if (!rows.length) throw new BadRequestException("A aba escolhida não tem leads.");
     const name = input.name?.trim();
     if (!name || name.length < 3 || name.length > 120) throw new BadRequestException("Informe um nome de campanha entre 3 e 120 caracteres.");
-    const channel = await this.db().platformWhatsAppChannel.upsert({
-      where: { key: OUTREACH_CHANNEL_KEY },
-      create: { key: OUTREACH_CHANNEL_KEY, provider: "BAILEYS", config: {}, automationEnabled: false },
-      update: {},
-    });
+    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: PLATFORM_CHANNEL_KEY } });
+    if (!channel) throw new BadRequestException("Configure o WhatsApp institucional antes de importar leads.");
     const user = await this.db().user.findUnique({ where: { id: userId }, select: { name: true } });
     const phones = [...new Set(rows.map((row) => row.phone).filter(Boolean))];
     const [blocks, previous, customers] = await Promise.all([
@@ -305,34 +303,23 @@ export class OutreachIntelligenceService {
       const prompt = version === 1 ? OUTREACH_PROMPT_V1
         : (await this.db().platformOutreachPrompt.findUnique({ where: { version } }))?.systemPrompt;
       if (!prompt) throw new Error("Versão do prompt não encontrada.");
-      const availableFields = [
-        ...(target.name ? ["nome"] : []),
-        ...(target.segment ? ["segmento"] : []),
-        ...(target.city ? ["cidade"] : []),
-      ];
       const retryInstruction = target.generationAttempts > 0
-        ? "A resposta anterior não passou na validação. Esta é a última tentativa: confira especialmente o tamanho do benefício, o tamanho da proposta, os campos usados e a ausência de placeholders."
+        ? "A resposta anterior não passou na validação. Esta é a última tentativa: confira os limites de tamanho e a ausência de quebra de linha, hashtag, link e emoji."
         : "";
-      // Custo da plataforma: copy comercial gerada pelo SUPER_ADMIN. Tokens
+      // Custo da plataforma: personalização gerada pelo SUPER_ADMIN. Tokens
       // ficam registrados no alvo para auditoria e controle de despesas.
       const result = await this.ai.chat([
         { role: "system", content: `${prompt}\n${OUTREACH_OUTPUT_CONTRACT}${retryInstruction ? `\n${retryInstruction}` : ""}` },
         { role: "user", content: JSON.stringify({ leadId: target.id, estabelecimento: target.name,
-          segmento: target.segment, cidade: target.city, funcionalidadesComprovadas: OUTREACH_PRODUCT_FACTS,
-          camposDisponiveis: availableFields,
-          formato: { beneficioPrincipal: "rótulo curto, 4-80 caracteres", proposta: "mensagem completa, 50-450 caracteres, sem placeholders",
-            dadosUtilizados: "array dos campos disponíveis realmente usados", alertas: [] } }) },
-      ], undefined, { responseFormat: "json_object", thinking: false, temperature: 0.35, maxTokens: 450 });
+          segmento: target.segment, cidade: target.city }) },
+      ], undefined, { responseFormat: "json_object", thinking: false, temperature: 0.2, maxTokens: 200 });
       requestId = result.requestId ?? null;
       inputTokens = result.usage?.inputTokens ?? 0;
       outputTokens = result.usage?.outputTokens ?? 0;
-      const copy = validateOutreachCopy(parseJsonObject(result.content), {
-        name: target.name ?? "", segment: target.segment, city: target.city,
-      });
-      const messageText = copy.proposta;
+      const generated = validateOutreachVariables(parseJsonObject(result.content), { city: target.city });
       await this.db().platformOutreachTarget.update({ where: { id: target.id }, data: {
-        generationStatus: "PRONTO", proposal: copy.proposta, messageText,
-        mainBenefit: copy.beneficioPrincipal, aiDataUsed: copy.dadosUtilizados, aiAlerts: copy.alertas,
+        generationStatus: "PRONTO", ...this.variablesData(generated.variables),
+        aiAlerts: generated.alertas,
         aiRequestId: requestId, aiInputTokens: (target.aiInputTokens ?? 0) + inputTokens,
         aiOutputTokens: (target.aiOutputTokens ?? 0) + outputTokens,
         approvalStatus: "PENDENTE", errorMessage: null,
@@ -357,7 +344,7 @@ export class OutreachIntelligenceService {
     await this.db().platformOutreachTarget.update({ where: { id: targetId }, data: {
       generationStatus: "PENDENTE", generationAttempts: 0, approvalStatus: "PENDENTE",
       approvedAt: null, approvedByUserId: null, messageText: null, proposal: null,
-      mainBenefit: null, errorMessage: null,
+      mainBenefit: null, templateVariables: null, errorMessage: null,
     } });
     await this.db().platformOutreachCampaign.update({ where: { id: target.campaignId }, data: {
       preparationRequestedAt: new Date(), approvedAt: null,
@@ -399,20 +386,30 @@ export class OutreachIntelligenceService {
     return { id, consentStatus: data.status };
   }
 
-  async editProposal(id: string, proposal: string) {
+  /** Ajuste manual do nome e da atividade; a mensagem continua sendo o modelo aprovado. */
+  async editVariables(id: string, input: { nomeCurto?: unknown; atividade?: unknown }) {
     const target = await this.requireTarget(id);
     if (target.campaign.status !== "RASCUNHO" || target.status !== OutreachTargetStatus.PENDENTE)
       throw new BadRequestException("Somente leads em rascunho podem ser editados.");
-    const copy: GeneratedOutreachCopy = validateOutreachCopy({
-      beneficioPrincipal: target.mainBenefit || "Proposta revisada manualmente",
-      proposta: String(proposal ?? ""), dadosUtilizados: [], alertas: [],
-    }, { name: target.name ?? "", segment: target.segment, city: target.city });
-    const messageText = copy.proposta;
+    let variables: string[];
+    try { variables = outreachVariables({ nomeCurto: input?.nomeCurto, atividade: input?.atividade, cidade: target.city }); }
+    catch (error) { throw new BadRequestException(error instanceof Error ? error.message : "Variáveis inválidas."); }
     await this.db().platformOutreachCampaign.update({ where: { id: target.campaignId }, data: { approvedAt: null } });
     return this.db().platformOutreachTarget.update({ where: { id }, data: {
-      proposal: copy.proposta, messageText, generationStatus: "PRONTO", approvalStatus: "PENDENTE",
+      ...this.variablesData(variables), generationStatus: "PRONTO", approvalStatus: "PENDENTE",
       approvedAt: null, approvedByUserId: null,
     } });
+  }
+
+  /**
+   * Campos derivados das variáveis. messageText é a prévia exata do que o lead
+   * recebe; proposal e mainBenefit guardam a atividade para leitura rápida.
+   */
+  private variablesData(variables: string[]) {
+    return {
+      templateVariables: variables, messageText: renderOutreachTemplate(variables),
+      proposal: variables[1], mainBenefit: variables[1],
+    };
   }
 
   async reviewTarget(id: string, approved: boolean, userId: string) {

@@ -14,13 +14,14 @@ import {
   OutreachTargetStatus,
   WhatsAppConversationMode,
 } from "@prisma/client";
-import { runsOutreachJobs } from "../common/config/app-role";
+import { runsBackgroundJobs } from "../common/config/app-role";
 import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { OutreachIntelligenceService } from "./outreach-intelligence.service";
-import { BaileysOutreachSenderService, RemetenteDesconectadoError } from "./baileys-outreach-sender.service";
-import { OUTREACH_CHANNEL_KEY, OUTREACH_MIN_INTERVAL_MS } from "./outreach-intelligence";
+import { PlatformWhatsAppService } from "./platform-whatsapp.service";
+import { OUTREACH_MIN_INTERVAL_MS } from "./outreach-intelligence";
+import { PLATFORM_CHANNEL_KEY } from "./outreach-template";
 import { CreateOutreachCampaignDto } from "./dto/create-outreach-campaign.dto";
 import { BlockOutreachPhoneDto } from "./dto/block-outreach-phone.dto";
 import {
@@ -76,16 +77,13 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     @Inject(PRISMA_CLIENT) private readonly prisma: ExtendedPrismaClient,
     @Optional() private readonly realtime: RealtimeGateway,
     @Optional() private readonly intelligence?: OutreachIntelligenceService,
-    @Optional() private readonly sender?: BaileysOutreachSenderService,
+    @Optional() private readonly whatsapp?: PlatformWhatsAppService,
   ) {}
 
   onModuleInit() {
-    // A fila só roda no serviço privado outreach-worker. A trava persistente
-    // ainda protege contra instâncias acidentalmente duplicadas.
-    if (!runsOutreachJobs()) {
-      this.logger.log("Prospecção desativada neste processo; exige APP_ROLE=outreach-worker.");
-      return;
-    }
+    // Roda com os demais jobs. A trava persistente do remetente ainda protege
+    // contra duas instâncias girando a mesma fila.
+    if (!runsBackgroundJobs()) return;
     this.timer = setInterval(() => void this.processarDisparos(), INTERVALO_DO_WORKER_MS);
     this.intelligenceTimer = setInterval(() => void this.processarInteligencia(), INTERVALO_DO_WORKER_MS);
     void this.processarDisparos();
@@ -357,8 +355,11 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       ],
     } });
     if (impedidos) throw new BadRequestException(`${impedidos} lead(s) ainda não estão autorizados, validados e aprovados.`);
-    if (!(await this.sender?.status())?.configured)
-      throw new BadRequestException("Conecte o WhatsApp de Prospecção pelo QR Code antes de iniciar.");
+    const canal = await this.whatsapp?.outreachChannelStatus();
+    if (!canal?.connected) throw new BadRequestException("Conecte o WhatsApp institucional pelo Gupshup antes de iniciar.");
+    if (!canal.template.approved) {
+      throw new BadRequestException("O modelo de prospecção ainda não foi aprovado pela Meta. Confira a situação dele no topo da Central.");
+    }
     const state = await this.db().platformOutreachSenderState.findUnique({ where: { channelId: campanha.channelId } });
     if (state?.inFlightTargetId) throw new BadRequestException("Existe uma tentativa de envio sem conclusão. Faça a conciliação antes de retomar.");
     const atualizada = await this.db().platformOutreachCampaign.update({
@@ -455,16 +456,28 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   }
 
   async senderStatus() {
-    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: OUTREACH_CHANNEL_KEY } });
-    const state = channel ? await this.db().platformOutreachSenderState.findUnique({ where: { channelId: channel.id } }) : null;
-    return { ...(await this.sender?.status()), nextAllowedAt: state?.nextAllowedAt ?? null,
-      inFlightTargetId: state?.inFlightTargetId ?? null, inFlightAt: state?.inFlightAt ?? null };
+    const canal = await this.whatsapp?.outreachChannelStatus();
+    const channelId = canal?.channelId ?? "__none__";
+    const [state, queued, sent, failed, activeCampaign] = await Promise.all([
+      this.db().platformOutreachSenderState.findUnique({ where: { channelId } }),
+      this.db().platformOutreachTarget.count({ where: { campaign: { channelId, status: OutreachCampaignStatus.ENVIANDO }, status: OutreachTargetStatus.PENDENTE } }),
+      this.db().platformOutreachTarget.count({ where: { campaign: { channelId }, status: { in: [OutreachTargetStatus.ENVIADO, OutreachTargetStatus.RESPONDEU] } } }),
+      this.db().platformOutreachTarget.count({ where: { campaign: { channelId }, status: OutreachTargetStatus.FALHOU } }),
+      this.db().platformOutreachCampaign.findFirst({ where: { channelId, status: OutreachCampaignStatus.ENVIANDO }, select: { id: true, name: true } }),
+    ]);
+    return {
+      configured: Boolean(canal?.connected && canal.template.approved),
+      connected: Boolean(canal?.connected), phone: canal?.phone ?? null, template: canal?.template ?? null,
+      queued, sent, failed, activeCampaign,
+      nextAllowedAt: state?.nextAllowedAt ?? null,
+      inFlightTargetId: state?.inFlightTargetId ?? null, inFlightAt: state?.inFlightAt ?? null,
+    };
   }
 
   /** Nunca reenvia uma tentativa ambígua; só libera os próximos leads após reconhecimento humano. */
   async reconcileSender(targetId: string, userId: string) {
     if (!targetId) throw new BadRequestException("Informe a tentativa a conciliar.");
-    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: OUTREACH_CHANNEL_KEY } });
+    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: PLATFORM_CHANNEL_KEY } });
     if (!channel) throw new NotFoundException("Remetente não encontrado.");
     return this.db().$transaction(async (tx: any) => {
       await tx.$queryRaw`SELECT channelId FROM PlatformOutreachSenderState WHERE channelId = ${channel.id} FOR UPDATE`;
@@ -562,24 +575,23 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
 
   private async girar(agora: Date) {
     // Sem conexão, a fila permanece íntegra e retoma quando o QR for autenticado.
-    if (!(await this.sender?.status())?.configured) return;
-    // Logo após conectar, ou com dois processos durante um deploy, o banco
-    // pode dizer CONECTADO antes de o socket deste processo abrir.
-    if (!this.sender?.isReady()) return;
+    // Sem número conectado ou modelo aprovado, a fila espera intacta.
+    const canal = await this.whatsapp?.outreachChannelStatus();
+    if (!canal?.connected || !canal.template.approved) return;
     const campanhas = await this.db().platformOutreachCampaign.findMany({
-      where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: OUTREACH_CHANNEL_KEY } },
+      where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: PLATFORM_CHANNEL_KEY } },
       orderBy: { nextSendAt: "asc" },
       include: { channel: true },
     });
     if (!campanhas.length) return;
 
     const enviadosNoNumero = await this.db().platformOutreachTarget.count({
-      where: { campaign: { channel: { key: OUTREACH_CHANNEL_KEY } }, sentAt: { gte: inicioDaJanelaRolante(agora) } },
+      where: { campaign: { channel: { key: PLATFORM_CHANNEL_KEY } }, sentAt: { gte: inicioDaJanelaRolante(agora) } },
     });
     if (enviadosNoNumero >= tetoDiarioDoNumero()) {
       // Reagenda em vez de girar a cada 10 segundos consultando o banco.
       await this.db().platformOutreachCampaign.updateMany({
-        where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: OUTREACH_CHANNEL_KEY } },
+        where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: PLATFORM_CHANNEL_KEY } },
         data: { nextSendAt: new Date(agora.getTime() + ESPERA_APOS_TETO_MS) },
       });
       this.logger.warn(`Teto operacional de ${tetoDiarioDoNumero()} tentativas em 24h alcançado no remetente de prospecção. Campanhas reagendadas.`);
@@ -696,16 +708,17 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       const latest = await this.db().platformOutreachTarget.findUnique({ where: { id: alvo.id } });
       const currentCampaign = await this.db().platformOutreachCampaign.findUnique({ where: { id: campanha.id } });
       const blocked = await this.db().platformOutreachBlock.findUnique({ where: { phone: alvo.phone } });
-      const messageText = String(latest?.messageText ?? "").trim();
+      const variables = Array.isArray(latest?.templateVariables) ? latest.templateVariables.map(String) : [];
       if (blocked || currentCampaign?.status !== OutreachCampaignStatus.ENVIANDO
         || latest?.consentStatus !== "CONFIRMADO" || latest?.status !== OutreachTargetStatus.RESERVADO
-        || !messageText || messageText.length > 500 || latest.approvalStatus !== "APROVADO") {
-        // Nada foi entregue ao socket; registrar como não enviado (não INCERTO)
+        || variables.length !== 3 || variables.some((value: string) => !value.trim())
+        || latest.approvalStatus !== "APROVADO") {
+        // Nada foi entregue ao provedor; registrar como não enviado (não INCERTO)
         // e liberar a trava. Não ressuscitar alvo cancelado ou sem consentimento.
         await this.db().$transaction(async (tx: any) => {
           await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
             status: OutreachTargetStatus.DESCARTADO,
-            discardReason: "Envio abortado antes do socket: campanha pausada/cancelada, autorização ou copy inválida.",
+            discardReason: "Envio abortado antes do WhatsApp: campanha pausada/cancelada, autorização ou variáveis inválidas.",
           } });
           await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
             status: "NAO_ENVIADA", finishedAt: new Date(), errorMessage: "Abordagem abortada antes da chamada ao WhatsApp.",
@@ -715,25 +728,19 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         });
         return;
       }
-      const sent = await this.sender!.sendText({ to: latest.phone, text: messageText, attemptId });
+      // Mesmo caminho da conversa avulsa: modelo aprovado pelo Gupshup, conversa
+      // e mensagem no painel do atendimento, custo de marketing registrado. A
+      // conversa abre com a IA, que responde na hora quando o lead tocar num botão.
+      const { conversation, message } = await this.whatsapp!.openConversationWith({
+        phone: latest.phone, name: latest.name, company: latest.company, city: latest.city,
+        text: null, variables, mode: WhatsAppConversationMode.VIRTUAL,
+      });
       await this.db().$transaction(async (tx: any) => {
-        const conversation = await tx.platformWhatsAppConversation.upsert({
-          where: { channelId_customerPhone: { channelId: campanha.channelId, customerPhone: latest.phone } },
-          create: { channelId: campanha.channelId, customerPhone: latest.phone,
-            customerName: latest.name, mode: WhatsAppConversationMode.HUMANO,
-            lastMessageText: messageText, lastMessageAt: new Date() },
-          update: { mode: WhatsAppConversationMode.HUMANO, lastMessageText: messageText, lastMessageAt: new Date() },
-        });
-        await tx.platformWhatsAppMessage.create({ data: {
-          channelId: campanha.channelId, conversationId: conversation.id,
-          providerMessageId: sent.messageId, direction: "ENVIADA", status: "ENVIADA",
-          type: "text", body: messageText,
-        } });
         await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
           status: OutreachTargetStatus.ENVIADO, conversationId: conversation.id, sentAt: new Date(), errorMessage: null,
         } });
         await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
-          status: "ENVIADA", providerMessageId: sent.messageId, finishedAt: new Date(),
+          status: "ENVIADA", providerMessageId: message?.providerMessageId ?? null, finishedAt: new Date(),
         } });
         await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: { sentCount: { increment: 1 } } });
         await tx.platformOutreachSenderState.updateMany({ where: {
@@ -741,23 +748,9 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         }, data: { inFlightTargetId: null, inFlightAt: null } });
       });
     } catch (error) {
-      if (error instanceof RemetenteDesconectadoError) {
-        // Falhou antes do socket: devolve o lead à fila e libera a trava, em
-        // vez de pausar tudo à espera de uma conciliação que não tem o que conferir.
-        await this.db().$transaction(async (tx: any) => {
-          await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
-            status: OutreachTargetStatus.PENDENTE, attempts: { decrement: 1 },
-          } });
-          await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
-            status: "NAO_ENVIADA", errorMessage: error.message, finishedAt: new Date(),
-          } });
-          await tx.platformOutreachSenderState.updateMany({ where: {
-            channelId: campanha.channelId, inFlightTargetId: alvo.id,
-          }, data: { inFlightTargetId: null, inFlightAt: null } });
-        });
-        this.logger.warn(`Tentativa ${attemptId} não saiu: remetente desconectado. Lead devolvido à fila.`);
-        return;
-      }
+      // O lead vira FALHOU e nunca é reenviado, então a trava pode ser liberada
+      // sem risco de duplicar. A campanha pausa porque erro do provedor quase
+      // sempre é geral (modelo, saldo, credencial) e repetiria em todo lead.
       const mensagem = error instanceof Error ? error.message : String(error);
       await this.db().$transaction(async (tx: any) => {
         await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
@@ -768,11 +761,13 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         } });
         await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: {
           failedCount: { increment: 1 }, status: OutreachCampaignStatus.PAUSADA, nextSendAt: null,
-          pausedReason: "Envio incerto ou recusado. Conferir o provedor e conciliar a tentativa antes de continuar.",
+          pausedReason: `O Gupshup recusou o envio: ${mensagem.slice(0, 300)}. Corrija e retome; este lead não será reenviado.`,
         } });
-        // A trava fica ocupada intencionalmente: timeout pode ter enviado.
+        await tx.platformOutreachSenderState.updateMany({ where: {
+          channelId: campanha.channelId, inFlightTargetId: alvo.id,
+        }, data: { inFlightTargetId: null, inFlightAt: null } });
       });
-      this.logger.warn(`Tentativa ${attemptId} da campanha ${campanha.id} precisa de conciliação: ${mensagem}`);
+      this.logger.warn(`Tentativa ${attemptId} da campanha ${campanha.id} falhou: ${mensagem}`);
     }
   }
 

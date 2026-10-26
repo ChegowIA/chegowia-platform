@@ -19,7 +19,6 @@ import { PlatformWhatsAppService } from "./platform-whatsapp.service";
 import { PlatformOutreachService } from "./platform-outreach.service";
 import { OutreachIntelligenceService } from "./outreach-intelligence.service";
 import { OutreachMapping } from "./outreach-intelligence";
-import { BaileysOutreachSenderService } from "./baileys-outreach-sender.service";
 
 /**
  * Canal institucional da ChegowIA.
@@ -36,7 +35,6 @@ export class PlatformWhatsAppController {
     private readonly platformWhatsApp: PlatformWhatsAppService,
     private readonly outreach: PlatformOutreachService,
     private readonly intelligence: OutreachIntelligenceService,
-    private readonly qrSender: BaileysOutreachSenderService,
   ) {}
 
   @Get("channel")
@@ -189,13 +187,11 @@ export class PlatformWhatsAppController {
   @Get("outreach/prompt")
   outreachPrompt() { return this.intelligence.prompt(); }
 
-  @Post("outreach/sender/connect")
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  connectOutreachSender() { return this.qrSender.requestConnect(); }
-
-  @Post("outreach/sender/disconnect")
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  disconnectOutreachSender() { return this.qrSender.requestDisconnect(); }
+  /** Envia o modelo de prospecção para aprovação da Meta ou confere a situação dele. */
+  @Post("outreach/template/sync")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
+  syncOutreachTemplate() { return this.platformWhatsApp.syncOutreachTemplate(); }
 
   @Put("outreach/prompt")
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -262,9 +258,9 @@ export class PlatformWhatsAppController {
     return this.intelligence.updateConsent(id, body);
   }
 
-  @Patch("outreach/targets/:id/proposal")
-  proposal(@Param("id") id: string, @Body("proposal") proposal: string) {
-    return this.intelligence.editProposal(id, proposal);
+  @Patch("outreach/targets/:id/variables")
+  variables(@Param("id") id: string, @Body() body: { nomeCurto?: string; atividade?: string }) {
+    return this.intelligence.editVariables(id, body);
   }
 
   @Post("outreach/targets/:id/regenerate")

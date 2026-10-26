@@ -32,6 +32,6 @@ export class UpdatePlatformOutreachTemplateDto {
   /** Qual campo do contato preenche cada variável, na ordem do modelo. */
   @IsOptional()
   @IsArray()
-  @IsIn(["nome", "empresa", "cidade"], { each: true })
+  @IsIn(["nome", "empresa", "atividade", "cidade"], { each: true })
   outreachTemplateParams?: string[];
 }

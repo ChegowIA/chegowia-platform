@@ -46,8 +46,10 @@ import {
   pediuParaNaoReceber,
   renderizarModelo,
 } from "./outreach-contacts";
+import {
+  OUTREACH_TEMPLATE, OUTREACH_VARIABLE_FALLBACKS, outreachTemplateExample, PLATFORM_CHANNEL_KEY,
+} from "./outreach-template";
 
-const PLATFORM_CHANNEL_KEY = "chegowia-institucional";
 const MAX_AI_HISTORY_MESSAGES = 18;
 
 /**
@@ -58,7 +60,7 @@ const MAX_AI_HISTORY_MESSAGES = 18;
 const JANELA_TEXTO_LIVRE_MS = 24 * 60 * 60 * 1000;
 
 /** Variáveis que um modelo de prospecção pode usar, em qualquer ordem. */
-export const VARIAVEIS_DE_MODELO = ["nome", "empresa", "cidade"] as const;
+export const VARIAVEIS_DE_MODELO = ["nome", "empresa", "atividade", "cidade"] as const;
 
 /**
  * Central institucional da ChegowIA.
@@ -283,6 +285,94 @@ export class PlatformWhatsAppService {
   }
 
   /**
+   * Submete (uma vez) o modelo de prospecção à Meta e confere a situação dele.
+   *
+   * Chamado de novo, só consulta: a Meta não aceita dois modelos com o mesmo
+   * nome. Só um modelo APPROVED com o texto padrão vira o modelo da fila; até
+   * lá o identificador fica vazio e nada sai.
+   */
+  async syncOutreachTemplate() {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: PLATFORM_CHANNEL_KEY } });
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP || !channel.gupshupAppId
+      || channel.status !== MessagingChannelStatus.ATIVO) {
+      throw new BadRequestException("Conecte primeiro o WhatsApp institucional pelo Gupshup.");
+    }
+    const appToken = await this.gupshupAppTokenFor(channel);
+    const buscar = async () => (await this.gupshup.listTemplates({ appId: channel.gupshupAppId, appToken }))
+      .find((item) => item.name === OUTREACH_TEMPLATE.name
+        && item.languageCode.toLowerCase() === OUTREACH_TEMPLATE.languageCode.toLowerCase());
+    let template = await buscar();
+    if (!template) {
+      try {
+        template = await this.gupshup.createTemplate({
+          appId: channel.gupshupAppId,
+          appToken,
+          name: OUTREACH_TEMPLATE.name,
+          languageCode: OUTREACH_TEMPLATE.languageCode,
+          content: OUTREACH_TEMPLATE.body,
+          example: outreachTemplateExample(),
+          category: OUTREACH_TEMPLATE.category,
+          vertical: "Prospeccao comercial",
+          footer: OUTREACH_TEMPLATE.footer,
+          quickReplies: OUTREACH_TEMPLATE.buttons,
+          purpose: "enviar o modelo de prospecção para aprovação",
+        });
+      } catch (error) {
+        // Outra aba pode tê-lo criado entre a consulta e o envio.
+        template = await buscar();
+        if (!template) {
+          const message = error instanceof Error ? error.message.slice(0, 500) : "Falha ao enviar o modelo ao Gupshup.";
+          await this.db().platformWhatsAppChannel.update({ where: { id: channel.id }, data: {
+            outreachTemplateStatus: "ERROR", outreachTemplateError: message,
+          } });
+          throw error;
+        }
+      }
+    }
+    // A Meta pode trocar a categoria de Marketing; o conteúdo não pode ter mudado.
+    const valido = Boolean(template.content?.includes(OUTREACH_TEMPLATE.body.split("\n")[0]));
+    const status = !valido ? "INVALID" : template.status.toUpperCase() || "PENDING";
+    const aprovado = status === "APPROVED";
+    const updated = await this.db().platformWhatsAppChannel.update({ where: { id: channel.id }, data: {
+      outreachTemplateId: aprovado ? template.id : null,
+      outreachTemplateName: aprovado ? template.name : null,
+      outreachTemplateLanguage: OUTREACH_TEMPLATE.languageCode,
+      outreachTemplateBody: OUTREACH_TEMPLATE.body,
+      outreachTemplateParams: ["empresa", "atividade", "cidade"],
+      outreachTemplateStatus: status,
+      outreachTemplateError: !valido
+        ? `Já existe um modelo "${OUTREACH_TEMPLATE.name}" com outro texto no Gupshup.`
+        : status === "REJECTED" ? template.reason || "A Meta rejeitou o modelo." : null,
+    } });
+    return this.outreachTemplateSummary(updated);
+  }
+
+  /** O que a fila de prospecção precisa saber para poder enviar pelo número oficial. */
+  async outreachChannelStatus() {
+    const channel = await this.db().platformWhatsAppChannel.findUnique({ where: { key: PLATFORM_CHANNEL_KEY } });
+    return {
+      channelId: channel?.id ?? null,
+      connected: channel?.status === MessagingChannelStatus.ATIVO && Boolean(channel?.gupshupAppName),
+      phone: channel ? channelNumber(channel) : null,
+      template: this.outreachTemplateSummary(channel),
+    };
+  }
+
+  outreachTemplateSummary(channel: any) {
+    return {
+      name: OUTREACH_TEMPLATE.name,
+      body: OUTREACH_TEMPLATE.body,
+      footer: OUTREACH_TEMPLATE.footer,
+      buttons: OUTREACH_TEMPLATE.buttons,
+      example: outreachTemplateExample(),
+      status: channel?.outreachTemplateStatus ?? null,
+      error: channel?.outreachTemplateError ?? null,
+      approved: channel?.outreachTemplateStatus === "APPROVED"
+        && Boolean(channel?.outreachTemplateId || channel?.outreachTemplateName),
+    };
+  }
+
+  /**
    * Abre conversa com um número digitado pelo superadmin.
    *
    * Precisa existir separado do envio comum porque aqui não há conversa: o
@@ -329,6 +419,8 @@ export class PlatformWhatsAppService {
     mode: WhatsAppConversationMode;
     sentBy?: { id: string; name: string } | null;
     fallbackName?: string | null;
+    /** Valores já prontos das variáveis; a prospecção os prepara e aprova por lead. */
+    variables?: string[] | null;
   }) {
     const channel = await this.db().platformWhatsAppChannel.findUnique({
       where: { key: PLATFORM_CHANNEL_KEY },
@@ -366,6 +458,7 @@ export class PlatformWhatsAppService {
       company: params.company,
       city: params.city,
       fallbackName: params.fallbackName,
+      variables: params.variables,
       sentBy: params.sentBy ?? undefined,
     });
     return { conversation, message, via: "modelo" as const };
@@ -386,6 +479,7 @@ export class PlatformWhatsAppService {
       company?: string | null;
       city?: string | null;
       fallbackName?: string | null;
+      variables?: string[] | null;
       sentBy?: { id: string; name: string };
     },
   ) {
@@ -399,7 +493,7 @@ export class PlatformWhatsAppService {
       );
     }
 
-    const variaveis = this.variaveisDoModelo(channel, params);
+    const variaveis = params.variables?.length ? params.variables : this.variaveisDoModelo(channel, params);
     const corpo = renderizarModelo(channel.outreachTemplateBody, variaveis)
       ?? "Mensagem de abertura enviada pelo modelo aprovado.";
     try {
@@ -455,8 +549,10 @@ export class PlatformWhatsAppService {
         return (contato.company ?? contato.name ?? "").trim() || "seu negócio";
       }
       if (campo === "cidade") {
-        return (contato.city ?? "").trim() || "sua região";
+        return (contato.city ?? "").trim() || OUTREACH_VARIABLE_FALLBACKS[2];
       }
+      // Conversa avulsa não tem segmento; a reserva mantém a frase do modelo correta.
+      if (campo === "atividade") return OUTREACH_VARIABLE_FALLBACKS[1];
       return (contato.name ?? "").trim() || reservaDeNome;
     });
   }
@@ -1078,12 +1174,16 @@ export class PlatformWhatsAppService {
 
     for (const alvo of alvos) {
       if (alvo.status !== OutreachTargetStatus.ENVIADO) continue;
+      const descadastro = pediuParaNaoReceber(texto);
       await this.db().platformOutreachTarget.update({
         where: { id: alvo.id },
         data: {
           status: OutreachTargetStatus.RESPONDEU,
           repliedAt: new Date(),
           conversationId: conversation.id,
+          // A primeira resposta alimenta a classificação da IA na Central de Prospecção.
+          responseText: texto.slice(0, 2000),
+          ...(descadastro ? { responseCategory: "DESCADASTRO", responseClassifiedAt: new Date() } : {}),
         },
       });
       await this.db().platformOutreachCampaign.update({
@@ -1238,6 +1338,7 @@ export class PlatformWhatsAppService {
           "Se ela pedir para não receber mais mensagens, confirme que não vai mais procurá-la e pare.",
           "Nunca diga que ela pediu contato, que preencheu formulário ou que é cliente. Se perguntar de onde veio o número, diga a verdade: é uma prospecção da ChegowIA para negócios locais, e você já pede desculpa se pegou em má hora.",
           "Nunca mande mais de uma mensagem sem resposta. Uma abordagem, uma pergunta, e espere.",
+          `A abertura tinha três botões. "${OUTREACH_TEMPLATE.buttons[0]}" é interesse: mostre em poucas frases como seria um pedido do começo ao fim no negócio dela e proponha o próximo passo. "${OUTREACH_TEMPLATE.buttons[1]}" é sem interesse: agradeça em uma frase e encerre, sem pergunta.`,
           alvoDeProspeccao.name ? `O contato foi cadastrado como "${alvoDeProspeccao.name}"${alvoDeProspeccao.city ? ` em ${alvoDeProspeccao.city}` : ""}. Pode ser o nome da pessoa ou do estabelecimento — confirme antes de tratar como nome próprio.` : "",
         ].filter(Boolean).join("\n")
         : "",
@@ -1809,10 +1910,14 @@ function normalizeSalesChoices(candidates: unknown[]): GupshupChoice[] {
  */
 const CONTEUDO_SEM_PERGUNTA = new Set(["sticker", "reaction"]);
 
-function incomingContent(message: any) {
+export function incomingContent(message: any) {
   const interactive = message?.interactive;
   const reply = interactive?.button_reply ?? interactive?.list_reply;
   if (reply) return { text: String(reply.title ?? reply.id ?? "Opção selecionada"), answerable: true };
+  // Toque em botão de resposta rápida de um modelo aprovado.
+  if (message?.type === "button") {
+    return { text: String(message?.button?.text ?? message?.button?.payload ?? "Opção selecionada"), answerable: true };
+  }
   if (message?.type === "text") {
     const body = String(message?.text?.body ?? "").trim();
     return { text: body || "Mensagem sem texto", answerable: Boolean(body) };

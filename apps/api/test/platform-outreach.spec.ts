@@ -1,5 +1,4 @@
 import { PlatformOutreachService } from "../src/messaging/platform-outreach.service";
-import { RemetenteDesconectadoError } from "../src/messaging/baileys-outreach-sender.service";
 
 function fixture(overrides: Record<string, unknown> = {}) {
   const campaign: any = {
@@ -28,16 +27,20 @@ function fixture(overrides: Record<string, unknown> = {}) {
     $queryRaw: jest.fn().mockResolvedValue([]),
   };
   db.$transaction = jest.fn().mockImplementation((fn: any) => fn(db));
-  const sender = {
-    status: jest.fn().mockResolvedValue({ configured: true }),
-    sendText: jest.fn().mockResolvedValue({ messageId: "wamid-1" }),
+  const whatsapp = {
+    outreachChannelStatus: jest.fn().mockResolvedValue({
+      channelId: "ch1", connected: true, phone: "5562990000000", template: { approved: true },
+    }),
+    openConversationWith: jest.fn().mockResolvedValue({
+      conversation: { id: "conv-1" }, message: { providerMessageId: "wamid-1" }, via: "modelo",
+    }),
   };
   const service: any = Object.create(PlatformOutreachService.prototype);
   Object.assign(service, {
-    prisma: db, sender, realtime: { emitToSuperAdmins: jest.fn() },
+    prisma: db, whatsapp, realtime: { emitToSuperAdmins: jest.fn() },
     logger: { error: jest.fn(), warn: jest.fn(), log: jest.fn() }, processando: false,
   });
-  return { service, db, sender, campaign };
+  return { service, db, whatsapp, campaign };
 }
 
 describe("fila segura de prospecção", () => {
@@ -53,22 +56,28 @@ describe("fila segura de prospecção", () => {
   });
 
   it("não inicia com um lead sem opt-in ou mensagem aprovada", async () => {
-    const { service, db, sender } = fixture();
+    const { service, db, whatsapp } = fixture();
     db.platformOutreachTarget.count.mockResolvedValue(1);
     await expect(service.iniciar("c1")).rejects.toThrow(/ainda não estão autorizados/);
-    expect(sender.sendText).not.toHaveBeenCalled();
+    expect(whatsapp.openConversationWith).not.toHaveBeenCalled();
   });
 
-  it("exige o número QR conectado antes de iniciar", async () => {
-    const { service, sender } = fixture();
-    sender.status.mockResolvedValue({ configured: false });
-    await expect(service.iniciar("c1")).rejects.toThrow(/Conecte o WhatsApp/);
+  it("exige o número oficial conectado antes de iniciar", async () => {
+    const { service, whatsapp } = fixture();
+    whatsapp.outreachChannelStatus.mockResolvedValue({ channelId: "ch1", connected: false, template: { approved: true } });
+    await expect(service.iniciar("c1")).rejects.toThrow(/Conecte o WhatsApp institucional/);
+  });
+
+  it("exige o modelo aprovado pela Meta antes de iniciar", async () => {
+    const { service, whatsapp } = fixture();
+    whatsapp.outreachChannelStatus.mockResolvedValue({ channelId: "ch1", connected: true, template: { approved: false } });
+    await expect(service.iniciar("c1")).rejects.toThrow(/aprovado pela Meta/);
   });
 
   it("inicia somente depois de conferir o número e a trava", async () => {
-    const { service, db, sender } = fixture();
+    const { service, db, whatsapp } = fixture();
     await service.iniciar("c1");
-    expect(sender.status).toHaveBeenCalled();
+    expect(whatsapp.outreachChannelStatus).toHaveBeenCalled();
     expect(db.platformOutreachCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: "ENVIANDO" }),
     }));
@@ -77,7 +86,9 @@ describe("fila segura de prospecção", () => {
   const target = {
     id: "t1", phone: "5562999998888", status: "PENDENTE", attempts: 0,
     consentStatus: "CONFIRMADO", approvalStatus: "APROVADO", generationStatus: "PRONTO",
-    proposal: "organizar pedidos", messageText: "Olá.",
+    proposal: "pizzas e delivery", messageText: "Oi, Pizzaria X!",
+    name: "Pizzaria X", company: "Pizzaria X", city: "Goiânia",
+    templateVariables: ["Pizzaria X", "pizzas e delivery", "Goiânia"],
   };
   function reservation() {
     const fx = fixture({ status: "ENVIANDO" });
@@ -129,26 +140,53 @@ describe("fila segura de prospecção", () => {
     expect(db.platformOutreachAttempt.create).not.toHaveBeenCalled();
   });
 
-  it("pausa sem reenviar quando o resultado do socket é incerto", async () => {
-    const { service, db, campaign, sender } = reservation();
+  it("envia o modelo aprovado com as variáveis do lead e abre a conversa com a IA", async () => {
+    const { service, db, campaign, whatsapp } = reservation();
     db.platformOutreachTarget.findUnique.mockResolvedValue({ ...target, status: "RESERVADO" });
-    sender.sendText.mockRejectedValue(new Error("timeout"));
     await service.enviarParaAlvo(campaign, target, "attempt-1");
+    expect(whatsapp.openConversationWith).toHaveBeenCalledWith(expect.objectContaining({
+      phone: target.phone, text: null, mode: "VIRTUAL",
+      variables: ["Pizzaria X", "pizzas e delivery", "Goiânia"],
+    }));
+    expect(db.platformOutreachTarget.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "ENVIADO", conversationId: "conv-1" }),
+    }));
     expect(db.platformOutreachAttempt.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: "INCERTA" }),
+      data: expect.objectContaining({ status: "ENVIADA", providerMessageId: "wamid-1" }),
+    }));
+    expect(db.platformOutreachSenderState.updateMany).toHaveBeenCalled();
+  });
+
+  it("recusa do Gupshup pausa a campanha, não reenvia o lead e libera a trava", async () => {
+    const { service, db, campaign, whatsapp } = reservation();
+    db.platformOutreachTarget.findUnique.mockResolvedValue({ ...target, status: "RESERVADO" });
+    whatsapp.openConversationWith.mockRejectedValue(new Error("Template not approved"));
+    await service.enviarParaAlvo(campaign, target, "attempt-1");
+    expect(db.platformOutreachTarget.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "FALHOU" }),
     }));
     expect(db.platformOutreachCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: "PAUSADA" }),
+      data: expect.objectContaining({ status: "PAUSADA", pausedReason: expect.stringContaining("Template not approved") }),
     }));
-    expect(db.platformOutreachSenderState.updateMany).not.toHaveBeenCalled();
+    expect(db.platformOutreachSenderState.updateMany).toHaveBeenCalled();
+  });
+
+  it("não envia lead sem as três variáveis do modelo", async () => {
+    const { service, db, campaign, whatsapp } = reservation();
+    db.platformOutreachTarget.findUnique.mockResolvedValue({ ...target, status: "RESERVADO", templateVariables: null });
+    await service.enviarParaAlvo(campaign, target, "attempt-1");
+    expect(whatsapp.openConversationWith).not.toHaveBeenCalled();
+    expect(db.platformOutreachAttempt.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "NAO_ENVIADA" }),
+    }));
   });
 
   it("não chama WhatsApp se a campanha foi pausada após reservar", async () => {
-    const { service, db, campaign, sender } = reservation();
+    const { service, db, campaign, whatsapp } = reservation();
     db.platformOutreachTarget.findUnique.mockResolvedValue({ ...target, status: "RESERVADO" });
     db.platformOutreachCampaign.findUnique.mockResolvedValue({ ...campaign, status: "PAUSADA" });
     await service.enviarParaAlvo(campaign, target, "attempt-1");
-    expect(sender.sendText).not.toHaveBeenCalled();
+    expect(whatsapp.openConversationWith).not.toHaveBeenCalled();
     expect(db.platformOutreachAttempt.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: "NAO_ENVIADA" }),
     }));
@@ -180,27 +218,9 @@ describe("fila segura de prospecção", () => {
     expect(db.platformOutreachCampaign.update).not.toHaveBeenCalled();
   });
 
-  it("devolve o lead à fila quando o socket não estava aberto, sem pausar", async () => {
-    const { service, db, campaign, sender } = reservation();
-    db.platformOutreachTarget.findUnique.mockResolvedValue({ ...target, status: "RESERVADO" });
-    db.platformOutreachCampaign.findUnique.mockResolvedValue({ ...campaign, status: "ENVIANDO" });
-    sender.sendText.mockRejectedValue(new RemetenteDesconectadoError());
-    await service.enviarParaAlvo(campaign, target, "attempt-1");
-    expect(db.platformOutreachTarget.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: "PENDENTE", attempts: { decrement: 1 } }),
-    }));
-    expect(db.platformOutreachAttempt.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: "NAO_ENVIADA" }),
-    }));
-    expect(db.platformOutreachSenderState.updateMany).toHaveBeenCalled();
-    expect(db.platformOutreachCampaign.update).not.toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: "PAUSADA" }),
-    }));
-  });
-
-  it("não reserva lead se o socket deste processo não está aberto", async () => {
-    const { service, db, sender } = fixture();
-    Object.assign(sender, { isReady: jest.fn().mockReturnValue(false) });
+  it("sem modelo aprovado a fila espera intacta", async () => {
+    const { service, db, whatsapp } = fixture();
+    whatsapp.outreachChannelStatus.mockResolvedValue({ channelId: "ch1", connected: true, template: { approved: false } });
     await service.girar(new Date());
     expect(db.platformOutreachCampaign.findMany).not.toHaveBeenCalled();
   });

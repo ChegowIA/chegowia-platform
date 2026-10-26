@@ -16,8 +16,9 @@
  * - `worker` — só jobs. Deve ter exatamente uma réplica. Continua servindo HTTP
  *   na rede interna porque o health check do compose depende disso; ele apenas
  *   não é publicado pelo proxy.
- * - `outreach-worker` — somente a fila de prospecção, em serviço privado
- *   separado do worker operacional e da API pública.
+ * - `outreach-worker` — papel aposentado do antigo número QR de prospecção.
+ *   Continua reconhecido só para não cair em `all` e duplicar os jobs: o
+ *   entrypoint e a validação de ambiente recusam subir com ele.
  */
 export type AppRole = "all" | "api" | "worker" | "outreach-worker";
 
@@ -30,9 +31,4 @@ export function appRole(): AppRole {
 /** Se este processo é responsável por rodar os jobs em segundo plano. */
 export function runsBackgroundJobs() {
   return appRole() === "all" || appRole() === "worker";
-}
-
-/** Prospecção executa somente em serviço próprio, nunca na API/Gupshup. */
-export function runsOutreachJobs() {
-  return appRole() === "outreach-worker";
 }

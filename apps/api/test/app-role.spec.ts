@@ -1,4 +1,4 @@
-import { appRole, runsBackgroundJobs, runsOutreachJobs } from "../src/common/config/app-role";
+import { appRole, runsBackgroundJobs } from "../src/common/config/app-role";
 import { buildBillingService } from "./support/messaging-services";
 import { MaintenanceService } from "../src/common/maintenance/maintenance.service";
 
@@ -33,12 +33,10 @@ describe("papel do processo", () => {
     expect(runsBackgroundJobs()).toBe(esperado);
   });
 
-  it("outreach-worker não executa jobs operacionais e é o único que executa a prospecção", () => {
+  it("papel aposentado do worker de prospecção não cai em all nem liga os jobs", () => {
     process.env.APP_ROLE = "outreach-worker";
+    expect(appRole()).toBe("outreach-worker");
     expect(runsBackgroundJobs()).toBe(false);
-    expect(runsOutreachJobs()).toBe(true);
-    process.env.APP_ROLE = "all";
-    expect(runsOutreachJobs()).toBe(false);
   });
 
   describe("efeito nos serviços", () => {

@@ -1,5 +1,7 @@
 import { BadRequestException } from "@nestjs/common";
-import { janelaDeTextoLivreAberta } from "../src/messaging/platform-whatsapp.service";
+import { incomingContent, janelaDeTextoLivreAberta } from "../src/messaging/platform-whatsapp.service";
+import { OUTREACH_TEMPLATE } from "../src/messaging/outreach-template";
+import { pediuParaNaoReceber } from "../src/messaging/outreach-contacts";
 import { buildPlatformWhatsAppService } from "./support/messaging-services";
 
 /**
@@ -353,5 +355,75 @@ describe("responder pelo inbox", () => {
     expect(gupshup.sendText).toHaveBeenCalledWith(expect.objectContaining({
       body: "seguindo nossa conversa",
     }));
+  });
+});
+
+/**
+ * Modelo de prospecção submetido pelo próprio sistema.
+ *
+ * A Meta só deixa abrir conversa com quem nunca escreveu por modelo aprovado.
+ * Até a aprovação o identificador fica vazio, e é isso que segura a fila.
+ */
+describe("modelo de prospecção na Meta", () => {
+  function construir(templates: any[]) {
+    const channel = { id: "canal-1", key: "chegowia-institucional", provider: "GUPSHUP", status: "ATIVO",
+      gupshupAppId: "app-1", gupshupAppName: "chegowia", config: { number: "5562990000000" } };
+    const update = jest.fn().mockImplementation(({ data }: any) => Promise.resolve({ ...channel, ...data }));
+    const prisma: any = { platformWhatsAppChannel: { findUnique: jest.fn().mockResolvedValue(channel), update } };
+    const gupshup = {
+      mode: () => "SELF_SERVE",
+      listTemplates: jest.fn().mockResolvedValue(templates),
+      createTemplate: jest.fn().mockResolvedValue({ id: "tpl-1", name: "chegowia_prospeccao_v1", languageCode: "pt_BR",
+        category: "MARKETING", status: "PENDING", content: OUTREACH_TEMPLATE.body }),
+    };
+    const service = buildPlatformWhatsAppService({ prisma, gupshup });
+    return { service, gupshup, update };
+  }
+
+  it("submete uma vez como Marketing, com rodapé e três botões, e não libera a fila enquanto pendente", async () => {
+    const { service, gupshup, update } = construir([]);
+    const resumo = await service.syncOutreachTemplate();
+    expect(gupshup.createTemplate).toHaveBeenCalledWith(expect.objectContaining({
+      name: "chegowia_prospeccao_v1", category: "MARKETING", content: OUTREACH_TEMPLATE.body,
+      footer: OUTREACH_TEMPLATE.footer, quickReplies: OUTREACH_TEMPLATE.buttons,
+      example: expect.stringContaining("Oi, Pizzaria Sabor Italiano!"),
+    }));
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ outreachTemplateStatus: "PENDING", outreachTemplateId: null }),
+    }));
+    expect(resumo.approved).toBe(false);
+  });
+
+  it("aprovado vira o modelo do canal, com as variáveis da prospecção", async () => {
+    const { service, gupshup, update } = construir([{ id: "tpl-1", name: "chegowia_prospeccao_v1", languageCode: "pt_BR",
+      category: "MARKETING", status: "APPROVED", content: OUTREACH_TEMPLATE.body }]);
+    const resumo = await service.syncOutreachTemplate();
+    expect(gupshup.createTemplate).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      outreachTemplateId: "tpl-1", outreachTemplateStatus: "APPROVED",
+      outreachTemplateParams: ["empresa", "atividade", "cidade"],
+    }) }));
+    expect(resumo.approved).toBe(true);
+  });
+
+  it("rejeição guarda o motivo da Meta", async () => {
+    const { service, update } = construir([{ id: "tpl-1", name: "chegowia_prospeccao_v1", languageCode: "pt_BR",
+      category: "MARKETING", status: "REJECTED", content: OUTREACH_TEMPLATE.body, reason: "INVALID_FORMAT" }]);
+    await service.syncOutreachTemplate();
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      outreachTemplateStatus: "REJECTED", outreachTemplateError: "INVALID_FORMAT", outreachTemplateId: null,
+    }) }));
+  });
+
+  it("toque no botão do modelo chega como resposta escrita", () => {
+    expect(incomingContent({ type: "button", button: { text: "Não quero receber", payload: "x" } }))
+      .toEqual({ text: "Não quero receber", answerable: true });
+  });
+});
+
+describe("botão de saída do modelo", () => {
+  it("o texto do botão é reconhecido como pedido de descadastro", () => {
+    expect(pediuParaNaoReceber(OUTREACH_TEMPLATE.buttons[2])).toBe(true);
+    expect(pediuParaNaoReceber(OUTREACH_TEMPLATE.buttons[1])).toBe(false);
   });
 });
