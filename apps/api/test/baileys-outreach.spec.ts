@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { OutreachAuthStoreService } from "../src/messaging/outreach-auth-store.service";
-import { BaileysOutreachSenderService } from "../src/messaging/baileys-outreach-sender.service";
+import { BaileysOutreachSenderService, RemetenteDesconectadoError } from "../src/messaging/baileys-outreach-sender.service";
 import { OutreachInboundService } from "../src/messaging/outreach-inbound.service";
 
 const socketEvents = new EventEmitter();
@@ -121,5 +121,22 @@ describe("auth cifrada e conexão QR exclusiva da prospecção", () => {
     await new OutreachInboundService(db).record("5562999998888", "msg-1", "Não quero receber mensagens");
     expect(db.platformOutreachBlock.upsert).toHaveBeenCalled();
     expect(db.platformOutreachTarget.updateMany).toHaveBeenCalled();
+  });
+
+  it("não deixa o envio pendurado quando o WhatsApp não responde", async () => {
+    jest.useFakeTimers();
+    try {
+      const service: any = new BaileysOutreachSenderService({} as never, {} as never, {} as never);
+      Object.assign(service, { connected: true, socket: { sendMessage: () => new Promise(() => undefined) } });
+      const envio = service.sendText({ to: "(62) 99999-8888", text: "Oi", attemptId: "a1" });
+      jest.advanceTimersByTime(60_000);
+      await expect(envio).rejects.toThrow(/não respondeu/);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it("sinaliza socket fechado como falha antes do envio", async () => {
+    const service: any = new BaileysOutreachSenderService({} as never, {} as never, {} as never);
+    await expect(service.sendText({ to: "(62) 99999-8888", text: "Oi", attemptId: "a1" }))
+      .rejects.toBeInstanceOf(RemetenteDesconectadoError);
   });
 });

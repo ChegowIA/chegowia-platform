@@ -1,4 +1,5 @@
 import { PlatformOutreachService } from "../src/messaging/platform-outreach.service";
+import { RemetenteDesconectadoError } from "../src/messaging/baileys-outreach-sender.service";
 
 function fixture(overrides: Record<string, unknown> = {}) {
   const campaign: any = {
@@ -177,5 +178,30 @@ describe("fila segura de prospecção", () => {
     const { service, db } = fixture({ status: "ENVIANDO" });
     await expect(service.excluir("c1")).rejects.toThrow(/Pause ou cancele/);
     expect(db.platformOutreachCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("devolve o lead à fila quando o socket não estava aberto, sem pausar", async () => {
+    const { service, db, campaign, sender } = reservation();
+    db.platformOutreachTarget.findUnique.mockResolvedValue({ ...target, status: "RESERVADO" });
+    db.platformOutreachCampaign.findUnique.mockResolvedValue({ ...campaign, status: "ENVIANDO" });
+    sender.sendText.mockRejectedValue(new RemetenteDesconectadoError());
+    await service.enviarParaAlvo(campaign, target, "attempt-1");
+    expect(db.platformOutreachTarget.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "PENDENTE", attempts: { decrement: 1 } }),
+    }));
+    expect(db.platformOutreachAttempt.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "NAO_ENVIADA" }),
+    }));
+    expect(db.platformOutreachSenderState.updateMany).toHaveBeenCalled();
+    expect(db.platformOutreachCampaign.update).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "PAUSADA" }),
+    }));
+  });
+
+  it("não reserva lead se o socket deste processo não está aberto", async () => {
+    const { service, db, sender } = fixture();
+    Object.assign(sender, { isReady: jest.fn().mockReturnValue(false) });
+    await service.girar(new Date());
+    expect(db.platformOutreachCampaign.findMany).not.toHaveBeenCalled();
   });
 });

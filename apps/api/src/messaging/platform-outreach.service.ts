@@ -19,7 +19,7 @@ import { PRISMA_CLIENT } from "../common/prisma/prisma.constants";
 import { ExtendedPrismaClient } from "../common/prisma/prisma-client.factory";
 import { RealtimeGateway } from "../realtime/realtime.gateway";
 import { OutreachIntelligenceService } from "./outreach-intelligence.service";
-import { BaileysOutreachSenderService } from "./baileys-outreach-sender.service";
+import { BaileysOutreachSenderService, RemetenteDesconectadoError } from "./baileys-outreach-sender.service";
 import { OUTREACH_CHANNEL_KEY, OUTREACH_MIN_INTERVAL_MS } from "./outreach-intelligence";
 import { CreateOutreachCampaignDto } from "./dto/create-outreach-campaign.dto";
 import { BlockOutreachPhoneDto } from "./dto/block-outreach-phone.dto";
@@ -563,6 +563,9 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
   private async girar(agora: Date) {
     // Sem conexão, a fila permanece íntegra e retoma quando o QR for autenticado.
     if (!(await this.sender?.status())?.configured) return;
+    // Logo após conectar, ou com dois processos durante um deploy, o banco
+    // pode dizer CONECTADO antes de o socket deste processo abrir.
+    if (!this.sender?.isReady()) return;
     const campanhas = await this.db().platformOutreachCampaign.findMany({
       where: { status: OutreachCampaignStatus.ENVIANDO, channel: { key: OUTREACH_CHANNEL_KEY } },
       orderBy: { nextSendAt: "asc" },
@@ -738,6 +741,23 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         }, data: { inFlightTargetId: null, inFlightAt: null } });
       });
     } catch (error) {
+      if (error instanceof RemetenteDesconectadoError) {
+        // Falhou antes do socket: devolve o lead à fila e libera a trava, em
+        // vez de pausar tudo à espera de uma conciliação que não tem o que conferir.
+        await this.db().$transaction(async (tx: any) => {
+          await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
+            status: OutreachTargetStatus.PENDENTE, attempts: { decrement: 1 },
+          } });
+          await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
+            status: "NAO_ENVIADA", errorMessage: error.message, finishedAt: new Date(),
+          } });
+          await tx.platformOutreachSenderState.updateMany({ where: {
+            channelId: campanha.channelId, inFlightTargetId: alvo.id,
+          }, data: { inFlightTargetId: null, inFlightAt: null } });
+        });
+        this.logger.warn(`Tentativa ${attemptId} não saiu: remetente desconectado. Lead devolvido à fila.`);
+        return;
+      }
       const mensagem = error instanceof Error ? error.message : String(error);
       await this.db().$transaction(async (tx: any) => {
         await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {

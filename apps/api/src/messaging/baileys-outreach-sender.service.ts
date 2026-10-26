@@ -10,6 +10,16 @@ import { OutreachInboundService } from "./outreach-inbound.service";
 import { loadOutreachBaileys } from "./outreach-baileys-loader";
 import { OUTREACH_CHANNEL_KEY } from "./outreach-intelligence";
 
+const LIMITE_DO_ENVIO_MS = 60_000;
+
+/**
+ * O socket deste processo não estava aberto: nada chegou ao WhatsApp, então a
+ * tentativa pode voltar para a fila sem risco de mensagem duplicada.
+ */
+export class RemetenteDesconectadoError extends Error {
+  constructor() { super("Remetente de prospecção não está conectado."); }
+}
+
 /** Apenas o processo outreach-worker abre o socket; a API troca comandos via banco. */
 @Injectable()
 export class BaileysOutreachSenderService implements OnModuleInit, OnModuleDestroy {
@@ -172,10 +182,24 @@ export class BaileysOutreachSenderService implements OnModuleInit, OnModuleDestr
     } });
   }
 
+  /** O status do banco pode vir de outro processo; só o socket daqui envia. */
+  isReady() { return this.connected && Boolean(this.socket); }
+
   async sendText(input: { to: string; text: string; attemptId: string }) {
+    const socket = this.socket;
+    if (!this.connected || !socket) throw new RemetenteDesconectadoError();
     const phone = normalizarTelefoneBrasileiro(input.to);
-    if (!phone || !this.connected || !this.socket) throw new Error("Remetente de prospecção não está conectado.");
-    const result = await this.socket.sendMessage(`${phone}@s.whatsapp.net`, { text: input.text });
+    if (!phone) throw new Error("Telefone inválido para o WhatsApp.");
+    // Sem limite, um socket meio aberto deixa o envio pendurado para sempre e
+    // o giro inteiro da fila para junto, sem nenhum log. Estourar o tempo não
+    // prova que não saiu: quem chama trata como tentativa incerta.
+    let limite: NodeJS.Timeout | undefined;
+    const result = await Promise.race([
+      socket.sendMessage(`${phone}@s.whatsapp.net`, { text: input.text }),
+      new Promise<never>((_, reject) => {
+        limite = setTimeout(() => reject(new Error("O WhatsApp não respondeu ao envio em 60 segundos.")), LIMITE_DO_ENVIO_MS);
+      }),
+    ]).finally(() => clearTimeout(limite));
     if (!result?.key?.id) throw new Error("O WhatsApp não confirmou o identificador da mensagem.");
     return { messageId: result.key.id };
   }
