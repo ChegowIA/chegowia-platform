@@ -435,6 +435,8 @@ export interface MessagingChannel {
     connectionMode?: "COEXISTENCE" | "PLATFORM_ONLY" | null;
     /** Quando o empresário pediu o WhatsApp; dispara o trabalho manual do superadmin. */
     accessRequestedAt?: string | null;
+    /** Quando o empresário avisou que concluiu o cadastro; falta a equipe ativar. */
+    signupCompletedAt?: string | null;
   };
   integration: {
     connectedAt?: string | null;

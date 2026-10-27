@@ -602,6 +602,12 @@ O assistente do painel tem ferramentas de leitura e de escrita.
 | 10.1.9 | Desligar a automação | Mensagem fica só na fila de atendimento humano |
 | 10.1.10 | Webhook de auto-atendimento (`webhooks/gupshup/self-serve`) | Onboarding do número conclui sozinho |
 | 10.1.11 | Super admin gerencia o canal de uma empresa (`messaging/companies/:companyId/whatsapp`) | Consegue conectar/desconectar pela empresa |
+| 10.1.12 | Dono da empresa chama `PUT messaging/channel/whatsapp/gupshup` | 404: a rota não existe para a empresa |
+| 10.1.13 | Super admin vincula a uma empresa o app do WhatsApp institucional | Recusado: "é o WhatsApp institucional da ChegowIA" |
+| 10.1.14 | Vincular App ID que já é de outra empresa | Recusado: "já está vinculado a outra empresa" |
+| 10.1.15 | Self-serve: empresa clica "Já concluí" | Aviso por e-mail e no super-admin; painel dela mostra "aguardando ativação" sem erro técnico |
+| 10.1.16 | Super admin preenche número sem App ID | Recusado: App ID obrigatório para ativar |
+| 10.1.17 | Super admin preenche número e App ID | Painel da empresa vira "Conectado" sem recarregar a página |
 
 ### 10.1.1 Permissão de atendimento
 

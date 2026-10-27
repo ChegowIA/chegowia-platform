@@ -350,20 +350,41 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
 
     // O nome do app é único global, como o phone number id da Meta: é por ele
     // que o callback v2 encontra o canal, então dois tenants não podem repetir.
-    const owner = await tenantContext.run({ companyId: null, bypass: true }, () => {
-      return this.db().messagingChannel.findUnique({ where: { gupshupAppName: appName } });
-    });
-    if (owner && owner.companyId !== companyId) {
+    const appId = dto.appId?.trim() || null;
+    // Ativar exige o App ID: é por ele que chegam os callbacks no formato Meta e
+    // que modelos e perfil são geridos. Sem ele o painel nunca daria "conectado".
+    if (number && !appId) {
+      throw new BadRequestException("Informe o App ID do Gupshup para ativar o número.");
+    }
+    const [owner, ownerById, institucional] = await tenantContext.run({ companyId: null, bypass: true }, () => Promise.all([
+      this.db().messagingChannel.findUnique({ where: { gupshupAppName: appName } }),
+      appId ? this.db().messagingChannel.findUnique({ where: { gupshupAppId: appId } }) : null,
+      // O número institucional vive em outra tabela e o webhook procura primeiro
+      // nas empresas: vincular o app dele a uma empresa desviaria as conversas
+      // da ChegowIA para ela e deixaria enviar em nome da plataforma.
+      this.db().platformWhatsAppChannel.findFirst({
+        where: { OR: [{ gupshupAppName: appName }, ...(appId ? [{ gupshupAppId: appId }] : [])] },
+        select: { id: true },
+      }),
+    ]));
+    if (institucional) {
+      throw new ConflictException("Este aplicativo do Gupshup é o WhatsApp institucional da ChegowIA.");
+    }
+    if ((owner && owner.companyId !== companyId) || (ownerById && ownerById.companyId !== companyId)) {
       throw new ConflictException("Este aplicativo do Gupshup já está vinculado a outra empresa.");
     }
 
     const current = await this.db().messagingChannel.findUnique({
       where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
     });
-    const changedApp = Boolean(current?.gupshupAppId && dto.appId && current.gupshupAppId !== dto.appId.trim())
+    const changedApp = Boolean(current?.gupshupAppId && appId && current.gupshupAppId !== appId)
       || Boolean(current?.gupshupAppName && current.gupshupAppName !== appName);
+    // Link novo é cadastro novo: o aviso de "concluí" do link anterior não vale.
+    const novoLink = Boolean(dto.signupLink && dto.signupLink.trim() !== channelConfig(current).gupshupSignupLink);
+    const { gupshupSignupCompletedAt: avisoAnterior, ...configAtual } = channelConfig(current);
     const config = {
-      ...channelConfig(current),
+      ...configAtual,
+      ...(novoLink || changedApp ? {} : avisoAnterior ? { gupshupSignupCompletedAt: avisoAnterior } : {}),
       ...(changedApp ? emptyOrderTemplateConfig() : {}),
       ...(number ? { number } : {}),
       ...(dto.signupLink ? { gupshupSignupLink: dto.signupLink.trim() } : {}),
@@ -376,8 +397,8 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       status: number ? MessagingChannelStatus.ATIVO : MessagingChannelStatus.INATIVO,
       config,
       gupshupAppName: appName,
-      gupshupAppId: dto.appId?.trim() || null,
-      ...(number ? { connectedAt: new Date() } : {}),
+      gupshupAppId: appId,
+      ...(number ? { connectedAt: current?.connectedAt ?? new Date() } : {}),
       lastError: null,
     };
 
@@ -391,6 +412,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         await this.db().company.updateMany({
           where: { id: companyId, whatsapp: null },
           data: { whatsapp: number },
+        });
+      }
+      // O painel da empresa está esperando a ativação; avisa sem precisar recarregar.
+      if (number && current?.status !== MessagingChannelStatus.ATIVO) {
+        this.realtime.emitToCompany(companyId, "whatsapp.channel.updated", {
+          channelId: channel.id, status: MessagingChannelStatus.ATIVO,
         });
       }
       if (number && channel.gupshupAppId) {
@@ -413,9 +440,13 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
     const channel = await this.db().messagingChannel.findUnique({
       where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
     });
-    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP || !channel.gupshupAppId) {
+    if (!channel || channel.provider !== WhatsAppProvider.GUPSHUP) {
       throw new NotFoundException("Nenhuma conexão do Gupshup foi iniciada para esta empresa.");
     }
+    // No self-serve a consulta do app é da Partner API, que a conta não tem: o
+    // empresário recebia um erro técnico. Lá quem ativa é a equipe, então a
+    // situação é a que está gravada.
+    if (this.gupshup.mode() === "SELF_SERVE" || !channel.gupshupAppId) return this.channelSummary(channel);
 
     const details = await this.gupshup.getAppDetails(channel.gupshupAppId);
     const phone = details.phone ? normalizePhone(details.phone) : null;
@@ -441,6 +472,55 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
       return this.provisionOrderTemplateWithoutBlocking(companyId, updated);
     }
     return this.channelSummary(updated);
+  }
+
+  /**
+   * O empresário terminou o cadastro na janela oficial (self-serve).
+   *
+   * Não temos como conferir pela API, então registramos o aviso e chamamos a
+   * equipe, que confere no painel do Gupshup e ativa preenchendo o número. Só o
+   * primeiro aviso notifica: reclicar não gera outro e-mail.
+   */
+  async markWhatsappSignupCompleted(companyId: string) {
+    const channel = await this.db().messagingChannel.findUnique({
+      where: { companyId_type: { companyId, type: MessagingChannelType.WHATSAPP } },
+    });
+    const config = channelConfig(channel);
+    if (!channel || !config.gupshupSignupLink) {
+      throw new BadRequestException("O link de cadastro ainda não foi liberado para esta empresa.");
+    }
+    if (channel.status === MessagingChannelStatus.ATIVO) return this.channelSummary(channel);
+    if (config.gupshupSignupCompletedAt) return this.channelSummary(channel);
+    const updated = await this.db().messagingChannel.update({
+      where: { id: channel.id },
+      data: { config: { ...config, gupshupSignupCompletedAt: new Date().toISOString() } },
+    });
+    await this.notifyWhatsappSignupCompleted(companyId);
+    return this.channelSummary(updated);
+  }
+
+  private async notifyWhatsappSignupCompleted(companyId: string) {
+    const company = await this.db().company.findUnique({ where: { id: companyId }, select: { name: true } });
+    const name = company?.name ?? companyId;
+    try {
+      this.realtime.emitToSuperAdmins("whatsapp.signup.completed", { companyId, companyName: name });
+    } catch {
+      this.logger.warn(`Falha ao emitir aviso em tempo real do cadastro de WhatsApp de ${name}.`);
+    }
+    try {
+      await this.mail.sendOperationsAlert("WhatsApp pronto para ativar", [
+        `A empresa ${name} informou que concluiu o cadastro do número no link oficial.`,
+        "",
+        "Próximo passo: no painel do Gupshup, confira se o aplicativo está Live e qual é o número.",
+        "Depois preencha o número na página da empresa no super-admin e salve; é isso que ativa o atendimento.",
+        `${publicAppUrl()}/super-admin/empresas/${companyId}`,
+      ]);
+    } catch (error) {
+      this.logger.error(
+        `Falha ao enviar e-mail de cadastro concluído do WhatsApp de ${name}.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   /**
@@ -1689,6 +1769,8 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         // Link que o empresário abre para concluir o cadastro com o Facebook
         // dele. No self-serve vem colado pelo superadmin; no partner é gerado.
         signupLink: config.gupshupSignupLink ?? null,
+        // Quando o empresário avisou que concluiu o cadastro (self-serve).
+        signupCompletedAt: config.gupshupSignupCompletedAt ?? null,
       },
       integration: {
         connectedAt: channel.connectedAt ?? null,

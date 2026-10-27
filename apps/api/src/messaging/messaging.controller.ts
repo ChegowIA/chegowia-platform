@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Param, Patch, Post, Put, Query, Req, UnauthorizedException, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags } from "@nestjs/swagger";
 import { SkipThrottle, Throttle } from "@nestjs/throttler";
@@ -90,19 +90,24 @@ export class MessagingController {
   }
 
   /**
-   * Vínculo manual do modo self-serve: o app é criado no painel do Gupshup e o
-   * superadmin traz aqui o nome, o id e o link de cadastro do cliente.
+   * O empresário avisa que terminou o cadastro na janela oficial. No self-serve
+   * não há API para conferir o número, então quem ativa é a equipe; este aviso
+   * é o que a chama.
    */
   @Roles(Role.ADMIN)
-  @Put("channel/whatsapp/gupshup")
-  connectGupshupManual(@CurrentUser("companyId") companyId: string, @Body() dto: ConnectWhatsAppGupshupDto) {
-    return this.messagingService.connectGupshupManual(companyId, dto);
+  @Post("channel/whatsapp/signup-completed")
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60 * 60_000 } })
+  markWhatsappSignupCompleted(@CurrentUser("companyId") companyId: string) {
+    return this.messagingService.markWhatsappSignupCompleted(companyId);
   }
 
   /**
-   * Mesma operação, na visão do superadmin: é ele quem cria o aplicativo no
-   * painel do Gupshup e prepara o número antes de entregar a empresa. O tenant
-   * vem da rota porque o superadmin não carrega companyId na sessão.
+   * Vínculo manual do modo self-serve, só pelo superadmin: é ele quem cria o
+   * aplicativo no painel do Gupshup. Não existe versão desta rota para o dono
+   * da empresa — com ela, um tenant poderia vincular o app de outro (ou o
+   * institucional da ChegowIA) e passar a receber e enviar por aquele número.
+   * O tenant vem da rota porque o superadmin não carrega companyId na sessão.
    */
   @Roles(Role.SUPER_ADMIN)
   @Put("companies/:companyId/whatsapp/gupshup")

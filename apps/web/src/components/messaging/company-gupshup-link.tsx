@@ -75,7 +75,7 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
       setFeedback(
         updated.connected
           ? "Aplicativo vinculado e canal ativo."
-          : "Aplicativo vinculado. O canal ativa quando o número concluir o cadastro.",
+          : "Aplicativo vinculado. Quando o cliente concluir o cadastro e o app estiver Live, preencha o número para ativar.",
       );
       void queryClient.invalidateQueries({ queryKey: ["super-admin-company-channel", companyId] });
     },
@@ -123,7 +123,21 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
       <CardContent className="space-y-4">
         {/* O pedido é o gatilho do trabalho manual: sem destacá-lo, o superadmin
             só descobre que alguém espera quando o cliente cobra. */}
-        {channel?.gupshup?.accessRequestedAt && !channel.connected && (
+        {/* O "Já concluí" do empresário: é a vez da equipe ativar o número. */}
+        {channel?.gupshup?.signupCompletedAt && !channel.connected && (
+          <div className="rounded-2xl border border-sky-300 bg-sky-50 p-3 dark:border-sky-900/60 dark:bg-sky-950/30">
+            <p className="text-sm font-bold text-sky-900 dark:text-sky-200">
+              O cliente concluiu o cadastro: falta ativar
+            </p>
+            <p className="mt-1 text-xs leading-5 text-sky-800 dark:text-sky-300">
+              Avisado em {new Date(channel.gupshup.signupCompletedAt).toLocaleString("pt-BR")}. No painel do Gupshup, confira
+              se o aplicativo está <strong>Live</strong> e qual é o número. Depois preencha o número e o App ID abaixo e
+              salve: é isso que libera o atendimento no painel da empresa.
+            </p>
+          </div>
+        )}
+
+        {channel?.gupshup?.accessRequestedAt && !channel.connected && !channel.gupshup.signupCompletedAt && (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30">
             <p className="text-sm font-bold text-amber-900 dark:text-amber-200">
               Esta empresa solicitou o WhatsApp
@@ -156,7 +170,7 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
               onChange={(event) => setForm((current) => ({ ...current, appName: event.target.value }))}
             />
           </FormField>
-          <FormField label="App ID (necessário para editar o perfil)">
+          <FormField label="App ID (obrigatório para ativar)">
             <Input
               value={form.appId}
               onChange={(event) => setForm((current) => ({ ...current, appId: event.target.value }))}
@@ -178,7 +192,7 @@ export function CompanyGupshupLink({ companyId }: { companyId: string }) {
               <option value="PLATFORM_ONLY">Somente pela ChegowIA</option>
             </Select>
           </FormField>
-          <FormField label="Número (preencha após o cadastro concluir)">
+          <FormField label="Número (só depois que o app estiver Live)">
             <Input
               value={form.number}
               placeholder="5562999990000"

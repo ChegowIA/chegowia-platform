@@ -182,9 +182,20 @@ manual e o pedido do empresário é o gatilho.
    e o link de cadastro.
 6. A empresa conclui pelo botão **Conectar meu WhatsApp**, com o Facebook dela,
    e confirma pelo QR code ou código de acesso dentro do **WhatsApp Business
-   App**. Você nunca acessa a conta do cliente.
-7. Preencha o **número** no card para ativar o canal e marque o modo
-   **Manter WhatsApp Business App**.
+   App**. Você nunca acessa a conta do cliente. Ao voltar, ela clica em
+   **Já concluí**: isso avisa a equipe por e-mail e no super-admin ("O cliente
+   concluiu o cadastro: falta ativar"), e o painel dela passa a mostrar
+   "aguardando ativação".
+7. Confira no Gupshup que o app está **Live**. Só então preencha o **número**
+   (e o App ID, obrigatório para ativar) no card e salve, com o modo
+   **Manter WhatsApp Business App**. O painel da empresa vira "Conectado" sozinho.
+   Preencher o número antes do Live mostraria "Conectado" sem o número estar no
+   ar, e mensagens chegando a um canal inativo são descartadas.
+
+Só o superadmin vincula aplicativo a uma empresa. O sistema recusa um app (nome
+ou App ID) que já pertença a outra empresa ou ao WhatsApp institucional da
+ChegowIA: o webhook procura primeiro nas empresas, então esse vínculo desviaria
+as conversas e permitiria enviar em nome do outro número.
 
 Não migre automaticamente um número que já está exclusivo na API: a volta para
 coexistência exige uma nova conexão feita pelo dono do número no aplicativo. A

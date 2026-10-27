@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardActions, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-type GupshupConfiguration = { enabled: boolean };
+type GupshupConfiguration = { enabled: boolean; mode?: "SELF_SERVE" | "PARTNER" };
 
 /** Etapas na ordem em que o empresário as vive. */
 const STEPS = [
@@ -24,6 +24,10 @@ const STEPS = [
     title: "Você mantém seu WhatsApp conectado",
     detail:
       "Aparece um botão aqui. No cadastro oficial, escolha “usar WhatsApp Business existente” e leia o QR code no app. Não pedimos sua senha em momento nenhum.",
+  },
+  {
+    title: "Ativamos seu número",
+    detail: "Conferimos o cadastro no provedor oficial e liberamos o atendimento. Esta tela avisa quando terminar.",
   },
   {
     title: "Pronto para atender",
@@ -51,6 +55,11 @@ export function WhatsAppGupshupSettings() {
   const { data: channel, isLoading } = useQuery({
     queryKey: ["messaging-channel"],
     queryFn: async () => (await api.get<MessagingChannel>("/messaging/channel")).data,
+    // Enquanto a equipe ativa o número, a tela confere sozinha de tempos em tempos.
+    refetchInterval: (query) => {
+      const atual = query.state.data;
+      return atual && !atual.connected && atual.gupshup?.signupCompletedAt ? 30_000 : false;
+    },
   });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["messaging-channel"] });
@@ -60,6 +69,24 @@ export function WhatsAppGupshupSettings() {
     onSuccess: () => {
       setError(null);
       setFeedback("Pedido registrado. Avisaremos aqui quando seu número estiver pronto para conectar.");
+      void refresh();
+    },
+    onError: (cause) => {
+      setFeedback(null);
+      setError(apiErrorMessage(cause));
+    },
+  });
+
+  /**
+   * No self-serve não há como conferir o número pela API: o "Já concluí" avisa
+   * a equipe, que confere no Gupshup e ativa. Antes ele consultava a Partner
+   * API e o empresário via um erro técnico.
+   */
+  const signupCompleted = useMutation({
+    mutationFn: async () => (await api.post<MessagingChannel>("/messaging/channel/whatsapp/signup-completed")).data,
+    onSuccess: () => {
+      setError(null);
+      setFeedback("Recebemos o seu aviso. Nossa equipe confere o número e libera o atendimento aqui, normalmente em poucas horas.");
       void refresh();
     },
     onError: (cause) => {
@@ -103,9 +130,11 @@ export function WhatsAppGupshupSettings() {
   const connected = Boolean(channel?.connected);
   const signupLink = channel?.gupshup?.signupLink ?? null;
   const requested = Boolean(channel?.gupshup?.accessRequestedAt);
+  const selfServe = config?.mode !== "PARTNER";
+  const awaitingActivation = !connected && Boolean(channel?.gupshup?.signupCompletedAt);
   // A etapa atual é derivada do estado real do canal, não de um passo salvo:
   // assim o painel nunca discorda do que já aconteceu.
-  const currentStep = connected ? 3 : signupLink ? 2 : requested ? 1 : 0;
+  const currentStep = connected ? 4 : awaitingActivation ? 3 : signupLink ? 2 : requested ? 1 : 0;
 
   return (
     <Card>
@@ -147,7 +176,7 @@ export function WhatsAppGupshupSettings() {
           <>
             <p className="text-sm leading-6 text-slate-600 dark:text-slate-300">
               Conecte o WhatsApp da sua empresa para atender com IA e equipe pela plataforma, sem perder o acesso ao
-              WhatsApp Business no celular. São quatro etapas, e a maior parte do trabalho é nossa.
+              WhatsApp Business no celular. São cinco etapas, e a maior parte do trabalho é nossa.
             </p>
 
             <ol className="space-y-3">
@@ -183,6 +212,13 @@ export function WhatsAppGupshupSettings() {
                 );
               })}
             </ol>
+
+            {awaitingActivation && (
+              <div className="rounded-2xl border border-sky-200 bg-sky-50 p-3 text-xs leading-5 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200">
+                <strong>Cadastro recebido.</strong> Nossa equipe está conferindo o número no provedor oficial e libera o
+                atendimento por aqui. Esta tela se atualiza sozinha; não é preciso refazer o cadastro.
+              </div>
+            )}
 
             {currentStep === 2 && (
               <p className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-5 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-200">
@@ -220,8 +256,25 @@ export function WhatsAppGupshupSettings() {
           <Button onClick={() => window.open(signupLink, "_blank", "noopener,noreferrer")}>
             Conectar meu WhatsApp
           </Button>
-          <Button variant="secondary" onClick={() => checkStatus.mutate()} isLoading={checkStatus.isPending}>
+          <Button
+            variant="secondary"
+            onClick={() => (selfServe ? signupCompleted.mutate() : checkStatus.mutate())}
+            isLoading={selfServe ? signupCompleted.isPending : checkStatus.isPending}
+          >
             Já concluí
+          </Button>
+        </CardActions>
+      )}
+
+      {awaitingActivation && (
+        <CardActions description="Se a janela do cadastro mostrou erro, abra o link de novo e conclua antes de esperar a ativação.">
+          {signupLink && (
+            <Button variant="outline" onClick={() => window.open(signupLink, "_blank", "noopener,noreferrer")}>
+              Abrir o cadastro de novo
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => refresh()}>
+            Atualizar
           </Button>
         </CardActions>
       )}
