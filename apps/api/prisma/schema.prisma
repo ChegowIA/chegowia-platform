@@ -2364,6 +2364,14 @@ model PlatformOutreachCampaign {
   nextSendAt   DateTime?
   pausedReason String?   @db.Text
 
+  // Teto de gasto definido pela equipe, em reais. Nulo = sem teto. O envio
+  // para assim que o gasto alcança o teto, então passa dele no máximo o custo
+  // de uma mensagem.
+  spendLimit   Decimal? @db.Decimal(12, 2)
+  // Custo das mensagens enviadas (Meta + Gupshup), somado a cada envio pela
+  // tarifa registrada no consumo da plataforma.
+  spentAmount  Decimal  @default(0) @db.Decimal(16, 6)
+
   totalTargets Int @default(0)
   sentCount    Int @default(0)
   repliedCount Int @default(0)

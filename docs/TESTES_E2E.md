@@ -732,6 +732,9 @@ entrega nada, e a conversa fica com uma mensagem "enviada" que ninguém recebeu.
 | 10.6.40 | Lead toca "Quero ver como funciona" | Conversa no painel em modo IA; assistente responde na hora |
 | 10.6.41 | Lead toca "Não quero receber" | Número bloqueado, confirmação enviada, conversa encerrada |
 | 10.6.42 | Serviço com `APP_ROLE=outreach-worker` | Não sobe: mensagem pedindo para excluir o serviço |
+| 10.6.43 | Definir teto de R$ 1,00 e iniciar | Após ~3 envios a campanha pausa com "Teto de gasto … alcançado" |
+| 10.6.44 | Retomar sem aumentar o teto | Recusa pedindo para aumentar o teto |
+| 10.6.45 | Aumentar o teto e retomar | Envios voltam; barra e "cabem cerca de N envios" atualizam |
 
 ### 10.6.1 Leitura da lista: casos que já falharam
 

@@ -280,6 +280,11 @@ export class PlatformWhatsAppController {
     return this.outreach.iniciar(id);
   }
 
+  @Patch("outreach/campaigns/:id/spend-limit")
+  spendLimit(@Param("id") id: string, @Body() body: { spendLimit?: number | null }) {
+    return this.outreach.definirTetoDeGasto(id, body?.spendLimit);
+  }
+
   @Post("outreach/campaigns/:id/pause")
   pauseCampaign(@Param("id") id: string) {
     return this.outreach.pausar(id);

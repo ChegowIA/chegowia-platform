@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiErrorMessage } from "@/lib/api-client";
-import { formatDateTime } from "@/lib/format";
+import { formatCurrency, formatDateTime } from "@/lib/format";
 import { confirmar } from "@/lib/confirm";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -34,6 +34,7 @@ type Campaign = {
   id: string; name: string; status: string; sourceType: string; totalTargets: number; pendingCount: number;
   sentCount: number; repliedCount: number; failedCount: number; approvedAt: string | null;
   preparationRequestedAt: string | null; pausedReason: string | null; createdAt: string;
+  spendLimit: number | null; spentMessages: number; spentAi: number; spentTotal: number;
 };
 type Attempt = { id: string; status: string; startedAt: string; finishedAt: string | null;
   errorMessage: string | null; providerMessageId: string | null };
@@ -345,6 +346,8 @@ export function IntelligentOutreachPanel() {
             })) void performCampaign("cancel");
           }}>Cancelar</Button>
         </div>
+        <SpendLimit key={activeCampaign.id} campaign={activeCampaign} busy={busy}
+          onSave={(spendLimit) => run(() => api.patch(`${API}/campaigns/${activeCampaign.id}/spend-limit`, { spendLimit }))} />
         {activeCampaign.preparationRequestedAt && <p className="text-sm text-sky-700 dark:text-sky-300">A IA está preparando mensagens no servidor. Pode fechar esta página; a fila continua.</p>}
         {activeCampaign.pausedReason && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">{activeCampaign.pausedReason}</p>}
         {simulation && <p className="rounded-lg border border-sky-300 bg-sky-50 p-3 text-sm text-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
@@ -416,4 +419,44 @@ export function IntelligentOutreachPanel() {
       </div>}
     </CardContent></Card>
   </section>;
+}
+
+/** Custo de referência de uma abertura (marketing da Meta + taxa do Gupshup), só para a estimativa da tela. */
+const CUSTO_ESTIMADO_POR_ENVIO = 0.33;
+
+function SpendLimit({ campaign, busy, onSave }: { campaign: Campaign; busy: boolean; onSave: (value: number | null) => Promise<void> }) {
+  const [value, setValue] = useState(campaign.spendLimit === null ? "" : String(campaign.spendLimit).replace(".", ","));
+  const encerrada = campaign.status === "CONCLUIDA" || campaign.status === "CANCELADA";
+  const limite = campaign.spendLimit;
+  const uso = limite ? Math.min(campaign.spentTotal / limite, 1) : 0;
+  const restante = limite ? Math.max(limite - campaign.spentTotal, 0) : null;
+  // Aceita "150", "150,50", "1.500,00" e "150.50".
+  const texto = value.trim();
+  const parsed = texto ? Number(texto.includes(",") ? texto.replace(/\./g, "").replace(",", ".") : texto) : null;
+  const invalido = parsed !== null && (!Number.isFinite(parsed) || parsed < 1);
+  return (
+    <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-56"><FormField label="Teto de gasto da campanha (R$)" error={invalido ? "Mínimo R$ 1,00." : undefined}>
+          <Input inputMode="decimal" placeholder="Sem teto" value={value} disabled={busy || encerrada}
+            onChange={(event) => setValue(event.target.value)} />
+        </FormField></div>
+        <Button size="sm" disabled={busy || encerrada || invalido} onClick={() => void onSave(parsed)}>Salvar teto</Button>
+        <div className="text-sm text-slate-700 dark:text-slate-200">
+          <span className="font-bold">Gasto: {formatCurrency(campaign.spentTotal)}</span>
+          {limite !== null && <> de {formatCurrency(limite)}</>}
+          <span className="block text-xs text-slate-500 dark:text-slate-400">
+            Mensagens {formatCurrency(campaign.spentMessages)} · IA {formatCurrency(campaign.spentAi)}
+            {restante !== null && <> · cabem cerca de {Math.floor(restante / CUSTO_ESTIMADO_POR_ENVIO)} envios</>}
+          </span>
+        </div>
+      </div>
+      {limite !== null && <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+        <div className={`h-full rounded-full ${uso >= 1 ? "bg-red-500" : uso >= 0.8 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${uso * 100}%` }} />
+      </div>}
+      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+        Cada envio soma o custo da Meta + Gupshup. Ao alcançar o teto, a campanha pausa sozinha; pode passar no máximo o valor de uma mensagem.
+      </p>
+    </div>
+  );
 }

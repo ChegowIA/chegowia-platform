@@ -12,6 +12,7 @@ import {
 import {
   OutreachCampaignStatus,
   OutreachTargetStatus,
+  UsageMetric,
   WhatsAppConversationMode,
 } from "@prisma/client";
 import { runsBackgroundJobs } from "../common/config/app-role";
@@ -234,8 +235,9 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
-    const pendentes = await this.pendentesPorCampanha(campanhas.map((campanha: any) => campanha.id));
-    return campanhas.map((campanha: any) => this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0));
+    const ids = campanhas.map((campanha: any) => campanha.id);
+    const [pendentes, custosDeIa] = await Promise.all([this.pendentesPorCampanha(ids), this.custoDeIaPorCampanha(ids)]);
+    return campanhas.map((campanha: any) => this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0, custosDeIa.get(campanha.id) ?? 0));
   }
 
   /**
@@ -253,8 +255,70 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
    * — dois contatos "na fila" que acabavam de virar descartados.
    */
   private async resumoComFila(campanha: any) {
-    const pendentes = await this.pendentesPorCampanha([campanha.id]);
-    return this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0);
+    const [pendentes, custosDeIa] = await Promise.all([
+      this.pendentesPorCampanha([campanha.id]), this.custoDeIaPorCampanha([campanha.id]),
+    ]);
+    return this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0, custosDeIa.get(campanha.id) ?? 0);
+  }
+
+  /**
+   * Custo da IA que preencheu as variáveis, pelos tokens guardados em cada lead
+   * e pela tarifa de custo da DeepSeek. Entra no gasto da campanha junto com as
+   * mensagens.
+   */
+  private async custoDeIaPorCampanha(ids: string[]) {
+    const mapa = new Map<string, number>();
+    if (!ids.length) return mapa;
+    const [grupos, tarifas] = await Promise.all([
+      this.db().platformOutreachTarget.groupBy({
+        by: ["campaignId"],
+        where: { campaignId: { in: ids } },
+        _sum: { aiInputTokens: true, aiOutputTokens: true },
+      }),
+      this.db().usageRate.findMany({ where: { metric: { in: [UsageMetric.IA_TOKENS_ENTRADA, UsageMetric.IA_TOKENS_SAIDA] } } }),
+    ]);
+    const porToken = (metric: UsageMetric) => {
+      const tarifa = tarifas.find((item: any) => item.metric === metric);
+      return tarifa ? Number(tarifa.providerUnitCost) / Math.max(Number(tarifa.unitSize) || 1, 0.000001) : 0;
+    };
+    const entrada = porToken(UsageMetric.IA_TOKENS_ENTRADA);
+    const saida = porToken(UsageMetric.IA_TOKENS_SAIDA);
+    for (const grupo of grupos) {
+      mapa.set(grupo.campaignId, (grupo._sum.aiInputTokens ?? 0) * entrada + (grupo._sum.aiOutputTokens ?? 0) * saida);
+    }
+    return mapa;
+  }
+
+  /** Gasto total da campanha: mensagens já enviadas mais a IA que as preparou. */
+  private async gastoDaCampanha(campanha: any) {
+    const ia = (await this.custoDeIaPorCampanha([campanha.id])).get(campanha.id) ?? 0;
+    return Number(campanha.spentAmount ?? 0) + ia;
+  }
+
+  /** Teto alcançado: nenhum envio novo sai enquanto o teto não subir. */
+  private async tetoDeGastoAlcancado(campanha: any) {
+    if (campanha.spendLimit === null || campanha.spendLimit === undefined) return null;
+    const limite = Number(campanha.spendLimit);
+    const gasto = await this.gastoDaCampanha(campanha);
+    return gasto >= limite ? { limite, gasto } : null;
+  }
+
+  /** Define ou remove o teto de gasto; vale também com a campanha enviando. */
+  async definirTetoDeGasto(id: string, valor: unknown) {
+    const campanha = await this.buscarCampanha(id);
+    if (campanha.status === OutreachCampaignStatus.CONCLUIDA || campanha.status === OutreachCampaignStatus.CANCELADA) {
+      throw new BadRequestException("Este disparo já foi encerrado.");
+    }
+    let spendLimit: number | null = null;
+    if (valor !== null && valor !== undefined && valor !== "") {
+      spendLimit = Math.round(Number(valor) * 100) / 100;
+      if (!Number.isFinite(spendLimit) || spendLimit < 1 || spendLimit > 1_000_000) {
+        throw new BadRequestException("Informe um teto entre R$ 1,00 e R$ 1.000.000,00, ou deixe vazio para não limitar.");
+      }
+    }
+    const atualizada = await this.db().platformOutreachCampaign.update({ where: { id }, data: { spendLimit } });
+    this.realtime?.emitToSuperAdmins("platform.outreach.updated", { campaignId: id });
+    return this.resumoComFila(atualizada);
   }
 
   private async pendentesPorCampanha(ids: string[]) {
@@ -296,14 +360,16 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       },
     });
     if (!campanha) throw new NotFoundException("Disparo não encontrado.");
-    const pendentes = await this.pendentesPorCampanha([campanha.id]);
+    const [pendentes, custosDeIa] = await Promise.all([
+      this.pendentesPorCampanha([campanha.id]), this.custoDeIaPorCampanha([campanha.id]),
+    ]);
     // O total dos contatos carregados sai junto: uma lista de 2 mil aparecia
     // cortada em 500 sem nada dizendo que havia mais.
     const alvosNoTotal = await this.db().platformOutreachTarget.count({
       where: { campaignId: campanha.id },
     });
     return {
-      ...this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0),
+      ...this.resumoDaCampanha(campanha, pendentes.get(campanha.id) ?? 0, custosDeIa.get(campanha.id) ?? 0),
       targetsTotal: alvosNoTotal,
       targets: campanha.targets.map((alvo: any) => ({
         ...alvo,
@@ -312,7 +378,8 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private resumoDaCampanha(campanha: any, pendentes?: number) {
+  private resumoDaCampanha(campanha: any, pendentes?: number, custoDeIa = 0) {
+    const gastoComMensagens = Number(campanha.spentAmount ?? 0);
     return {
       id: campanha.id,
       name: campanha.name,
@@ -328,6 +395,10 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
       respectBusinessHours: campanha.respectBusinessHours,
       nextSendAt: campanha.nextSendAt,
       pausedReason: campanha.pausedReason,
+      spendLimit: campanha.spendLimit === null || campanha.spendLimit === undefined ? null : Number(campanha.spendLimit),
+      spentMessages: arredondarCentavos(gastoComMensagens),
+      spentAi: arredondarCentavos(custoDeIa),
+      spentTotal: arredondarCentavos(gastoComMensagens + custoDeIa),
       sourceType: campanha.sourceType,
       approvedAt: campanha.approvedAt,
       preparationRequestedAt: campanha.preparationRequestedAt,
@@ -360,6 +431,8 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     if (!canal.template.approved) {
       throw new BadRequestException("O modelo de prospecção ainda não foi aprovado pela Meta. Confira a situação dele no topo da Central.");
     }
+    const teto = await this.tetoDeGastoAlcancado(campanha);
+    if (teto) throw new BadRequestException(`${mensagemDoTeto(teto)} Aumente o teto para retomar.`);
     const state = await this.db().platformOutreachSenderState.findUnique({ where: { channelId: campanha.channelId } });
     if (state?.inFlightTargetId) throw new BadRequestException("Existe uma tentativa de envio sem conclusão. Faça a conciliação antes de retomar.");
     const atualizada = await this.db().platformOutreachCampaign.update({
@@ -619,6 +692,14 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     }
     if (campanha.nextSendAt && new Date(campanha.nextSendAt).getTime() > agora.getTime()) return false;
 
+    // Conferido antes de cada envio: o gasto passa do teto no máximo pelo custo
+    // de uma mensagem, a última que saiu antes de alcançá-lo.
+    const teto = await this.tetoDeGastoAlcancado(campanha);
+    if (teto) {
+      await this.pausar(campanha.id, `${mensagemDoTeto(teto)} Aumente o teto para retomar.`);
+      return false;
+    }
+
     // Janela rolante de 24h, e não "hoje": evita a
     // virada de dia do fuso do servidor liberar o dobro de envios de uma vez.
     const enviadosNaJanela = await this.db().platformOutreachTarget.count({
@@ -735,6 +816,7 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         phone: latest.phone, name: latest.name, company: latest.company, city: latest.city,
         text: null, variables, mode: WhatsAppConversationMode.VIRTUAL,
       });
+      const custo = await this.custoDoEnvio(message?.providerMessageId ?? null);
       await this.db().$transaction(async (tx: any) => {
         await tx.platformOutreachTarget.update({ where: { id: alvo.id }, data: {
           status: OutreachTargetStatus.ENVIADO, conversationId: conversation.id, sentAt: new Date(), errorMessage: null,
@@ -742,7 +824,9 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
         await tx.platformOutreachAttempt.update({ where: { id: attemptId }, data: {
           status: "ENVIADA", providerMessageId: message?.providerMessageId ?? null, finishedAt: new Date(),
         } });
-        await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: { sentCount: { increment: 1 } } });
+        await tx.platformOutreachCampaign.update({ where: { id: campanha.id }, data: {
+          sentCount: { increment: 1 }, spentAmount: { increment: custo },
+        } });
         await tx.platformOutreachSenderState.updateMany({ where: {
           channelId: campanha.channelId, inFlightTargetId: alvo.id,
         }, data: { inFlightTargetId: null, inFlightAt: null } });
@@ -771,6 +855,22 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Custo de uma abertura: o mesmo valor que o envio registrou no consumo da
+   * plataforma (tarifa da Meta + taxa do Gupshup). Sem registro, usa a tarifa
+   * de marketing, para o teto nunca deixar de contar uma mensagem que saiu.
+   */
+  private async custoDoEnvio(providerMessageId: string | null) {
+    if (providerMessageId) {
+      const registro = await this.db().platformUsageLedger.findUnique({
+        where: { externalReference: `platform-whatsapp:${providerMessageId}` },
+      });
+      if (registro) return Number(registro.providerAmount);
+    }
+    const tarifa = await this.db().usageRate.findUnique({ where: { metric: UsageMetric.WHATSAPP_TEMPLATE_MARKETING } });
+    return tarifa ? Number(tarifa.providerUnitCost) : 0;
+  }
+
 }
 /**
  * Início da janela de 24h que conta para os limites.
@@ -781,4 +881,16 @@ export class PlatformOutreachService implements OnModuleInit, OnModuleDestroy {
  */
 function inicioDaJanelaRolante(momento: Date) {
   return new Date(momento.getTime() - 24 * 60 * 60 * 1000);
+}
+
+function arredondarCentavos(valor: number) {
+  return Math.round((valor + Number.EPSILON) * 100) / 100;
+}
+
+function reais(valor: number) {
+  return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function mensagemDoTeto(teto: { limite: number; gasto: number }) {
+  return `Teto de gasto de ${reais(teto.limite)} alcançado (gasto: ${reais(teto.gasto)}).`;
 }
