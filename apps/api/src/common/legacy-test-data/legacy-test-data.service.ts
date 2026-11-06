@@ -6,7 +6,9 @@ import { PostalCodeLocationService } from "../geography/postal-code-location.ser
 import { filtroPublicoDeEmpresa } from "../public-visibility/subscription-grace";
 
 const DEMO_COMPANY_SLUG = "operacao-demo-chegowia";
-const DEMO_CATALOG_EMAIL = "thiagolpssouza@gmail.com";
+// Quem enxerga a loja demo na vitrine: a conta do dono da plataforma e o
+// cliente demo criado por `setup-demo-company.js`, usado nas gravações.
+const DEMO_CATALOG_EMAILS = new Set(["thiagolpssouza@gmail.com", "cliente@demo.chegowia.invalid"]);
 const HIDDEN_TEST_COMPANIES = { isTestOnly: false };
 
 /**
@@ -141,5 +143,5 @@ export class LegacyTestDataService {
 }
 
 function isDemoCatalogEmail(value?: string | null) {
-  return value?.trim().toLowerCase() === DEMO_CATALOG_EMAIL;
+  return DEMO_CATALOG_EMAILS.has(value?.trim().toLowerCase() ?? "");
 }

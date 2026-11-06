@@ -96,6 +96,24 @@ describe("dados legados da homologação", () => {
     }));
   });
 
+  it("o cliente demo das gravações também enxerga a loja demo", async () => {
+    const demoCustomer = { ...targetViewer, sub: "demo-customer", email: "cliente@demo.chegowia.invalid" };
+    const { service } = createService({ userEmail: demoCustomer.email });
+    await expect(service.publicCompanyVisibilityWhere(demoCustomer)).resolves.toEqual({
+      OR: [
+        { isTestOnly: false },
+        { id: { in: ["demo-company"] }, isTestOnly: true },
+      ],
+    });
+  });
+
+  it("outra conta do domínio demo continua sem ver a loja demo na vitrine", async () => {
+    const { service } = createService({ userEmail: "motoboy@demo.chegowia.invalid" });
+    await expect(service.publicCompanyVisibilityWhere({
+      ...targetViewer, sub: "demo-motoboy", email: "motoboy@demo.chegowia.invalid",
+    })).resolves.toEqual({ isTestOnly: false });
+  });
+
   it("oculta a demo quando a triagem de CEP informa que o endereço está fora do raio", async () => {
     const { service } = createService({ postalMatch: false });
     await expect(service.publicCompanyVisibilityWhere(targetViewer)).resolves.toEqual({ isTestOnly: false });
